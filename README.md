@@ -22,22 +22,40 @@ It operates as a wire-level HTTPS interception proxy and optimization layer, red
 
 ## 🚀 Quick Start
 
-### 1. Clone and Setup
+### 1. Install as Global CLI Command (Recommended)
+
+Install `holon-coherence` directly into your system `$PATH` using `uv`:
+
+```bash
+# Install from local checkout
+cd holon-coherence
+uv tool install --editable .
+
+# Or install directly from GitHub
+uv tool install git+https://github.com/Holon-Agentic-Coder/holon-coherence.git
+```
+
+Once installed, `holon-coherence` is immediately executable anywhere in your terminal:
+
+```bash
+# Start in headless mode (port 8080)
+holon-coherence start
+
+# Or with interactive web dashboard on port 8081
+holon-coherence start --web
+```
+
+---
+
+### 2. Run Directly from Source
 
 ```bash
 git clone https://github.com/Holon-Agentic-Coder/holon-coherence.git
 cd holon-coherence
 uv sync
-```
 
-### 2. Run the Optimization Proxy
-
-```bash
-# Start in headless mode (port 8080)
+# Run proxy
 uv run holon-coherence start
-
-# Or with interactive web dashboard on port 8081
-uv run holon-coherence start --web
 ```
 
 ### 3. Run via Docker

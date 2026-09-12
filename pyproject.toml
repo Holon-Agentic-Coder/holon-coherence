@@ -7,7 +7,7 @@ name = "holon-coherence"
 version = "0.1.0"
 description = "Part of the Holon family of self-improving, fractal intent coding agents, used to optimize LLM usage."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
 authors = [
     { name = "Holon Team" }
@@ -23,17 +23,13 @@ keywords = [
 ]
 dependencies = [
     "cryptography>=42.0.0",
+    "mitmproxy>=12.0.0",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.4.0",
-]
-
-[project.optional-dependencies]
-proxy = [
-    "mitmproxy>=10.0.0",
 ]
 
 

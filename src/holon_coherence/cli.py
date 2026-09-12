@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 
@@ -33,7 +34,11 @@ def main() -> None:
     elif args.command == "start":
         addon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mitm_addon.py")
         tool = "mitmweb" if args.web else "mitmdump"
-        cmd = [tool, "-s", addon_path, "--listen-port", str(args.port)]
+        # Look adjacent to the active python interpreter first, then check PATH
+        tool_candidate = os.path.join(os.path.dirname(sys.executable), tool)
+        tool_path = tool_candidate if os.path.isfile(tool_candidate) else (shutil.which(tool) or tool)
+
+        cmd = [tool_path, "-s", addon_path, "--listen-port", str(args.port)]
         if args.web:
             cmd.extend(["--web-host", "0.0.0.0", "--web-port", str(args.web_port)])
         print(f"🚀 Starting holon-coherence via {tool} on port {args.port}...")
