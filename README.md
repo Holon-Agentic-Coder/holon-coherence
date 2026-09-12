@@ -22,33 +22,37 @@ It operates as a wire-level HTTPS interception proxy and optimization layer, red
 
 ## 🚀 Quick Start
 
-### 1. Install via pip / uv
+### 1. Clone and Setup
 
 ```bash
-pip install holon-coherence
-# Or with proxy dependencies:
-pip install "holon-coherence[proxy]"
+git clone https://github.com/Holon-Agentic-Coder/holon-coherence.git
+cd holon-coherence
+uv sync
 ```
 
 ### 2. Run the Optimization Proxy
 
 ```bash
 # Start in headless mode (port 8080)
-holon-coherence start
+uv run holon-coherence start
 
 # Or with interactive web dashboard on port 8081
-holon-coherence start --web
+uv run holon-coherence start --web
 ```
 
 ### 3. Run via Docker
 
 ```bash
+# Build local container
+docker build -t holon-coherence:latest .
+
+# Run container
 docker run --rm -it \
   -p 127.0.0.1:8080:8080 \
   -p 127.0.0.1:8081:8081 \
   -v ~/.holon/proxy-ca:/home/mitmproxy/.mitmproxy \
   -v ~/.holon/cache:/home/mitmproxy/.holon/cache \
-  ghcr.io/holon-agentic-coder/holon-coherence:latest
+  holon-coherence:latest
 ```
 
 ### 4. Connect Any Agent
