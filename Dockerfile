@@ -18,4 +18,5 @@ WORKDIR /home/mitmproxy
 
 EXPOSE 8080 8081
 
-ENTRYPOINT ["holon-coherence", "start"]
+ENTRYPOINT ["holon-coherence"]
+CMD ["start", "--port", "8080"]

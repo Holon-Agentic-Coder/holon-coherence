@@ -20,11 +20,13 @@ It operates as a wire-level HTTPS interception proxy and optimization layer, eli
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Quick Start (Docker-First Architecture)
 
-### 1. Install as Global CLI Command (Recommended)
+`holon-coherence` is designed as a lightweight CLI wrapper around Docker. This ensures **zero host system dependencies**—the entire proxy engine (`mitmproxy`/`mitmdump`), TLS interceptor, and caching layers execute inside an isolated container, eliminating host Python version conflicts, compilation issues, or proxy network pollution.
 
-Install `holon-coherence` directly into your system `$PATH` using `uv`:
+### 1. Install CLI Wrapper
+
+Install `holon-coherence` into your system `$PATH` via `uv`:
 
 ```bash
 # Install from local checkout
@@ -35,41 +37,47 @@ uv tool install --editable .
 uv tool install git+https://github.com/Holon-Agentic-Coder/holon-coherence.git
 ```
 
-Once installed, `holon-coherence` is immediately executable anywhere in your terminal:
+### 2. Manage the Proxy Container
+
+The `holon-coherence` CLI automatically manages Docker images, volumes, and certificates for you:
 
 ```bash
-# Start in headless mode (port 8080)
+# Start proxy container (port 8080)
 holon-coherence start
 
-# Or with interactive web dashboard on port 8081
+# Run in background (detached)
+holon-coherence start -d
+
+# Start with interactive web inspection dashboard (port 8081)
 holon-coherence start --web
+
+# Check container status
+holon-coherence status
+
+# Stream container logs
+holon-coherence logs -f
+
+# Stop proxy container
+holon-coherence stop
 ```
 
 ---
 
-### 2. Run Directly from Source
+### 3. Alternative: Direct Docker Invocation
 
-```bash
-git clone https://github.com/Holon-Agentic-Coder/holon-coherence.git
-cd holon-coherence
-uv sync
-
-# Run proxy
-uv run holon-coherence start
-```
-
-### 3. Run via Docker
+If you prefer to invoke Docker directly without using the Python CLI wrapper:
 
 ```bash
 # Build local container
 docker build -t holon-coherence:latest .
 
 # Run container
-docker run --rm -it \
+docker run --name holon-coherence --rm -it \
   -p 127.0.0.1:8080:8080 \
   -p 127.0.0.1:8081:8081 \
   -v ~/.holon/proxy-ca:/home/mitmproxy/.mitmproxy \
   -v ~/.holon/cache:/home/mitmproxy/.holon/cache \
+  -v ~/.holon/logs:/tmp/wire_logs \
   holon-coherence:latest
 ```
 

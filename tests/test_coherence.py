@@ -77,7 +77,9 @@ class TestHolonCoherence(unittest.TestCase):
     def test_cli_parser_and_run(self):
         import sys
 
-        from holon_coherence.cli import main
+        from holon_coherence.cli import is_in_container, main
+
+        self.assertIsInstance(is_in_container(), bool)
 
         orig_argv = sys.argv
         try:
