@@ -225,11 +225,12 @@ def _ensure_root_ca(cert_dir: str | None = None) -> tuple[str, str, bool]:
     return ca_cert_path, ca_key_path, True
 
 
-def generate_root_ca(cert_dir: str | None = None) -> tuple[str, str]:
+def generate_root_ca(cert_dir: str | None = None, output_dir: str | None = None) -> tuple[str, str]:
     """Ensure a valid, properly extended, non-expiring self-signed Root CA exists.
 
     Args:
         cert_dir: Directory where certs should be stored. Defaults to ``~/.holon/certs``.
+        output_dir: Alias for ``cert_dir``.
 
     Returns:
         tuple[str, str]: Paths to ``(ca_cert_path, ca_key_path)``. The certificate is guaranteed to
@@ -240,7 +241,8 @@ def generate_root_ca(cert_dir: str | None = None) -> tuple[str, str]:
         RuntimeError: If ``openssl`` is unavailable, generation fails or times out, or an existing
             cached certificate is not a parseable X.509 artifact.
     """
-    ca_cert_path, ca_key_path, _ = _ensure_root_ca(cert_dir)
+    target_dir = cert_dir or output_dir
+    ca_cert_path, ca_key_path, _ = _ensure_root_ca(target_dir)
     return ca_cert_path, ca_key_path
 
 

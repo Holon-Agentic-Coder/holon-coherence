@@ -1,6 +1,7 @@
 """CLI entrypoint for holon-coherence optimization proxy."""
 
 import argparse
+import contextlib
 import os
 import shutil
 import subprocess
@@ -169,8 +170,8 @@ def main() -> None:
 
         ca_cert = os.path.join(ca_dir, "mitmproxy-ca-cert.pem")
         if not os.path.exists(ca_cert):
-            print(f"🔑 Generating Root CA certificates at {ca_dir}...")
-            generate_root_ca(output_dir=ca_dir)
+            with contextlib.suppress(Exception):
+                generate_root_ca(cert_dir=ca_dir)
 
         # Check if Docker image exists
         img_check = subprocess.run(
