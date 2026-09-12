@@ -75,7 +75,11 @@ docker run --rm -it \
 
 ### 4. Connect Any Agent (Inline Execution)
 
-To prevent proxy variables from contaminating your current interactive shell session (which could disrupt unrelated tools, `git clone`, or package downloads), always pass proxy settings **inline** for your agent command, or use the `holon-coherence run` helper:
+> [!IMPORTANT] **Why Inline Proxy Execution instead of `export`?**
+>
+> 1. **Prevents Terminal Session Contamination**: Running `export HTTP_PROXY=...` persists environment variables across your entire interactive shell session. Subsequent unrelated CLI operations (such as `git clone`, `uv sync`, `npm install`, `docker pull`, or `curl`) will attempt to route through the local proxy, failing or causing connection errors if the proxy is stopped or if upstream registries reject MITM certificates.
+> 2. **Deterministic Process Isolation**: Passing properties inline (or via `holon-coherence run`) binds proxy routing and custom CA certificate bundles exclusively to the target agent process and its immediate subprocesses. Once the agent exits, your terminal session remains in a clean, pristine state.
+> 3. **Eliminates Cross-Tool Side Effects**: Different CLI runtimes handle proxy authentication, TLS trust, and timeouts differently. Scoping proxy configuration strictly per command invocation eliminates elusive session-level debugging issues.
 
 #### Method A: Using `holon-coherence run` (Recommended)
 
