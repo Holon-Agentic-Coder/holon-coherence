@@ -2,18 +2,20 @@
 FROM mitmproxy/mitmproxy:12.2.3
 
 USER root
-RUN pip install --no-cache-dir cryptography
 
-# Create coherence directories
-RUN mkdir -p /home/mitmproxy/.holon/cache /tmp/wire_logs /tmp/src
+# Install holon-coherence package
+WORKDIR /app
+COPY pyproject.toml README.md /app/
+COPY src/ /app/src/
+RUN pip install --no-cache-dir .
 
-# Copy package source
-COPY src/ /tmp/src/
-ENV PYTHONPATH="/tmp/src"
+# Create coherence cache & log directories
+RUN mkdir -p /home/mitmproxy/.holon/cache /tmp/wire_logs && \
+    chown -R mitmproxy:mitmproxy /home/mitmproxy/.holon /tmp/wire_logs
 
 USER mitmproxy
 WORKDIR /home/mitmproxy
 
 EXPOSE 8080 8081
 
-ENTRYPOINT ["mitmdump", "-s", "/tmp/src/holon_coherence/mitm_addon.py", "--listen-port", "8080"]
+ENTRYPOINT ["holon-coherence", "start"]
