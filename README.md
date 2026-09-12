@@ -4,7 +4,7 @@
 
 `holon-coherence` is part of the **Holon** family of self-improving, fractal intent coding agents, used to optimize LLM usage, eliminate token waste, and drive informational entropy to zero across autonomous execution loops.
 
-It operates as a wire-level HTTPS interception proxy and optimization layer, reducing quadratic context bloat ($\mathcal{O}(N^2)$) and cognitive friction transparently via standard proxy routing (`HTTP_PROXY="http://127.0.0.1:8080"`), requiring **zero code modifications** to the client agent.
+It operates as a wire-level HTTPS interception proxy and optimization layer, eliminating quadratic context bloat ($O(N^2)$) and cognitive friction transparently via standard proxy routing, requiring **zero code modifications** to the client agent.
 
 ---
 
@@ -73,19 +73,30 @@ docker run --rm -it \
   holon-coherence:latest
 ```
 
-### 4. Connect Any Agent
+### 4. Connect Any Agent (Inline Execution)
 
-Configure standard environment variables:
+To prevent proxy variables from contaminating your current interactive shell session (which could disrupt unrelated tools, `git clone`, or package downloads), always pass proxy settings **inline** for your agent command, or use the `holon-coherence run` helper:
+
+#### Method A: Using `holon-coherence run` (Recommended)
 
 ```bash
-export HTTP_PROXY="http://127.0.0.1:8080"
-export HTTPS_PROXY="http://127.0.0.1:8080"
-export SSL_CERT_FILE="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem"
-export REQUESTS_CA_BUNDLE="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem"
-export NODE_EXTRA_CA_CERTS="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem"
+# Wraps your agent process with isolated proxy settings and CA trust
+holon-coherence run -- <your-agent-command>
 ```
 
-All outbound LLM traffic (Anthropic, Google Gemini, OpenAI) is now automatically optimized, cached, and recorded.
+#### Method B: Inline Shell Environment Variables
+
+```bash
+HTTP_PROXY="http://127.0.0.1:8080" \
+HTTPS_PROXY="http://127.0.0.1:8080" \
+NO_PROXY="localhost,127.0.0.1,api.github.com,github.com" \
+SSL_CERT_FILE="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem" \
+REQUESTS_CA_BUNDLE="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem" \
+NODE_EXTRA_CA_CERTS="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem" \
+<your-agent-command>
+```
+
+All outbound LLM traffic (Anthropic, Google Gemini, OpenAI) is automatically optimized, cached, and recorded without altering your terminal's persistent state.
 
 ---
 

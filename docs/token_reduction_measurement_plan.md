@@ -258,16 +258,17 @@ docker run --rm -it \
 ```
 
 - Navigate to `http://localhost:8081` in your browser.
-- Configure agent harness environment variables to trust the proxy CA, route outbound LLM requests, and bypass package
-  registries:
+- Run agent workloads with inline environment variables to route traffic through the proxy without contaminating the interactive terminal session:
   ```bash
-  export HTTP_PROXY="http://127.0.0.1:8080"
-  export HTTPS_PROXY="http://127.0.0.1:8080"
-  export NO_PROXY="localhost,127.0.0.1,api.github.com,github.com,pypi.org,files.pythonhosted.org,registry.npmjs.org"
-  export SSL_CERT_FILE="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem"
-  export REQUESTS_CA_BUNDLE="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem"
-  export NODE_EXTRA_CA_CERTS="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem"
+  HTTP_PROXY="http://127.0.0.1:8080" \
+  HTTPS_PROXY="http://127.0.0.1:8080" \
+  NO_PROXY="localhost,127.0.0.1,api.github.com,github.com,pypi.org,files.pythonhosted.org,registry.npmjs.org" \
+  SSL_CERT_FILE="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem" \
+  REQUESTS_CA_BUNDLE="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem" \
+  NODE_EXTRA_CA_CERTS="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem" \
+  <agent-command>
   ```
+  _(Or execute via `holon-coherence run -- <agent-command>`)_
 - Every HTTP request, modified body, diff view, SSE event stream, and header will be interactively visualizable and
   inspectable in real time.
 

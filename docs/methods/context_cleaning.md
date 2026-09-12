@@ -127,15 +127,22 @@ docker run -d --name mitm-context-cleaner \
   --set ignore_hosts='^(api\.github\.com|github\.com|pypi\.org|files\.pythonhosted\.org|registry\.npmjs\.org):443$'
 ```
 
-Configure shell environment variables to route traffic through the proxy:
+Execute the client agent command with inline proxy environment variables (avoiding terminal session contamination):
 
 ```bash
-export HTTP_PROXY="http://127.0.0.1:8080"
-export HTTPS_PROXY="http://127.0.0.1:8080"
-export NO_PROXY="localhost,127.0.0.1,api.github.com,github.com"
-export SSL_CERT_FILE="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem"
-export REQUESTS_CA_BUNDLE="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem"
-export NODE_EXTRA_CA_CERTS="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem"
+HTTP_PROXY="http://127.0.0.1:8080" \
+HTTPS_PROXY="http://127.0.0.1:8080" \
+NO_PROXY="localhost,127.0.0.1,api.github.com,github.com" \
+SSL_CERT_FILE="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem" \
+REQUESTS_CA_BUNDLE="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem" \
+NODE_EXTRA_CA_CERTS="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem" \
+<your-agent-command>
+```
+
+Or execute via the CLI wrapper:
+
+```bash
+holon-coherence run -- <your-agent-command>
 ```
 
 ---

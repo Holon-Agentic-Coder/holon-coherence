@@ -26,11 +26,51 @@ def main() -> None:
     ca_parser = subparsers.add_parser("init-ca", help="Bootstrap self-signed Root CA certificates")
     ca_parser.add_argument("--output-dir", default=os.path.expanduser("~/.holon/proxy-ca"), help="Target CA directory")
 
+    # Run command with inline proxy properties
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Run a command with inline proxy properties (avoids terminal session contamination)",
+    )
+    run_parser.add_argument(
+        "--proxy-url",
+        default="http://127.0.0.1:8080",
+        help="Proxy URL (default: http://127.0.0.1:8080)",
+    )
+    run_parser.add_argument(
+        "--ca-cert",
+        default=os.path.expanduser("~/.holon/proxy-ca/mitmproxy-ca-cert.pem"),
+        help="Path to CA certificate PEM",
+    )
+    run_parser.add_argument("cmd", nargs=argparse.REMAINDER, help="Command and arguments to execute")
+
     args = parser.parse_args()
 
     if args.command == "init-ca":
         ca_dir = generate_root_ca(output_dir=args.output_dir)
         print(f"✅ Root CA generated successfully at: {ca_dir}")
+    elif args.command == "run":
+        if not args.cmd:
+            print("Error: No command specified to run.", file=sys.stderr)
+            sys.exit(1)
+        raw_cmd = args.cmd
+        if raw_cmd[0] == "--":
+            raw_cmd = raw_cmd[1:]
+        if not raw_cmd:
+            print("Error: No command specified after '--'.", file=sys.stderr)
+            sys.exit(1)
+
+        env = os.environ.copy()
+        env["HTTP_PROXY"] = args.proxy_url
+        env["HTTPS_PROXY"] = args.proxy_url
+        env["NO_PROXY"] = "localhost,127.0.0.1,api.github.com,github.com"
+        ca_cert = os.path.expanduser(args.ca_cert)
+        if os.path.exists(ca_cert):
+            env["SSL_CERT_FILE"] = ca_cert
+            env["REQUESTS_CA_BUNDLE"] = ca_cert
+            env["NODE_EXTRA_CA_CERTS"] = ca_cert
+
+        result = subprocess.run(raw_cmd, env=env)
+        sys.exit(result.returncode)
     elif args.command == "start":
         addon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mitm_addon.py")
         tool = "mitmweb" if args.web else "mitmdump"

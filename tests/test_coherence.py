@@ -74,6 +74,27 @@ class TestHolonCoherence(unittest.TestCase):
         subtask = ringer.plan_subtask("task_01", "Compile assets", ["make build"])
         self.assertEqual(subtask["assigned_model"], "model-t2")
 
+    def test_cli_parser_and_run(self):
+        import sys
+
+        from holon_coherence.cli import main
+
+        orig_argv = sys.argv
+        try:
+            sys.argv = [
+                "holon-coherence",
+                "run",
+                "--",
+                sys.executable,
+                "-c",
+                "import os; assert os.environ['HTTP_PROXY'] == 'http://127.0.0.1:8080'",
+            ]
+            with self.assertRaises(SystemExit) as cm:
+                main()
+            self.assertEqual(cm.exception.code, 0)
+        finally:
+            sys.argv = orig_argv
+
 
 if __name__ == "__main__":
     unittest.main()
