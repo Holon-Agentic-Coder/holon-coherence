@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "holon-coherence"
 version = "0.1.0"
-description = "High-coherence, low-entropy optimization gateway for fractal coding agents."
+description = "Part of the Holon family of self-improving, fractal intent coding agents, used to optimize LLM usage."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }

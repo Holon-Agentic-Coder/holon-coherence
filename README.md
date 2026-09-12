@@ -2,9 +2,9 @@
 
 > **High-coherence, low-entropy optimization gateway for fractal coding agents.**
 
-`holon-coherence` is a wire-level HTTPS interception proxy and optimization layer designed to eliminate token waste, quadratic context bloat ($\mathcal{O}(N^2)$), and redundant cognitive friction in autonomous AI coding agents.
+`holon-coherence` is part of the **Holon** family of self-improving, fractal intent coding agents, used to optimize LLM usage, eliminate token waste, and drive informational entropy to zero across autonomous execution loops.
 
-It operates transparently via standard proxy routing (`HTTP_PROXY="http://127.0.0.1:8080"`), requiring **zero code modifications** to the client agent.
+It operates as a wire-level HTTPS interception proxy and optimization layer, reducing quadratic context bloat ($\mathcal{O}(N^2)$) and cognitive friction transparently via standard proxy routing (`HTTP_PROXY="http://127.0.0.1:8080"`), requiring **zero code modifications** to the client agent.
 
 ---
 
