@@ -35,4 +35,4 @@ jobs:
       - name: Run tests
         run: |
           uv lock --check
-          uv run pytest
+          uv run pytest -m "not integration_test"

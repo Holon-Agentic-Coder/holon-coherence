@@ -20,6 +20,22 @@ It operates as a wire-level HTTPS interception proxy and optimization layer, eli
 
 ---
 
+## 📋 Prerequisites
+
+Before using `holon-coherence`, ensure the following prerequisites are installed and running on your host machine:
+
+1. **Docker Engine / Docker Desktop (Required)**:
+   - Docker `20.10+` with Buildx support.
+   - The Docker daemon must be active (`docker info`).
+   - Because `holon-coherence` packages the complete interception proxy inside an isolated container, **`mitmproxy` and `mitmdump` do NOT need to be installed on your host system**.
+2. **Python & `uv` (For CLI Management)**:
+   - Python `3.12+`.
+   - [`uv`](https://github.com/astral-sh/uv) (`>=0.4.0`) to install and run the lightweight management CLI.
+3. **Local Directory Permissions**:
+   - Read/write access to `~/.holon/` for certificate generation (`~/.holon/proxy-ca`), disk cache (`~/.holon/cache`), and wire telemetry logs (`~/.holon/logs`).
+
+---
+
 ## 🚀 Quick Start (Docker-First Architecture)
 
 `holon-coherence` is designed as a lightweight CLI wrapper around Docker. This ensures **zero host system dependencies**—the entire proxy engine (`mitmproxy`/`mitmdump`), TLS interceptor, and caching layers execute inside an isolated container, eliminating host Python version conflicts, compilation issues, or proxy network pollution.
