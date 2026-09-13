@@ -76,8 +76,8 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "init-ca":
-        ca_dir = generate_root_ca(output_dir=args.output_dir)
-        print(f"✅ Root CA generated successfully at: {ca_dir}")
+        ca_cert, ca_key = generate_root_ca(output_dir=args.output_dir)
+        print(f"✅ Root CA generated successfully:\n  Certificate: {ca_cert}\n  Key: {ca_key}")
 
     elif args.command == "build":
         repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -118,11 +118,27 @@ def main() -> None:
         env["HTTP_PROXY"] = args.proxy_url
         env["HTTPS_PROXY"] = args.proxy_url
         env["NO_PROXY"] = "localhost,127.0.0.1,api.github.com,github.com"
+        env["http_proxy"] = args.proxy_url
+        env["https_proxy"] = args.proxy_url
+        env["no_proxy"] = "localhost,127.0.0.1,api.github.com,github.com"
         ca_cert = os.path.expanduser(args.ca_cert)
+        if not os.path.exists(ca_cert):
+            alt_ca = os.path.join(os.path.dirname(ca_cert), "holon-root-ca.crt")
+            if os.path.exists(alt_ca):
+                ca_cert = alt_ca
+
         if os.path.exists(ca_cert):
             env["SSL_CERT_FILE"] = ca_cert
             env["REQUESTS_CA_BUNDLE"] = ca_cert
             env["NODE_EXTRA_CA_CERTS"] = ca_cert
+        else:
+            print(
+                f"⚠️  Warning: CA certificate not found at '{ca_cert}'. "
+                "Outbound TLS requests through the proxy may fail verification. "
+                "Ensure 'holon-coherence start' has been run at least once or "
+                "initialize CA with 'holon-coherence init-ca'.",
+                file=sys.stderr,
+            )
 
         result = subprocess.run(raw_cmd, env=env)
         sys.exit(result.returncode)
@@ -180,17 +196,25 @@ def main() -> None:
             stderr=subprocess.DEVNULL,
         )
         if img_check.returncode != 0 or args.build:
-            print(f"🔨 Building Docker image '{args.image}'...")
             repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             dockerfile = os.path.join(repo_root, "Dockerfile")
             if os.path.exists(dockerfile):
+                print(f"🔨 Building Docker image '{args.image}' from {dockerfile}...")
                 subprocess.run(["docker", "build", "-t", args.image, repo_root], check=True)
             else:
-                print(
-                    f"Error: Docker image '{args.image}' not found and Dockerfile not at {dockerfile}.",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
+                print(f"📥 Image '{args.image}' not found locally and no Dockerfile found. Pulling from registry...")
+                pull_res = subprocess.run(["docker", "pull", args.image])
+                if pull_res.returncode != 0:
+                    ghcr_img = f"ghcr.io/holon-agentic-coder/{args.image}"
+                    print(f"📥 Attempting pull from {ghcr_img}...")
+                    ghcr_res = subprocess.run(["docker", "pull", ghcr_img])
+                    if ghcr_res.returncode != 0:
+                        print(
+                            f"Error: Could not find or pull Docker image '{args.image}' or '{ghcr_img}'.",
+                            file=sys.stderr,
+                        )
+                        sys.exit(1)
+                    subprocess.run(["docker", "tag", ghcr_img, args.image], check=True)
 
         # Remove existing container with the same name if stopped or stale
         subprocess.run(["docker", "rm", "-f", "holon-coherence"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -210,6 +234,8 @@ def main() -> None:
             f"{logs_dir}:/tmp/wire_logs",
             "-e",
             "HOLON_IN_CONTAINER=1",
+            "-e",
+            "WIRE_LOG_DIR=/tmp/wire_logs",
         ]
         if args.web:
             docker_cmd.extend(["-p", f"127.0.0.1:{args.web_port}:8081"])

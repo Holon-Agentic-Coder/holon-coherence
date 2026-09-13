@@ -19,6 +19,8 @@ class TestHolonCoherence(unittest.TestCase):
             ca_cert, ca_key = generate_root_ca(cert_dir=tmpdir)
             self.assertTrue(os.path.exists(ca_cert))
             self.assertTrue(os.path.exists(ca_key))
+            self.assertTrue(os.path.exists(os.path.join(tmpdir, "mitmproxy-ca-cert.pem")))
+            self.assertTrue(os.path.exists(os.path.join(tmpdir, "mitmproxy-ca.pem")))
 
     def test_context_cleaner_deduplication(self):
         cleaner = JSONContextCleaner(enable_deduplication=True, max_turns=10)
@@ -89,11 +91,58 @@ class TestHolonCoherence(unittest.TestCase):
                 "--",
                 sys.executable,
                 "-c",
-                "import os; assert os.environ['HTTP_PROXY'] == 'http://127.0.0.1:8080'",
+                "import os; assert os.environ['HTTP_PROXY'] == 'http://127.0.0.1:8080' and "
+                "os.environ['http_proxy'] == 'http://127.0.0.1:8080'",
             ]
             with self.assertRaises(SystemExit) as cm:
                 main()
             self.assertEqual(cm.exception.code, 0)
+        finally:
+            sys.argv = orig_argv
+
+    def test_cli_init_ca(self):
+        import io
+        import sys
+        from unittest.mock import patch
+
+        from holon_coherence.cli import main
+
+        orig_argv = sys.argv
+        with tempfile.TemporaryDirectory() as tmpdir:
+            try:
+                sys.argv = ["holon-coherence", "init-ca", "--output-dir", tmpdir]
+                with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
+                    main()
+                output = mock_out.getvalue()
+                self.assertIn("Certificate:", output)
+                self.assertIn("Key:", output)
+            finally:
+                sys.argv = orig_argv
+
+    def test_cli_run_missing_ca_warning(self):
+        import io
+        import sys
+        from unittest.mock import patch
+
+        from holon_coherence.cli import main
+
+        orig_argv = sys.argv
+        try:
+            sys.argv = [
+                "holon-coherence",
+                "run",
+                "--ca-cert",
+                "/nonexistent/ca-cert.pem",
+                "--",
+                sys.executable,
+                "-c",
+                "exit(0)",
+            ]
+            with patch("sys.stderr", new_callable=io.StringIO) as mock_err:
+                with self.assertRaises(SystemExit) as cm:
+                    main()
+                self.assertEqual(cm.exception.code, 0)
+                self.assertIn("Warning: CA certificate not found", mock_err.getvalue())
         finally:
             sys.argv = orig_argv
 

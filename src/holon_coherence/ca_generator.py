@@ -29,6 +29,7 @@ Fail loudly instead.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import shutil
@@ -137,7 +138,10 @@ def _harden_key_permissions(ca_key_path: str) -> None:
 
 def _remove_cached_ca(ca_cert_path: str, ca_key_path: str) -> None:
     """Delete a stale cached CA pair so the next generation step starts from a clean slate."""
-    for path in (ca_cert_path, ca_key_path):
+    cert_dir = os.path.dirname(ca_cert_path)
+    mitm_ca_cert = os.path.join(cert_dir, "mitmproxy-ca-cert.pem")
+    mitm_ca_pem = os.path.join(cert_dir, "mitmproxy-ca.pem")
+    for path in (ca_cert_path, ca_key_path, mitm_ca_cert, mitm_ca_pem):
         try:
             os.remove(path)
         except FileNotFoundError:
@@ -186,6 +190,22 @@ def _generate(openssl_path: str, ca_cert_path: str, ca_key_path: str, cert_dir: 
         ) from exc
 
 
+def _sync_mitmproxy_ca(ca_cert_path: str, ca_key_path: str, cert_dir: str) -> None:
+    """Create mitmproxy-compatible CA files (mitmproxy-ca-cert.pem and mitmproxy-ca.pem)."""
+    mitm_ca_cert = os.path.join(cert_dir, "mitmproxy-ca-cert.pem")
+    mitm_ca_pem = os.path.join(cert_dir, "mitmproxy-ca.pem")
+
+    with contextlib.suppress(OSError):
+        shutil.copyfile(ca_cert_path, mitm_ca_cert)
+
+    with contextlib.suppress(OSError):
+        with open(ca_key_path, encoding="utf-8") as kf, open(ca_cert_path, encoding="utf-8") as cf:
+            combined = f"{kf.read().strip()}\n{cf.read().strip()}\n"
+        pem_fd = os.open(mitm_ca_pem, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(pem_fd, "w", encoding="utf-8") as pf:
+            pf.write(combined)
+
+
 def _ensure_root_ca(cert_dir: str | None = None) -> tuple[str, str, bool]:
     """Internal implementation shared by :func:`generate_root_ca` and the CLI entry point.
 
@@ -214,6 +234,7 @@ def _ensure_root_ca(cert_dir: str | None = None) -> tuple[str, str, bool]:
         else:
             logger.info("Reusing existing Root CA certificate at %s", ca_cert_path)
             _harden_key_permissions(ca_key_path)
+            _sync_mitmproxy_ca(ca_cert_path, ca_key_path, cert_dir)
             return ca_cert_path, ca_key_path, False
 
     logger.info("Generating self-signed Root CA certificate at %s", cert_dir)
@@ -221,6 +242,7 @@ def _ensure_root_ca(cert_dir: str | None = None) -> tuple[str, str, bool]:
 
     _harden_key_permissions(ca_key_path)
     _assert_valid_cert(ca_cert_path)
+    _sync_mitmproxy_ca(ca_cert_path, ca_key_path, cert_dir)
 
     return ca_cert_path, ca_key_path, True
 

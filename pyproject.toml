@@ -23,11 +23,16 @@ keywords = [
 ]
 dependencies = [
     "cryptography==48.0.1",
+]
+
+[project.optional-dependencies]
+native = [
     "mitmproxy==12.2.3",
 ]
 
 [dependency-groups]
 dev = [
+    "mitmproxy==12.2.3",
     "pytest==9.1.1",
     "ruff==0.16.7",
 ]

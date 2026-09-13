@@ -50,14 +50,23 @@ while [[ $# -gt 0 ]]; do
 done
 
 get_timestamp() {
-  local -n ref=$1
-  if [[ -n "${EPOCHREALTIME:-}" ]]; then
+  local __var_name="${1:-}"
+  local __ts=""
+  if [[ -n "${EPOCHREALTIME:-}" ]] && printf '%(%s)T' -1 >/dev/null 2>&1; then
     local epoch="$EPOCHREALTIME"
     local sec="${epoch%.*}"
     local usec="${epoch#*.}"
-    printf -v ref "%(%Y-%m-%d %H:%M:%S)T.%03d" "$sec" "$((10#${usec:0:3}))"
+    printf -v __ts "%(%Y-%m-%d %H:%M:%S)T.%03d" "$sec" "$((10#${usec:0:3}))"
+  elif printf '%(%s)T' -1 >/dev/null 2>&1; then
+    printf -v __ts "%(%Y-%m-%d %H:%M:%S)T" -1
   else
-    printf -v ref "%(%Y-%m-%d %H:%M:%S)T" -1
+    __ts="$(date "+%Y-%m-%d %H:%M:%S")"
+  fi
+
+  if [[ -n "$__var_name" ]]; then
+    eval "$__var_name=\"\$__ts\""
+  else
+    printf "%s\n" "$__ts"
   fi
 }
 
