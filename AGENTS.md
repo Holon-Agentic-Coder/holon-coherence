@@ -15,6 +15,8 @@ When contributing or executing tasks in `holon-coherence`:
    cd holon-coherence/.git
    git worktree add --no-track -b feat/<feature-name> ../feat-<feature-name> origin/main
    ```
+   _(Note: If you are already inside an existing worktree, `git worktree add` can be run directly without changing into
+   `.git` where `.git` is a pointer file.)_
 2. **Squash and Push**: Ensure all commits on your feature branch are squashed into a single logical commit relative to
    `main`.
 3. **No Autonomous Remote Push**: Never push to `origin` unless explicitly instructed by the user. Never push directly

@@ -84,11 +84,9 @@ files = [
     "apps/sandbox-executor/src/sandbox_executor/cli.py",
 ]
 large_context = "\n".join(
-    f"=== FILE {f} ===\n{(repo_root / f).read_text(encoding='utf-8')}"
-    for f in files
-    if (repo_root / f).exists()
+    f"=== FILE {f} ===\n{(repo_root / f).read_text(encoding='utf-8')}" for f in files if (repo_root / f).exists()
 )
-print(f"Context loaded: {len(large_context):,} characters (~{len(large_context)//4:,} tokens)")
+print(f"Context loaded: {len(large_context):,} characters (~{len(large_context) // 4:,} tokens)")
 ```
 
 ---
@@ -105,9 +103,7 @@ import datetime
 
 unoptimized_payload = {
     "system": f"Current timestamp: {datetime.datetime.now().isoformat()}\nYou are an expert agent.",
-    "messages": [
-        {"role": "user", "content": f"{large_context}\n\nTask: Analyze code."}
-    ],
+    "messages": [{"role": "user", "content": f"{large_context}\n\nTask: Analyze code."}],
 }
 ```
 
@@ -156,9 +152,7 @@ optimized_payload = {
     ],
 }
 
-cleaned = cleaner.process_payload_with_stats(
-    optimized_payload, provider="anthropic"
-)
+cleaned = cleaner.process_payload_with_stats(optimized_payload, provider="anthropic")
 print(f"Cache control breakpoints injected: {cleaned.cache_control_injected}")
 ```
 

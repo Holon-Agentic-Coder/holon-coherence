@@ -172,9 +172,7 @@ files = [
     "apps/sandbox-executor/src/sandbox_executor/cli.py",
 ]
 codebase_context = "\n".join(
-    f"=== FILE: {f} ===\n{(repo_root / f).read_text(encoding='utf-8')}"
-    for f in files
-    if (repo_root / f).exists()
+    f"=== FILE: {f} ===\n{(repo_root / f).read_text(encoding='utf-8')}" for f in files if (repo_root / f).exists()
 )
 ```
 
@@ -256,9 +254,7 @@ multi_turn_payload = {
 }
 
 # Clean the payload
-result = cleaner.process_payload_with_stats(
-    multi_turn_payload, provider="anthropic"
-)
+result = cleaner.process_payload_with_stats(multi_turn_payload, provider="anthropic")
 
 print(f"Tool outputs omitted: {result.tool_outputs_omitted}")
 print(f"Characters saved: {result.chars_saved:,} bytes")

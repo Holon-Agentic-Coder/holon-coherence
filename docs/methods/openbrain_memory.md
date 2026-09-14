@@ -124,9 +124,7 @@ When OpenBrain memory recall is active:
 
 ```python
 memories = ob.retrieve_memories(topic="test_dashboard_cwd", limit=3)
-memory_context = "\n".join(
-    f"- [Memory: {m['topic']}] {m['content']}" for m in memories
-)
+memory_context = "\n".join(f"- [Memory: {m['topic']}] {m['content']}" for m in memories)
 print("Recalled Memory:\n", memory_context)
 ```
 
