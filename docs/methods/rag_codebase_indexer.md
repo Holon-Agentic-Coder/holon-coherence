@@ -89,9 +89,7 @@ for file_path, lines in indexer.file_index.items():
     if file_path.endswith(".py"):
         baseline_context += f"=== FILE: {file_path} ===\n" + "\n".join(lines) + "\n\n"
 
-baseline_prompt = (
-    f"Using the codebase below, explain how the hybrid cache handles prompt normalization:\n\n{baseline_context}"
-)
+baseline_prompt = f"Using the codebase below, explain how the hybrid cache handles prompt normalization:\n\n{baseline_context}"
 baseline_tokens_approx = len(baseline_prompt) // 4
 print(f"Baseline Turn 0 Context: {len(baseline_context):,} chars (~{baseline_tokens_approx:,} tokens)")
 ```

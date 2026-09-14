@@ -54,8 +54,14 @@ import subprocess
 
 
 def get_active_tiers() -> tuple[str, str]:
-    output = subprocess.run(["agy", "models"], capture_output=True, text=True, check=True).stdout
-    lines = [line.split()[0] for line in output.splitlines() if line.strip() and not line.startswith("Fetching")]
+    output = subprocess.run(
+        ["agy", "models"], capture_output=True, text=True, check=True
+    ).stdout
+    lines = [
+        line.split()[0]
+        for line in output.splitlines()
+        if line.strip() and not line.startswith("Fetching")
+    ]
 
     # In AGY, gemini-3.8-flash-high is the flagship reasoning tier
     tier1 = next(
@@ -64,7 +70,11 @@ def get_active_tiers() -> tuple[str, str]:
     )
     # Tier 2 is the high-throughput executor tier
     tier2 = next(
-        (m for m in ["gemini-3.8-flash-low", "gemini-3.7-flash-low"] if m in lines),
+        (
+            m
+            for m in ["gemini-3.8-flash-low", "gemini-3.7-flash-low"]
+            if m in lines
+        ),
         lines[-1],
     )
 
@@ -175,7 +185,9 @@ Ran 4 tests in 0.001s
 OK
 """
 
-result = SubtaskResult(task_id="test_suite", success=True, raw_output=raw_test_output)
+result = SubtaskResult(
+    task_id="test_suite", success=True, raw_output=raw_test_output
+)
 print("Compressed Output passed to Architect:\n", result.summary)
 ```
 
