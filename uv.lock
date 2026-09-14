@@ -424,25 +424,32 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
+]
+
+[package.optional-dependencies]
+native = [
     { name = "mitmproxy" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "mitmproxy" },
     { name = "pytest" },
     { name = "ruff" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "cryptography", specifier = ">=42.0.0" },
-    { name = "mitmproxy", specifier = ">=12.0.0" },
+    { name = "cryptography", specifier = "==48.0.1" },
+    { name = "mitmproxy", marker = "extra == 'native'", specifier = "==12.2.3" },
 ]
+provides-extras = ["native"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "pytest", specifier = ">=8.0.0" },
-    { name = "ruff", specifier = ">=0.4.0" },
+    { name = "mitmproxy", specifier = "==12.2.3" },
+    { name = "pytest", specifier = "==9.1.1" },
+    { name = "ruff", specifier = "==0.16.7" },
 ]
 
 [[package]]

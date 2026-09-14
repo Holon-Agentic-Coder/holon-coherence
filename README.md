@@ -4,7 +4,7 @@
 
 `holon-coherence` is part of the **Holon** family of self-improving, fractal intent coding agents, used to optimize LLM usage, eliminate token waste, and drive informational entropy to zero across autonomous execution loops.
 
-It operates as a wire-level HTTPS interception proxy and optimization layer, reducing quadratic context bloat ($\mathcal{O}(N^2)$) and cognitive friction transparently via standard proxy routing (`HTTP_PROXY="http://127.0.0.1:8080"`), requiring **zero code modifications** to the client agent.
+It operates as a wire-level HTTPS interception proxy and optimization layer, eliminating quadratic context bloat ($O(N^2)$) and cognitive friction transparently via standard proxy routing, requiring **zero code modifications** to the client agent.
 
 ---
 
@@ -20,11 +20,29 @@ It operates as a wire-level HTTPS interception proxy and optimization layer, red
 
 ---
 
-## 🚀 Quick Start
+## 📋 Prerequisites
 
-### 1. Install as Global CLI Command (Recommended)
+Before using `holon-coherence`, ensure the following prerequisites are installed and running on your host machine:
 
-Install `holon-coherence` directly into your system `$PATH` using `uv`:
+1. **Docker Engine / Docker Desktop (Required)**:
+   - Docker `20.10+` with Buildx support.
+   - The Docker daemon must be active (`docker info`).
+   - Because `holon-coherence` packages the complete interception proxy inside an isolated container, **`mitmproxy` and `mitmdump` do NOT need to be installed on your host system**.
+2. **Python & `uv` (For CLI Management)**:
+   - Python `3.12+`.
+   - [`uv`](https://github.com/astral-sh/uv) (`>=0.4.0`) to install and run the lightweight management CLI.
+3. **Local Directory Permissions**:
+   - Read/write access to `~/.holon/` for certificate generation (`~/.holon/proxy-ca`), disk cache (`~/.holon/cache`), and wire telemetry logs (`~/.holon/logs`).
+
+---
+
+## 🚀 Quick Start (Docker-First Architecture)
+
+`holon-coherence` is designed as a lightweight CLI wrapper around Docker. This ensures **zero host system dependencies**—the entire proxy engine (`mitmproxy`/`mitmdump`), TLS interceptor, and caching layers execute inside an isolated container, eliminating host Python version conflicts, compilation issues, or proxy network pollution.
+
+### 1. Install CLI Wrapper
+
+Install `holon-coherence` into your system `$PATH` via `uv`:
 
 ```bash
 # Install from local checkout
@@ -35,57 +53,78 @@ uv tool install --editable .
 uv tool install git+https://github.com/Holon-Agentic-Coder/holon-coherence.git
 ```
 
-Once installed, `holon-coherence` is immediately executable anywhere in your terminal:
+### 2. Manage the Proxy Container
+
+The `holon-coherence` CLI automatically manages Docker images, volumes, and certificates for you:
 
 ```bash
-# Start in headless mode (port 8080)
+# Start proxy container (port 8080)
 holon-coherence start
 
-# Or with interactive web dashboard on port 8081
+# Run in background (detached)
+holon-coherence start -d
+
+# Start with interactive web inspection dashboard (port 8081)
 holon-coherence start --web
+
+# Check container status
+holon-coherence status
+
+# Stream container logs
+holon-coherence logs -f
+
+# Stop proxy container
+holon-coherence stop
 ```
 
 ---
 
-### 2. Run Directly from Source
+### 3. Alternative: Direct Docker Invocation
 
-```bash
-git clone https://github.com/Holon-Agentic-Coder/holon-coherence.git
-cd holon-coherence
-uv sync
-
-# Run proxy
-uv run holon-coherence start
-```
-
-### 3. Run via Docker
+If you prefer to invoke Docker directly without using the Python CLI wrapper:
 
 ```bash
 # Build local container
 docker build -t holon-coherence:latest .
 
 # Run container
-docker run --rm -it \
+docker run --name holon-coherence --rm -it \
   -p 127.0.0.1:8080:8080 \
   -p 127.0.0.1:8081:8081 \
   -v ~/.holon/proxy-ca:/home/mitmproxy/.mitmproxy \
   -v ~/.holon/cache:/home/mitmproxy/.holon/cache \
+  -v ~/.holon/logs:/tmp/wire_logs \
   holon-coherence:latest
 ```
 
-### 4. Connect Any Agent
+### 4. Connect Any Agent (Inline Execution)
 
-Configure standard environment variables:
+> [!IMPORTANT] **Why Inline Proxy Execution instead of `export`?**
+>
+> 1. **Prevents Terminal Session Contamination**: Running `export HTTP_PROXY=...` persists environment variables across your entire interactive shell session. Subsequent unrelated CLI operations (such as `git clone`, `uv sync`, `npm install`, `docker pull`, or `curl`) will attempt to route through the local proxy, failing or causing connection errors if the proxy is stopped or if upstream registries reject MITM certificates.
+> 2. **Deterministic Process Isolation**: Passing properties inline (or via `holon-coherence run`) binds proxy routing and custom CA certificate bundles exclusively to the target agent process and its immediate subprocesses. Once the agent exits, your terminal session remains in a clean, pristine state.
+> 3. **Eliminates Cross-Tool Side Effects**: Different CLI runtimes handle proxy authentication, TLS trust, and timeouts differently. Scoping proxy configuration strictly per command invocation eliminates elusive session-level debugging issues.
+
+#### Method A: Using `holon-coherence run` (Recommended)
 
 ```bash
-export HTTP_PROXY="http://127.0.0.1:8080"
-export HTTPS_PROXY="http://127.0.0.1:8080"
-export SSL_CERT_FILE="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem"
-export REQUESTS_CA_BUNDLE="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem"
-export NODE_EXTRA_CA_CERTS="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem"
+# Wraps your agent process with isolated proxy settings and CA trust
+holon-coherence run -- <your-agent-command>
 ```
 
-All outbound LLM traffic (Anthropic, Google Gemini, OpenAI) is now automatically optimized, cached, and recorded.
+#### Method B: Inline Shell Environment Variables
+
+```bash
+HTTP_PROXY="http://127.0.0.1:8080" \
+HTTPS_PROXY="http://127.0.0.1:8080" \
+NO_PROXY="localhost,127.0.0.1,api.github.com,github.com" \
+SSL_CERT_FILE="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem" \
+REQUESTS_CA_BUNDLE="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem" \
+NODE_EXTRA_CA_CERTS="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem" \
+<your-agent-command>
+```
+
+All outbound LLM traffic (Anthropic, Google Gemini, OpenAI) is automatically optimized, cached, and recorded without altering your terminal's persistent state.
 
 ---
 
