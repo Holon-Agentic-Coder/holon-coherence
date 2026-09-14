@@ -158,8 +158,8 @@ When developing or executing tasks on `holon-coherence` within the Holon agentic
 off `origin/main` to maintain clean process and branch isolation:
 
 ```bash
-# Navigate to the git directory (or run directly from an existing worktree)
-cd holon-coherence/.git
+# From the repository root (or any active worktree root), sync with origin:
+git fetch origin main
 
 # Create a dedicated worktree for your feature branch
 git worktree add --no-track -b feat/<feature-name> ../feat-<feature-name> origin/main
@@ -168,9 +168,6 @@ git worktree add --no-track -b feat/<feature-name> ../feat-<feature-name> origin
 cd ../feat-<feature-name>
 uv run pytest
 ```
-
-> [!NOTE] If you are already working inside an existing worktree, you can execute `git worktree add` directly from your
-> current directory without `cd` into `.git` (where `.git` is a file pointer).
 
 For agent behavioral rules, coding standards, and operational guidelines, see [AGENTS.md](AGENTS.md).
 

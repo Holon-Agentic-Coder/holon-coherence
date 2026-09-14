@@ -12,12 +12,10 @@ When contributing or executing tasks in `holon-coherence`:
 1. **Worktree Isolation**: Never make code changes directly on the `main` worktree. Always create a dedicated Git
    worktree branched off `origin/main`:
    ```bash
-   # Navigate to the git directory (or run directly from an existing worktree)
-   cd holon-coherence/.git
+   # From the repository root (or any active worktree root):
+   git fetch origin main
    git worktree add --no-track -b feat/<feature-name> ../feat-<feature-name> origin/main
    ```
-   _(Note: If you are already inside an existing worktree, `git worktree add` can be run directly from your active
-   worktree root without changing into `.git` where `.git` is a pointer file.)_
 2. **Squash and Push**: Ensure all commits on your feature branch are squashed into a single logical commit relative to
    `main`.
 3. **No Autonomous Remote Push**: Never push to `origin` unless explicitly instructed by the user. Never push directly
