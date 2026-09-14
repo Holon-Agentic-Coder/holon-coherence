@@ -2,21 +2,33 @@
 
 > **High-coherence, low-entropy optimization gateway for fractal coding agents.**
 
-`holon-coherence` is part of the **Holon** family of self-improving, fractal intent coding agents, used to optimize LLM usage, eliminate token waste, and drive informational entropy to zero across autonomous execution loops.
+`holon-coherence` is part of the **Holon** family of self-improving, fractal intent coding agents, used to optimize LLM
+usage, eliminate token waste, and drive informational entropy to zero across autonomous execution loops.
 
-It operates as a wire-level HTTPS interception proxy and optimization layer, eliminating quadratic context bloat ($O(N^2)$) and cognitive friction transparently via standard proxy routing, requiring **zero code modifications** to the client agent.
+It operates as a wire-level HTTPS interception proxy and optimization layer, eliminating quadratic context bloat
+($O(N^2)$) and cognitive friction transparently via standard proxy routing, requiring **zero code modifications** to the
+client agent.
 
 ---
 
 ## ⚡ Key Capabilities
 
-1. **Context Cleaning & Tool Deduplication**: Intercepts outbound conversation histories, hashes returned tool payloads (`cat`, `ls`, file reads via SHA-256), and replaces identical historical outputs with structural tombstones while preserving active turns and modified files verbatim.
-2. **Hybrid & Semantic Local Cache**: Disk-backed SQLite exact and Jaccard semantic caching that short-circuits repeated requests locally at **0 prompt/output tokens and sub-5ms latency**.
-3. **Provider Prompt Cache Optimization**: Anchors static context at the prefix and automatically injects provider-specific cache control breakpoints (`"cache_control": {"type": "ephemeral"}`) to unlock 80–90% cost discounts.
-4. **AST & Keyword Codebase Indexing**: Symbol-based AST mapping to replace brute-force Turn 0 codebase dumping, cutting initial prompt sizes by $\ge 99\%$.
-5. **OpenBrain Episodic Memory**: Persistent cross-session lesson registry that prevents repetitive trial-and-error loops across separate development trajectories.
-6. **Ringer Multi-Agent Tiering**: Dynamic delegation between Tier 1 Flagship reasoning models (Architect) and Tier 2 high-throughput execution models (Executor) with subtask result compression.
-7. **Transparent Wire Telemetry**: Non-synthetic wire-level transaction logging (`transactions.jsonl`) capturing raw requests, cleaned requests, SSE streams, TTFT latency, and exact token counts.
+1. **Context Cleaning & Tool Deduplication**: Intercepts outbound conversation histories, hashes returned tool payloads
+   (`cat`, `ls`, file reads via SHA-256), and replaces identical historical outputs with structural tombstones while
+   preserving active turns and modified files verbatim.
+2. **Hybrid & Semantic Local Cache**: Disk-backed SQLite exact and Jaccard semantic caching that short-circuits repeated
+   requests locally at **0 prompt/output tokens and sub-5ms latency**.
+3. **Provider Prompt Cache Optimization**: Anchors static context at the prefix and automatically injects
+   provider-specific cache control breakpoints (`"cache_control": {"type": "ephemeral"}`) to unlock 80–90% cost
+   discounts.
+4. **AST & Keyword Codebase Indexing**: Symbol-based AST mapping to replace brute-force Turn 0 codebase dumping, cutting
+   initial prompt sizes by $\ge 99\%$.
+5. **OpenBrain Episodic Memory**: Persistent cross-session lesson registry that prevents repetitive trial-and-error
+   loops across separate development trajectories.
+6. **Ringer Multi-Agent Tiering**: Dynamic delegation between Tier 1 Flagship reasoning models (Architect) and Tier 2
+   high-throughput execution models (Executor) with subtask result compression.
+7. **Transparent Wire Telemetry**: Non-synthetic wire-level transaction logging (`transactions.jsonl`) capturing raw
+   requests, cleaned requests, SSE streams, TTFT latency, and exact token counts.
 
 ---
 
@@ -27,18 +39,22 @@ Before using `holon-coherence`, ensure the following prerequisites are installed
 1. **Docker Engine / Docker Desktop (Required)**:
    - Docker `20.10+` with Buildx support.
    - The Docker daemon must be active (`docker info`).
-   - Because `holon-coherence` packages the complete interception proxy inside an isolated container, **`mitmproxy` and `mitmdump` do NOT need to be installed on your host system**.
+   - Because `holon-coherence` packages the complete interception proxy inside an isolated container, **`mitmproxy` and
+     `mitmdump` do NOT need to be installed on your host system**.
 2. **Python & `uv` (For CLI Management)**:
    - Python `3.12+`.
    - [`uv`](https://github.com/astral-sh/uv) (`>=0.4.0`) to install and run the lightweight management CLI.
 3. **Local Directory Permissions**:
-   - Read/write access to `~/.holon/` for certificate generation (`~/.holon/proxy-ca`), disk cache (`~/.holon/cache`), and wire telemetry logs (`~/.holon/logs`).
+   - Read/write access to `~/.holon/` for certificate generation (`~/.holon/proxy-ca`), disk cache (`~/.holon/cache`),
+     and wire telemetry logs (`~/.holon/logs`).
 
 ---
 
 ## 🚀 Quick Start (Docker-First Architecture)
 
-`holon-coherence` is designed as a lightweight CLI wrapper around Docker. This ensures **zero host system dependencies**—the entire proxy engine (`mitmproxy`/`mitmdump`), TLS interceptor, and caching layers execute inside an isolated container, eliminating host Python version conflicts, compilation issues, or proxy network pollution.
+`holon-coherence` is designed as a lightweight CLI wrapper around Docker. This ensures **zero host system
+dependencies**—the entire proxy engine (`mitmproxy`/`mitmdump`), TLS interceptor, and caching layers execute inside an
+isolated container, eliminating host Python version conflicts, compilation issues, or proxy network pollution.
 
 ### 1. Install CLI Wrapper
 
@@ -101,9 +117,16 @@ docker run --name holon-coherence --rm -it \
 
 > [!IMPORTANT] **Why Inline Proxy Execution instead of `export`?**
 >
-> 1. **Prevents Terminal Session Contamination**: Running `export HTTP_PROXY=...` persists environment variables across your entire interactive shell session. Subsequent unrelated CLI operations (such as `git clone`, `uv sync`, `npm install`, `docker pull`, or `curl`) will attempt to route through the local proxy, failing or causing connection errors if the proxy is stopped or if upstream registries reject MITM certificates.
-> 2. **Deterministic Process Isolation**: Passing properties inline (or via `holon-coherence run`) binds proxy routing and custom CA certificate bundles exclusively to the target agent process and its immediate subprocesses. Once the agent exits, your terminal session remains in a clean, pristine state.
-> 3. **Eliminates Cross-Tool Side Effects**: Different CLI runtimes handle proxy authentication, TLS trust, and timeouts differently. Scoping proxy configuration strictly per command invocation eliminates elusive session-level debugging issues.
+> 1. **Prevents Terminal Session Contamination**: Running `export HTTP_PROXY=...` persists environment variables across
+>    your entire interactive shell session. Subsequent unrelated CLI operations (such as `git clone`, `uv sync`,
+>    `npm install`, `docker pull`, or `curl`) will attempt to route through the local proxy, failing or causing
+>    connection errors if the proxy is stopped or if upstream registries reject MITM certificates.
+> 2. **Deterministic Process Isolation**: Passing properties inline (or via `holon-coherence run`) binds proxy routing
+>    and custom CA certificate bundles exclusively to the target agent process and its immediate subprocesses. Once the
+>    agent exits, your terminal session remains in a clean, pristine state.
+> 3. **Eliminates Cross-Tool Side Effects**: Different CLI runtimes handle proxy authentication, TLS trust, and timeouts
+>    differently. Scoping proxy configuration strictly per command invocation eliminates elusive session-level debugging
+>    issues.
 
 #### Method A: Using `holon-coherence run` (Recommended)
 
@@ -124,7 +147,29 @@ NODE_EXTRA_CA_CERTS="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem" \
 <your-agent-command>
 ```
 
-All outbound LLM traffic (Anthropic, Google Gemini, OpenAI) is automatically optimized, cached, and recorded without altering your terminal's persistent state.
+All outbound LLM traffic (Anthropic, Google Gemini, OpenAI) is automatically optimized, cached, and recorded without
+altering your terminal's persistent state.
+
+---
+
+## 🛠 Development & Worktree Workflow
+
+When developing or executing tasks on `holon-coherence` within the Holon agentic workspace, use Git worktrees branched
+off `origin/main` to maintain clean process and branch isolation:
+
+```bash
+# From the repository root (or any active worktree root), sync with origin:
+git fetch origin main
+
+# Create a dedicated worktree for your feature branch
+git worktree add --no-track -b feat/<feature-name> ../feat-<feature-name> origin/main
+
+# Run test suite
+cd ../feat-<feature-name>
+uv run pytest
+```
+
+For agent behavioral rules, coding standards, and operational guidelines, see [AGENTS.md](AGENTS.md).
 
 ---
 

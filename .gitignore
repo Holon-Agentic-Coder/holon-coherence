@@ -45,4 +45,5 @@ turn_*.json
 # OS & IDE
 .DS_Store
 .idea/
+*.iml
 .vscode/

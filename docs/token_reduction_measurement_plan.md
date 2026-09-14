@@ -258,7 +258,8 @@ docker run --rm -it \
 ```
 
 - Navigate to `http://localhost:8081` in your browser.
-- Run agent workloads with inline environment variables to route traffic through the proxy without contaminating the interactive terminal session:
+- Run agent workloads with inline environment variables to route traffic through the proxy without contaminating the
+  interactive terminal session:
   ```bash
   HTTP_PROXY="http://127.0.0.1:8080" \
   HTTPS_PROXY="http://127.0.0.1:8080" \
@@ -470,7 +471,7 @@ _Where $\text{Price}$ is quoted in USD per million tokens (MTok), scaled by the 
 yield cost in USD. For example, assuming an illustrative base input price of \$3.00/MTok, a 90% cache read discount
 yields \$0.30/MTok (saving \$2.70/MTok read), while a 25% cache creation write surcharge incurs \$3.75/MTok (costing
 \$0.75/MTok extra). Net monetary savings accounts for both read discounts and cache write overhead across active
-providers. For providers offering automatic prompt caching without write surcharges,
+providers. For providers offering automatic prompt caching without write surcharges,  
 $(\text{Price}_{\text{create}} - \text{Price}_{\text{base}}) = 0$, simplifying net monetary savings strictly to cache
 read discounts._
 

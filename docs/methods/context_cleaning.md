@@ -145,8 +145,9 @@ Or execute via the CLI wrapper:
 holon-coherence run -- <your-agent-command>
 ```
 
-> [!NOTE] **Why Inline Proxy Execution?**
-> Persisting proxy settings via global shell `export` pollutes the interactive session, causing unrelated tools (e.g. `git`, `curl`, package managers) to route through the local proxy or fail if the proxy is stopped. Inline properties guarantee that proxy routing is strictly isolated to the agent process.
+> [!NOTE] **Why Inline Proxy Execution?** Persisting proxy settings via global shell `export` pollutes the interactive
+> session, causing unrelated tools (e.g. `git`, `curl`, package managers) to route through the local proxy or fail if
+> the proxy is stopped. Inline properties guarantee that proxy routing is strictly isolated to the agent process.
 
 ---
 
