@@ -158,7 +158,7 @@ When developing or executing tasks on `holon-coherence` within the Holon agentic
 off `origin/main` to maintain clean process and branch isolation:
 
 ```bash
-# Navigate to the bare repository (or run directly from an existing worktree)
+# Navigate to the git directory (or run directly from an existing worktree)
 cd holon-coherence/.git
 
 # Create a dedicated worktree for your feature branch
