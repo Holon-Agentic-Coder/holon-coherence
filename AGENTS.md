@@ -15,8 +15,9 @@ When contributing or executing tasks in `holon-coherence`:
    # From the repository root (or any active worktree root):
    git fetch origin main
    git worktree add --no-track -b feat/<feature-name> ../feat-<feature-name> origin/main
+   cd ../feat-<feature-name>
    ```
-2. **Squash and Push**: Ensure all commits on your feature branch are squashed into a single logical commit relative to
+2. **Squash Commits**: Ensure all commits on your feature branch are squashed into a single logical commit relative to
    `main`.
 3. **No Autonomous Remote Push**: Never push to `origin` unless explicitly instructed by the user. Never push directly
    to `main`.
@@ -30,7 +31,7 @@ When contributing or executing tasks in `holon-coherence`:
   uv run pytest
   ```
 - **Single Root Virtual Environment**: Always execute all `uv` and Python commands strictly from the worktree root.
-  Virtual environments must exist exclusively at `.venv`.
+  Virtual environments must exist exclusively at `.venv` local to the active worktree root (`<worktree-root>/.venv`).
 - **Prettier Markdown Formatting**: Always format markdown files using Prettier before committing:
   ```bash
   npx prettier --write "**/*.md"

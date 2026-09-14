@@ -471,8 +471,9 @@ _Where $\text{Price}$ is quoted in USD per million tokens (MTok), scaled by the 
 yield cost in USD. For example, assuming an illustrative base input price of \$3.00/MTok, a 90% cache read discount
 yields \$0.30/MTok (saving \$2.70/MTok read), while a 25% cache creation write surcharge incurs \$3.75/MTok (costing
 \$0.75/MTok extra). Net monetary savings accounts for both read discounts and cache write overhead across active
-providers. For providers offering automatic prompt caching without write surcharges, $(\text{Price}_{\text{create}} -
-\text{Price}_{\text{base}}) = 0$, simplifying net monetary savings strictly to cache read discounts._
+providers. For providers offering automatic prompt caching without write surcharges,  
+$(\text{Price}_{\text{create}} - \text{Price}_{\text{base}}) = 0$, simplifying net monetary savings strictly to cache
+read discounts._
 
 > [!NOTE] **Provider Minimum Prompt Caching Token Thresholds**: Frontier LLM providers enforce minimum prompt token
 > thresholds (typically 1,024 to 2,048 tokens depending on the specific model architecture) before prompt caching
