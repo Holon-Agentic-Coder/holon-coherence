@@ -1,0 +1,6 @@
+name: holon
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13.15
+  - uv=0.12.13

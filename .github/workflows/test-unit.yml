@@ -1,0 +1,47 @@
+name: Test - Unit
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest ]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Cache conda packages
+        uses: actions/cache@v4
+        with:
+          path: ~/conda_pkgs_dir
+          key: ${{ runner.os }}-conda-${{ hashFiles('environment.yml') }}
+          restore-keys: ${{ runner.os }}-conda-
+
+      - name: Set up Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: true
+          environment-file: environment.yml
+          channels: conda-forge
+          auto-activate-base: false
+          activate-environment: holon
+          conda-remove-defaults: true
+          use-only-tar-bz2: false
+
+      - name: Run unit tests
+        shell: bash -el {0}
+        run: uv sync; uv run task test

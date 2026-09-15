@@ -1,0 +1,89 @@
+# .github/workflows/make.yml
+name: Run Make
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest ]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Print uname -m
+        run: uname -m
+
+      - name: Run make help
+        run: make help
+
+      - name: Run make
+        run: make
+
+      - name: Ensure clean environment without pre-installed conda
+        run: |
+          sudo rm -f /usr/bin/conda /usr/local/bin/conda || true
+          sudo rm -rf /usr/share/miniconda /opt/conda "$HOME/miniconda3" /Library/Frameworks/miniconda3 || true
+          PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "conda" | paste -sd: -)
+          echo "PATH=$PATH" >> "$GITHUB_ENV"
+
+      - name: Test that conda is not present
+        run: |
+          if command -v conda >/dev/null 2>&1; then
+            echo "❌ Error: conda was found at $(which conda) before installation"
+            exit 1
+          fi
+          echo "✅ Verified: conda is not present"
+
+      - name: Cache conda packages
+        uses: actions/cache@v4
+        with:
+          path: ~/conda_pkgs_dir
+          key: ${{ runner.os }}-conda-${{ hashFiles('environment.yml') }}
+          restore-keys: ${{ runner.os }}-conda-
+
+      - name: Install Conda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: "latest"
+          auto-update-conda: true
+          channels: conda-forge
+          auto-activate-base: true
+          conda-remove-defaults: true
+          use-only-tar-bz2: false
+
+      - name: Install the conda environment
+        shell: bash -el {0}
+        run: |
+          conda env create -f environment.yml
+
+      - name: Verify conda environment holon
+        shell: bash -el {0}
+        run: |
+          conda activate holon
+          echo "Active conda environment: $CONDA_DEFAULT_ENV"
+          [ "$CONDA_DEFAULT_ENV" = "holon" ] || (echo "Expected active env 'holon', got '$CONDA_DEFAULT_ENV'" && exit 1)
+          echo "uv binary: $(which uv)"
+          uv --version
+
+      - name: Verify make check-prerequisites
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash -el {0}
+        run: |
+          conda activate holon
+          make check-prerequisites
+

@@ -2,9 +2,22 @@ import pathlib
 import re
 import subprocess
 
+import pytest
+
 SCRIPT_PATH = pathlib.Path(__file__).parent.parent / "build_image.sh"
 
 
+def bash_supports_epochrealtime() -> bool:
+    res = subprocess.run(
+        ["bash", "-c", '[[ -n "${EPOCHREALTIME:-}" ]] && printf "%(%s)T" -1 >/dev/null 2>&1'],
+        capture_output=True,
+    )
+    return res.returncode == 0
+
+
+@pytest.mark.skipif(
+    not bash_supports_epochrealtime(), reason="Host bash does not support EPOCHREALTIME (requires Bash >= 5.0)"
+)
 def test_get_timestamp_with_epochrealtime():
     cmd = ["bash", "-c", f'source {SCRIPT_PATH} && ts="" && get_timestamp ts && echo "$ts"']
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -23,4 +36,4 @@ def test_print_log_with_timestamps():
     cmd = ["bash", "-c", f'source {SCRIPT_PATH} && echo "test log line" | print_log_with_timestamps']
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
     output = result.stdout.strip()
-    assert re.match(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\] test log line$", output)
+    assert re.match(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{3})?\] test log line$", output)
