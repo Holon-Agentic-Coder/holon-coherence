@@ -53,5 +53,11 @@ When contributing or executing tasks in `holon-coherence`:
 2. **Inline Proxy Process Isolation**: When connecting agents or test runners to the proxy, use inline environment
    variables or `holon-coherence run -- <cmd>` rather than persistent `export HTTP_PROXY=...` to prevent terminal
    session contamination.
-3. **Strict Repository Separation**: Commands targeting `holon-coherence` must be executed strictly inside
+3. **Coding Agent Runners & Automated Proxy**: Use `holon-coherence <agent>` (or `holon-coherence run-agent <agent>`) to
+   launch agents (`agy`, `claude`, `codex`, `opencode`, `pi`) through the optimization proxy. The proxy runs in
+   background daemon mode by default and supports `--ephemeral` for one-off task teardowns.
+4. **Universal Credentials & Native Auth Fallback (Rule 5)**: Standardize host credentials on `HOLON_AGENT_KEY`. Never
+   require vendor-specific API keys. If `HOLON_AGENT_KEY` is omitted, runners transparently fallback to native host auth
+   sessions (such as `~/.gemini`, `~/.claude.json`).
+5. **Strict Repository Separation**: Commands targeting `holon-coherence` must be executed strictly inside
    `holon-coherence/` (or its git worktrees).

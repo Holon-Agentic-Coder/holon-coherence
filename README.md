@@ -129,7 +129,68 @@ holon-coherence stop
 
 ---
 
-### 3. Alternative: Direct Docker Invocation
+### 3. Automated Coding Agent Runners
+
+`holon-coherence` provides first-class coding agent runners that automatically launch the optimization proxy in the
+background, configure proxy routing and certificate trust, map universal credentials, and execute the agent with full
+wire telemetry and token optimization enabled:
+
+```bash
+# Run Antigravity agent (interactive or CLI mode)
+holon-coherence agy
+holon-coherence agy -p "Refactor authentication flow"
+
+# Run Claude Code agent
+holon-coherence claude
+holon-coherence claude --dangerously-skip-permissions
+
+# Run OpenAI Codex / ChatGPT CLI agent
+holon-coherence codex
+
+# Run OpenCode agent
+holon-coherence opencode
+
+# Run Inflection Pi agent
+holon-coherence pi
+
+# Generic runner syntax
+holon-coherence run-agent <agent> [agent_args...]
+```
+
+#### Universal Credentials (`HOLON_AGENT_KEY`) & Native Auth Fallback
+
+- **Universal Credential**: Provide `HOLON_AGENT_KEY` in your host environment or inline:
+  - `agy`: mapped internally to `GEMINI_API_KEY` and `AGY_USER_TOKEN`.
+  - `claude`: mapped internally to `ANTHROPIC_API_KEY`.
+  - `codex`: mapped internally to `OPENAI_API_KEY`.
+  - `opencode`: mapped internally to `OPENCODE_API_KEY`.
+  - `pi`: mapped internally to `PI_API_KEY`.
+- **Native Auth Fallback**: If `HOLON_AGENT_KEY` is omitted, the runner does not inspect or require vendor API keys;
+  child subprocesses transparently inherit existing host authentication sessions (such as `~/.gemini`, `~/.claude.json`,
+  or native OAuth tokens).
+
+#### Proxy Lifecycle & Teardown Policy
+
+- **Background Daemon Mode (Default)**: The proxy container starts once in detached mode and stays running across
+  invocations to eliminate container startup latency.
+- **Ephemeral Teardown (`--ephemeral`)**: Pass `--ephemeral` to automatically stop and remove the proxy container when
+  the agent process exits:
+  ```bash
+  holon-coherence agy --ephemeral -p "Run single task"
+  ```
+- **On-Demand Teardown (`holon-coherence stop`)**: Stops and removes the background container at any time:
+  ```bash
+  holon-coherence stop
+  ```
+- **Port Allocation & Conflict Detection**: Configure the proxy port via `--port <port>` or the `HOLON_PROXY_PORT`
+  environment variable (default: `8080`). Port conflicts are detected during startup with actionable guidance.
+- **Interactive TTY & Signal Forwarding**: Full interactive TTY attachment (`sys.stdin`, `sys.stdout`, `sys.stderr`)
+  preserves ANSI styling, cursor controls, readline prompts, and terminal resize events (`SIGWINCH`), with clean exit
+  code propagation.
+
+---
+
+### 4. Alternative: Direct Docker Invocation
 
 If you prefer to invoke Docker directly without using the Python CLI wrapper:
 
