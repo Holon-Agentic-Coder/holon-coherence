@@ -1,24 +1,12 @@
-name: Build Docker Images
+name: Docker Build
 
 on:
   push:
     branches:
       - main
-      - develop
-    paths:
-      - 'Dockerfile'
-      - '.dockerignore'
-      - 'pyproject.toml'
-      - 'src/**'
   pull_request:
     branches:
       - main
-      - develop
-    paths:
-      - 'Dockerfile'
-      - '.dockerignore'
-      - 'pyproject.toml'
-      - 'src/**'
   workflow_dispatch:
 
 permissions:
@@ -44,6 +32,12 @@ jobs:
       - name: Expose GitHub Runtime
         uses: crazy-max/ghaction-github-runtime@v4
 
-      - name: Build Docker image via Buildx Bake
+      - name: Build Docker image via make build-image
         run: |
-          ./build_image.sh --output-log
+          make build-image
+
+
+      - name: Verify Docker image
+        run: |
+          docker images holon-coherence
+          docker inspect holon-coherence:latest >/dev/null

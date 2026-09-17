@@ -1,0 +1,64 @@
+name: Test - Hygiene
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hygiene:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ ubuntu-latest ]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Cache conda packages
+        uses: actions/cache@v4
+        with:
+          path: ~/conda_pkgs_dir
+          key: ${{ runner.os }}-conda-${{ hashFiles('environment.yml') }}
+          restore-keys: ${{ runner.os }}-conda-
+
+      - name: Set up Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: true
+          environment-file: environment.yml
+          channels: conda-forge
+          auto-activate-base: false
+          activate-environment: holon
+          conda-remove-defaults: true
+          use-only-tar-bz2: false
+
+      - name: Update dependencies
+        shell: bash -el {0}
+        run: uv sync
+
+      - name: Check uv.lock is up to date
+        shell: bash -el {0}
+        run: |
+          uv lock --check
+          git diff --exit-code uv.lock
+
+      - name: Lint with Ruff
+        shell: bash -el {0}
+        run: uv run task lint
+
+      - name: Check markdown formatting with Prettier
+        run: npx --yes prettier@3.8.4 --check "**/*.md"
+
+      - name: Test clean task
+        shell: bash -el {0}
+        run: uv run task clean

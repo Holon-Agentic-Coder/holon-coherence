@@ -32,21 +32,55 @@ client agent.
 
 ---
 
-## 📋 Prerequisites
+## 📋 Prerequisites & Automated Setup
 
-Before using `holon-coherence`, ensure the following prerequisites are installed and running on your host machine:
+`holon-coherence` automates prerequisite verification and environment provisioning entirely through the
+[`Makefile`](Makefile), avoiding manual installations.
 
-1. **Docker Engine / Docker Desktop (Required)**:
-   - Docker `20.10+` with Buildx support.
-   - The Docker daemon must be active (`docker info`).
-   - Because `holon-coherence` packages the complete interception proxy inside an isolated container, **`mitmproxy` and
-     `mitmdump` do NOT need to be installed on your host system**.
-2. **Python & `uv` (For CLI Management)**:
-   - Python `3.12+`.
-   - [`uv`](https://github.com/astral-sh/uv) (`>=0.4.0`) to install and run the lightweight management CLI.
-3. **Local Directory Permissions**:
-   - Read/write access to `~/.holon/` for certificate generation (`~/.holon/proxy-ca`), disk cache (`~/.holon/cache`),
-     and wire telemetry logs (`~/.holon/logs`).
+### 1. Automated Prerequisite Verification
+
+Run the automated check to verify all dependencies (Docker CLI, Docker Buildx, Docker daemon, and Conda):
+
+```bash
+make check-prerequisites
+```
+
+### 2. Automated Installation via Makefile
+
+If any prerequisite is missing, install and configure it directly using the Makefile targets:
+
+- **Docker (CLI, Buildx & Daemon)**:
+
+  ```bash
+  # Check Docker prerequisite and install/start if missing:
+  make check-docker
+
+  # Or install Docker directly for your OS (macOS Docker Desktop via Homebrew, or Linux Docker engine):
+  make install-docker
+  ```
+
+  _(Because `holon-coherence` packages the complete interception proxy inside an isolated container, `mitmproxy` and
+  `mitmdump` do NOT need to be installed on your host system)._
+
+- **Conda Environment (`holon`) & `uv`**:
+
+  ```bash
+  # Installs Miniforge (if not installed) and provisions the 'holon' Conda environment:
+  make create-conda-env
+
+  # Activate the environment in your shell:
+  conda activate holon
+  ```
+
+- **Build Docker Container**:
+  ```bash
+  make build-image
+  ```
+
+### 3. Local Directory Permissions
+
+Read/write access to `~/.holon/` for certificate generation (`~/.holon/proxy-ca`), disk cache (`~/.holon/cache`), and
+wire telemetry logs (`~/.holon/logs`).
 
 ---
 
@@ -164,10 +198,24 @@ git fetch origin main
 # Create a dedicated worktree for your feature branch
 git worktree add --no-track -b feat/<feature-name> ../feat-<feature-name> origin/main
 
-# Run test suite
+# Navigate to worktree
 cd ../feat-<feature-name>
-uv run pytest
+
+# Run test suite
+uv run task test
 ```
+
+### Developer Tasks (`taskipy`)
+
+Lifecycle and code quality tasks are managed via `taskipy`:
+
+| Task Command              | Description                                                    |
+| :------------------------ | :------------------------------------------------------------- |
+| `uv run task test`        | Run unit test suite (excludes integration tests)               |
+| `uv run task test-docker` | Run Docker integration test suite                              |
+| `uv run task lint`        | Run Ruff linter and formatting checks                          |
+| `uv run task fix-ruff`    | Automatically fix Ruff lint and format errors                  |
+| `uv run task clean`       | Clean build, cache, and bytecode artifacts (preserves `.venv`) |
 
 For agent behavioral rules, coding standards, and operational guidelines, see [AGENTS.md](AGENTS.md).
 

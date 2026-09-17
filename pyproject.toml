@@ -35,12 +35,21 @@ dev = [
     "mitmproxy==12.2.3",
     "pytest==9.1.1",
     "ruff==0.16.7",
+    "taskipy>=1.14.1",
 ]
 
 
 [project.scripts]
 holon-coherence = "holon_coherence.cli:main"
 coherence = "holon_coherence.cli:main"
+
+[tool.taskipy.tasks]
+test = "pytest -m 'not integration_test'"
+test-docker = "pytest -m 'integration_test'"
+lint = "ruff check . && ruff format --check ."
+fix-ruff = "ruff check --fix . && ruff format ."
+clean = "rm -rf build dist *.egg-info .pytest_cache .ruff_cache .coverage htmlcov && find . -type d -name __pycache__ -exec rm -rf {} +"
+
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/holon_coherence"]
