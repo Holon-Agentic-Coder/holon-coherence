@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -164,7 +165,23 @@ class TestProxyEnvironmentInjectionAndMergedCA:
         assert "CURL_CA_BUNDLE" in env
         assert "NODE_EXTRA_CA_CERTS" in env
 
-    def test_merged_ca_bundle_generation(self, tmp_path: pytest.TempPathFactory) -> None:
+    def test_proxy_routing_preserves_existing_no_proxy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("NO_PROXY", "internal.corp.com,*.local")
+        env = build_agent_env("claude", port=9090)
+        assert env["NO_PROXY"] == f"{NO_PROXY_HOSTS},internal.corp.com,*.local"
+        assert env["no_proxy"] == f"{NO_PROXY_HOSTS},internal.corp.com,*.local"
+
+    def test_ca_cert_missing_diagnostic_warning(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with patch("os.path.exists", return_value=False):
+            env = build_agent_env("claude", port=9090)
+            assert "SSL_CERT_FILE" not in env
+            assert "REQUESTS_CA_BUNDLE" not in env
+            assert "CURL_CA_BUNDLE" not in env
+            assert "NODE_EXTRA_CA_CERTS" not in env
+            captured = capsys.readouterr()
+            assert "Warning: CA certificate not found" in captured.err
+
+    def test_merged_ca_bundle_generation(self, tmp_path: Path) -> None:
         holon_ca = tmp_path / "mitmproxy-ca-cert.pem"
         holon_ca.write_text("-----BEGIN CERTIFICATE-----\nHOLON_ROOT_CA\n-----END CERTIFICATE-----")
 
@@ -306,6 +323,13 @@ class TestProxyLifecycleAndStopCommand:
             mock_ensure.assert_called_once()
             mock_stop.assert_called_once()
 
+    def test_run_agent_missing_binary_returns_exit_code_1(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with patch("holon_coherence.cli.resolve_agent_binary", return_value=None):
+            code = run_agent("agy", [])
+            assert code == 1
+            captured = capsys.readouterr()
+            assert "Agent CLI binary 'agy' not found on PATH" in captured.err
+
     def test_stop_proxy_container_invokes_docker_rm(self) -> None:
         with patch("subprocess.run") as mock_run:
             stop_proxy_container()
@@ -314,6 +338,11 @@ class TestProxyLifecycleAndStopCommand:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+
+    def test_stop_proxy_container_suppresses_os_error(self) -> None:
+        with patch("subprocess.run", side_effect=FileNotFoundError("docker not found")):
+            # Should not raise exception
+            stop_proxy_container()
 
 
 class TestCLIDispatchAndMain:
@@ -360,3 +389,48 @@ class TestCLIDispatchAndMain:
         ):
             run_agent("codex", [], port=7777)
             mock_ensure.assert_called_once_with(port=7777)
+
+    def test_run_agent_flexible_argument_ordering(self) -> None:
+        with patch("holon_coherence.cli.run_agent", return_value=0) as mock_run_agent, pytest.raises(SystemExit) as exc:
+            main(["run-agent", "--ephemeral", "claude", "-p", "fix issue"])
+        assert exc.value.code == 0
+        mock_run_agent.assert_called_once_with("claude", ["-p", "fix issue"], ephemeral=True, port=None)
+
+    def test_run_agent_flexible_ordering_with_port(self) -> None:
+        with patch("holon_coherence.cli.run_agent", return_value=0) as mock_run_agent, pytest.raises(SystemExit) as exc:
+            main(["run-agent", "--port", "9090", "--ephemeral", "claude"])
+        assert exc.value.code == 0
+        mock_run_agent.assert_called_once_with("claude", [], ephemeral=True, port=9090)
+
+    def test_direct_alias_help_passthrough_after_delimiter(self) -> None:
+        with patch("holon_coherence.cli.run_agent", return_value=0) as mock_run_agent, pytest.raises(SystemExit) as exc:
+            main(["claude", "--", "--help"])
+        assert exc.value.code == 0
+        mock_run_agent.assert_called_once_with("claude", ["--help"], ephemeral=False, port=None)
+
+    def test_run_agent_help_passthrough_after_delimiter(self) -> None:
+        with patch("holon_coherence.cli.run_agent", return_value=0) as mock_run_agent, pytest.raises(SystemExit) as exc:
+            main(["run-agent", "--ephemeral", "claude", "--", "--help"])
+        assert exc.value.code == 0
+        mock_run_agent.assert_called_once_with("claude", ["--help"], ephemeral=True, port=None)
+
+    def test_direct_alias_runner_help_intercept(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(SystemExit) as exc:
+            main(["claude", "--help"])
+        assert exc.value.code == 0
+        captured = capsys.readouterr()
+        assert "usage: holon-coherence claude" in captured.out
+
+    def test_run_agent_runner_help_intercept(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(SystemExit) as exc:
+            main(["run-agent", "claude", "--help"])
+        assert exc.value.code == 0
+        captured = capsys.readouterr()
+        assert "usage: holon-coherence claude" in captured.out
+
+    def test_run_agent_general_help(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(SystemExit) as exc:
+            main(["run-agent", "--help"])
+        assert exc.value.code == 0
+        captured = capsys.readouterr()
+        assert "usage: holon-coherence run-agent" in captured.out

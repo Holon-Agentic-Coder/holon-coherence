@@ -92,11 +92,16 @@ def get_or_create_merged_ca_bundle(ca_cert_path: str) -> str:
 
     try:
         os.makedirs(target_dir, exist_ok=True)
-        fd = os.open(merged_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        tmp_path = f"{merged_path}.tmp.{os.getpid()}"
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(merged_content)
+        os.replace(tmp_path, merged_path)
         return merged_path
     except OSError:
+        with contextlib.suppress(OSError):
+            if "tmp_path" in locals() and os.path.exists(tmp_path):
+                os.remove(tmp_path)
         return ca_cert_path
 
 
@@ -246,7 +251,8 @@ def ensure_proxy_running(
 def stop_proxy_container() -> None:
     """Stop and remove the holon-coherence background Docker container on demand."""
     print("🛑 Stopping and removing holon-coherence Docker container...")
-    subprocess.run(["docker", "rm", "-f", CONTAINER_NAME], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    with contextlib.suppress(OSError):
+        subprocess.run(["docker", "rm", "-f", CONTAINER_NAME], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     print("✅ holon-coherence container stopped and removed.")
 
 
@@ -266,15 +272,6 @@ def build_agent_env(agent_name: str, port: int) -> dict[str, str]:
     Configures proxy routing, merged CA bundle, and maps universal HOLON_AGENT_KEY
     to vendor keys without inspecting or validating native host auth if omitted.
     """
-    ca_dir = os.path.expanduser("~/.holon/proxy-ca")
-    ca_cert = os.path.join(ca_dir, "mitmproxy-ca-cert.pem")
-    if not os.path.exists(ca_cert):
-        alt_ca = os.path.expanduser("~/.holon/certs/holon-root-ca.crt")
-        if os.path.exists(alt_ca):
-            ca_cert = alt_ca
-
-    merged_bundle = get_or_create_merged_ca_bundle(ca_cert)
-
     env = os.environ.copy()
     proxy_url = f"http://127.0.0.1:{port}"
 
@@ -285,14 +282,28 @@ def build_agent_env(agent_name: str, port: int) -> dict[str, str]:
     env["http_proxy"] = proxy_url
     env["https_proxy"] = proxy_url
     env["all_proxy"] = proxy_url
-    env["NO_PROXY"] = NO_PROXY_HOSTS
-    env["no_proxy"] = NO_PROXY_HOSTS
+
+    existing_no_proxy = os.environ.get("NO_PROXY") or os.environ.get("no_proxy")
+    merged_no_proxy = f"{NO_PROXY_HOSTS},{existing_no_proxy}" if existing_no_proxy else NO_PROXY_HOSTS
+    env["NO_PROXY"] = merged_no_proxy
+    env["no_proxy"] = merged_no_proxy
 
     # Certificate bundle
-    env["SSL_CERT_FILE"] = merged_bundle
-    env["REQUESTS_CA_BUNDLE"] = merged_bundle
-    env["CURL_CA_BUNDLE"] = merged_bundle
-    env["NODE_EXTRA_CA_CERTS"] = ca_cert
+    ca_dir = os.path.expanduser("~/.holon/proxy-ca")
+    ca_cert = os.path.join(ca_dir, "mitmproxy-ca-cert.pem")
+    if not os.path.exists(ca_cert):
+        alt_ca = os.path.expanduser("~/.holon/certs/holon-root-ca.crt")
+        if os.path.exists(alt_ca):
+            ca_cert = alt_ca
+
+    if os.path.exists(ca_cert):
+        merged_bundle = get_or_create_merged_ca_bundle(ca_cert)
+        env["SSL_CERT_FILE"] = merged_bundle
+        env["REQUESTS_CA_BUNDLE"] = merged_bundle
+        env["CURL_CA_BUNDLE"] = merged_bundle
+        env["NODE_EXTRA_CA_CERTS"] = ca_cert
+    else:
+        print(f"⚠️  Warning: CA certificate not found at '{ca_cert}'.", file=sys.stderr)
 
     # Credential mapping: HOLON_AGENT_KEY -> vendor keys
     # Invariant Rule 5: If HOLON_AGENT_KEY is omitted, runner never validates vendor keys;
@@ -352,16 +363,43 @@ def execute_interactive_process(cmd: list[str], env: dict[str, str]) -> int:
     return returncode if returncode is not None else 0
 
 
-def extract_runner_flags(argv: list[str]) -> tuple[bool, int | None, list[str]]:
-    """Extract --ephemeral and --port flags from arguments, preserving agent argument order."""
+class RunnerFlags(tuple):
+    """Container for extracted runner flags maintaining tuple backward compatibility."""
+
+    ephemeral: bool
+    port: int | None
+    agent_args: list[str]
+    help_requested: bool
+
+    def __new__(
+        cls,
+        ephemeral: bool,
+        port: int | None,
+        agent_args: list[str],
+        help_requested: bool = False,
+    ) -> RunnerFlags:
+        obj = super().__new__(cls, (ephemeral, port, agent_args))
+        obj.ephemeral = ephemeral
+        obj.port = port
+        obj.agent_args = agent_args
+        obj.help_requested = help_requested
+        return obj
+
+
+def extract_runner_flags(argv: list[str]) -> RunnerFlags:
+    """Extract --ephemeral, --port, and runner --help flags from arguments, preserving agent argument order."""
     ephemeral = False
     port = None
+    help_requested = False
     agent_args: list[str] = []
     i = 0
     while i < len(argv):
         arg = argv[i]
         if arg == "--ephemeral":
             ephemeral = True
+            i += 1
+        elif arg in ("--help", "-h"):
+            help_requested = True
             i += 1
         elif arg == "--port":
             if i + 1 < len(argv):
@@ -388,7 +426,7 @@ def extract_runner_flags(argv: list[str]) -> tuple[bool, int | None, list[str]]:
         else:
             agent_args.append(arg)
             i += 1
-    return ephemeral, port, agent_args
+    return RunnerFlags(ephemeral, port, agent_args, help_requested=help_requested)
 
 
 def run_agent(
@@ -469,16 +507,26 @@ def main(argv: list[str] | None = None) -> None:
     if argv:
         first = argv[0]
         if first in SUPPORTED_AGENTS:
-            ephemeral, port, agent_args = extract_runner_flags(argv[1:])
-            if "--help" in agent_args or "-h" in agent_args:
+            flags = extract_runner_flags(argv[1:])
+            if flags.help_requested:
                 _print_agent_help(first)
                 sys.exit(0)
-            sys.exit(run_agent(first, agent_args, ephemeral=ephemeral, port=port))
+            sys.exit(run_agent(first, flags.agent_args, ephemeral=flags.ephemeral, port=flags.port))
         elif first == "run-agent":
-            if len(argv) < 2 or argv[1] in ("-h", "--help"):
+            if not argv[1:]:
                 _print_run_agent_help()
                 sys.exit(0)
-            agent_target = argv[1]
+            flags = extract_runner_flags(argv[1:])
+            if flags.help_requested:
+                if flags.agent_args and flags.agent_args[0] in SUPPORTED_AGENTS:
+                    _print_agent_help(flags.agent_args[0])
+                else:
+                    _print_run_agent_help()
+                sys.exit(0)
+            if not flags.agent_args:
+                _print_run_agent_help()
+                sys.exit(1)
+            agent_target = flags.agent_args[0]
             if agent_target not in SUPPORTED_AGENTS:
                 supported_list = ", ".join(sorted(set(SUPPORTED_AGENTS)))
                 print(
@@ -486,11 +534,7 @@ def main(argv: list[str] | None = None) -> None:
                     file=sys.stderr,
                 )
                 sys.exit(1)
-            ephemeral, port, agent_args = extract_runner_flags(argv[2:])
-            if "--help" in agent_args or "-h" in agent_args:
-                _print_agent_help(agent_target)
-                sys.exit(0)
-            sys.exit(run_agent(agent_target, agent_args, ephemeral=ephemeral, port=port))
+            sys.exit(run_agent(agent_target, flags.agent_args[1:], ephemeral=flags.ephemeral, port=flags.port))
 
     parser = argparse.ArgumentParser(
         prog="holon-coherence",
@@ -620,8 +664,10 @@ def main(argv: list[str] | None = None) -> None:
         env["http_proxy"] = args.proxy_url
         env["https_proxy"] = args.proxy_url
         env["all_proxy"] = args.proxy_url
-        env["NO_PROXY"] = NO_PROXY_HOSTS
-        env["no_proxy"] = NO_PROXY_HOSTS
+        existing_no_proxy = os.environ.get("NO_PROXY") or os.environ.get("no_proxy")
+        merged_no_proxy = f"{NO_PROXY_HOSTS},{existing_no_proxy}" if existing_no_proxy else NO_PROXY_HOSTS
+        env["NO_PROXY"] = merged_no_proxy
+        env["no_proxy"] = merged_no_proxy
         ca_cert = os.path.expanduser(args.ca_cert)
         if not os.path.exists(ca_cert):
             alt_ca = os.path.join(os.path.dirname(ca_cert), "holon-root-ca.crt")
@@ -680,7 +726,7 @@ def main(argv: list[str] | None = None) -> None:
         ca_cert = os.path.join(ca_dir, "mitmproxy-ca-cert.pem")
         if not os.path.exists(ca_cert):
             with contextlib.suppress(Exception):
-                generate_root_ca(cert_dir=ca_dir)
+                generate_root_ca(output_dir=ca_dir)
 
         # Check if Docker image exists
         img_check = subprocess.run(
