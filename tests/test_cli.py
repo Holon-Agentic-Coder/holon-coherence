@@ -401,6 +401,7 @@ class TestDockerDiagnosticsAndPortConflicts:
         with (
             patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.cli.is_port_in_use", return_value=False),
+            patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch(
                 "subprocess.run",
@@ -424,6 +425,7 @@ class TestDockerDiagnosticsAndPortConflicts:
         with (
             patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.cli.is_port_in_use", return_value=False),
+            patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch(
                 "subprocess.run",
@@ -443,6 +445,7 @@ class TestDockerDiagnosticsAndPortConflicts:
         with (
             patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.cli.is_port_in_use", return_value=False),
+            patch("os.makedirs"),
             patch("os.path.exists", side_effect=lambda p: not str(p).endswith("Dockerfile")),
             patch(
                 "subprocess.run",
