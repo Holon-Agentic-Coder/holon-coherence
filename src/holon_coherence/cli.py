@@ -177,6 +177,8 @@ def wait_for_proxy_ready(port: int, timeout: float = PROXY_READY_TIMEOUT_SECONDS
     """Poll the proxy port until it accepts TCP connections or timeout occurs."""
     deadline = time.time() + timeout
     while time.time() < deadline:
+        if not is_container_running(CONTAINER_NAME):
+            return False
         if is_port_in_use(port):
             return True
         time.sleep(PROXY_POLL_INTERVAL_SECONDS)
@@ -191,14 +193,65 @@ def check_docker_daemon() -> tuple[bool, str]:
             "Error: Docker CLI is not installed or not found on PATH.\n"
             "Please install Docker to run the holon-coherence optimization proxy container.",
         )
-    res = subprocess.run(["docker", "info"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if res.returncode != 0:
+    try:
+        res = subprocess.run(
+            ["docker", "info"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5.0,
+        )
+        if res.returncode != 0:
+            return (
+                False,
+                "Error: Docker daemon is not running.\n"
+                "Please start Docker Desktop or the Docker daemon to enable the optimization proxy.",
+            )
+    except subprocess.TimeoutExpired:
         return (
             False,
-            "Error: Docker daemon is not running.\n"
-            "Please start Docker Desktop or the Docker daemon to enable the optimization proxy.",
+            "Error: Docker daemon connection timed out.\n"
+            "Please ensure Docker Desktop or the Docker daemon is responding.",
         )
     return True, ""
+
+
+def ensure_docker_image(image: str, rebuild: bool = False) -> None:
+    """Ensure the Docker image exists locally, building or pulling from registry/GHCR if needed."""
+    if not rebuild:
+        img_check = subprocess.run(
+            ["docker", "image", "inspect", image],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if img_check.returncode == 0:
+            return
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    dockerfile = os.path.join(repo_root, "Dockerfile")
+    if os.path.exists(dockerfile):
+        print(f"🔨 Building Docker image '{image}' from {dockerfile}...")
+        build_res = subprocess.run(["docker", "build", "-t", image, repo_root])
+        if build_res.returncode != 0:
+            print(f"Error: Failed to build Docker image '{image}'.", file=sys.stderr)
+            sys.exit(1)
+    else:
+        print(f"📥 Pulling Docker image '{image}'...")
+        pull_res = subprocess.run(["docker", "pull", image])
+        if pull_res.returncode != 0:
+            ghcr_img = f"ghcr.io/holon-agentic-coder/{image}"
+            print(f"📥 Attempting pull from {ghcr_img}...")
+            ghcr_res = subprocess.run(["docker", "pull", ghcr_img])
+            if ghcr_res.returncode != 0:
+                print(
+                    f"Error: Could not find or pull Docker image '{image}' or '{ghcr_img}'.\n"
+                    "Please verify your network connection or build the image locally.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            tag_res = subprocess.run(["docker", "tag", ghcr_img, image])
+            if tag_res.returncode != 0:
+                print(f"Error: Failed to tag Docker image '{ghcr_img}' as '{image}'.", file=sys.stderr)
+                sys.exit(1)
 
 
 def ensure_proxy_running(
@@ -227,6 +280,13 @@ def ensure_proxy_running(
                 file=sys.stderr,
             )
             sys.exit(1)
+    elif is_container_running(CONTAINER_NAME):
+        print(
+            "Error: A holon-coherence proxy container is already running on a different port.\n"
+            f"Stop it first using 'holon-coherence stop' before launching on port {port}.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # Ensure Root CA and directories exist
     ca_dir = os.path.expanduser("~/.holon/proxy-ca")
@@ -241,39 +301,8 @@ def ensure_proxy_running(
         with contextlib.suppress(Exception):
             generate_root_ca(output_dir=ca_dir)
 
-    # Check / build Docker image
-    img_check = subprocess.run(
-        ["docker", "image", "inspect", image],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    if img_check.returncode != 0:
-        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        dockerfile = os.path.join(repo_root, "Dockerfile")
-        if os.path.exists(dockerfile):
-            print(f"🔨 Building Docker image '{image}' from {dockerfile}...")
-            build_res = subprocess.run(["docker", "build", "-t", image, repo_root])
-            if build_res.returncode != 0:
-                print(f"Error: Failed to build Docker image '{image}'.", file=sys.stderr)
-                sys.exit(1)
-        else:
-            print(f"📥 Pulling Docker image '{image}'...")
-            pull_res = subprocess.run(["docker", "pull", image])
-            if pull_res.returncode != 0:
-                ghcr_img = f"ghcr.io/holon-agentic-coder/{image}"
-                print(f"📥 Attempting pull from {ghcr_img}...")
-                ghcr_res = subprocess.run(["docker", "pull", ghcr_img])
-                if ghcr_res.returncode != 0:
-                    print(
-                        f"Error: Could not find or pull Docker image '{image}' or '{ghcr_img}'.\n"
-                        "Please verify your network connection or build the image locally.",
-                        file=sys.stderr,
-                    )
-                    sys.exit(1)
-                tag_res = subprocess.run(["docker", "tag", ghcr_img, image])
-                if tag_res.returncode != 0:
-                    print(f"Error: Failed to tag Docker image '{ghcr_img}' as '{image}'.", file=sys.stderr)
-                    sys.exit(1)
+    # Check / build / pull Docker image
+    ensure_docker_image(image, rebuild=False)
 
     # Remove stopped/stale container
     subprocess.run(["docker", "rm", "-f", CONTAINER_NAME], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -492,6 +521,9 @@ def extract_runner_flags(argv: list[str]) -> RunnerFlags:
                 except ValueError:
                     print(f"Error: Argument to --port must be an integer, got '{argv[i + 1]}'.", file=sys.stderr)
                     sys.exit(1)
+                if not (1 <= port <= 65535):
+                    print(f"Error: Port must be between 1 and 65535, got {port}.", file=sys.stderr)
+                    sys.exit(1)
                 i += 2
             else:
                 print("Error: Option --port requires an argument.", file=sys.stderr)
@@ -502,6 +534,9 @@ def extract_runner_flags(argv: list[str]) -> RunnerFlags:
                 port = int(val)
             except ValueError:
                 print(f"Error: Argument to --port must be an integer, got '{val}'.", file=sys.stderr)
+                sys.exit(1)
+            if not (1 <= port <= 65535):
+                print(f"Error: Port must be between 1 and 65535, got {port}.", file=sys.stderr)
                 sys.exit(1)
             i += 1
         elif arg == "--":
@@ -753,7 +788,9 @@ def main(argv: list[str] | None = None) -> None:
         env["https_proxy"] = args.proxy_url
         env["all_proxy"] = args.proxy_url
         existing_no_proxy = os.environ.get("NO_PROXY") or os.environ.get("no_proxy")
-        merged_no_proxy = f"{NO_PROXY_HOSTS},{existing_no_proxy}" if existing_no_proxy else NO_PROXY_HOSTS
+        raw_no_proxy = f"{NO_PROXY_HOSTS},{existing_no_proxy}" if existing_no_proxy else NO_PROXY_HOSTS
+        no_proxy_entries = [entry.strip() for entry in raw_no_proxy.split(",") if entry.strip()]
+        merged_no_proxy = ",".join(dict.fromkeys(no_proxy_entries))
         env["NO_PROXY"] = merged_no_proxy
         env["no_proxy"] = merged_no_proxy
         ca_cert = os.path.expanduser(args.ca_cert)
@@ -816,32 +853,8 @@ def main(argv: list[str] | None = None) -> None:
             with contextlib.suppress(Exception):
                 generate_root_ca(output_dir=ca_dir)
 
-        # Check if Docker image exists
-        img_check = subprocess.run(
-            ["docker", "image", "inspect", args.image],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        if img_check.returncode != 0 or args.build:
-            repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            dockerfile = os.path.join(repo_root, "Dockerfile")
-            if os.path.exists(dockerfile):
-                print(f"🔨 Building Docker image '{args.image}' from {dockerfile}...")
-                subprocess.run(["docker", "build", "-t", args.image, repo_root], check=True)
-            else:
-                print(f"📥 Image '{args.image}' not found locally and no Dockerfile found. Pulling from registry...")
-                pull_res = subprocess.run(["docker", "pull", args.image])
-                if pull_res.returncode != 0:
-                    ghcr_img = f"ghcr.io/holon-agentic-coder/{args.image}"
-                    print(f"📥 Attempting pull from {ghcr_img}...")
-                    ghcr_res = subprocess.run(["docker", "pull", ghcr_img])
-                    if ghcr_res.returncode != 0:
-                        print(
-                            f"Error: Could not find or pull Docker image '{args.image}' or '{ghcr_img}'.",
-                            file=sys.stderr,
-                        )
-                        sys.exit(1)
-                    subprocess.run(["docker", "tag", ghcr_img, args.image], check=True)
+        # Check / build / pull Docker image
+        ensure_docker_image(args.image, rebuild=args.build)
 
         # Remove existing container with the same name if stopped or stale
         subprocess.run(["docker", "rm", "-f", CONTAINER_NAME], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

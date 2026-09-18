@@ -18,6 +18,7 @@ from holon_coherence.cli import (
     SUPPORTED_AGENTS,
     build_agent_env,
     check_docker_daemon,
+    ensure_docker_image,
     ensure_proxy_running,
     execute_interactive_process,
     extract_runner_flags,
@@ -28,6 +29,7 @@ from holon_coherence.cli import (
     resolve_agent_binary,
     run_agent,
     stop_proxy_container,
+    wait_for_proxy_ready,
 )
 
 
@@ -71,6 +73,28 @@ class TestExtractRunnerFlags:
     def test_missing_port_argument(self) -> None:
         with pytest.raises(SystemExit):
             extract_runner_flags(["--port"])
+
+    @pytest.mark.parametrize("invalid_port", ["0", "70000"])
+    def test_port_out_of_range_separated(self, invalid_port: str, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(SystemExit) as exc:
+            extract_runner_flags(["--port", invalid_port])
+        assert exc.value.code == 1
+        captured = capsys.readouterr()
+        assert f"Error: Port must be between 1 and 65535, got {invalid_port}." in captured.err
+
+    @pytest.mark.parametrize("invalid_port", ["0", "70000"])
+    def test_port_out_of_range_equals(self, invalid_port: str, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(SystemExit) as exc:
+            extract_runner_flags([f"--port={invalid_port}"])
+        assert exc.value.code == 1
+        captured = capsys.readouterr()
+        assert f"Error: Port must be between 1 and 65535, got {invalid_port}." in captured.err
+
+    def test_port_valid_boundary_values(self) -> None:
+        _, port1, _ = extract_runner_flags(["--port", "1"])
+        assert port1 == 1
+        _, port2, _ = extract_runner_flags(["--port=65535"])
+        assert port2 == 65535
 
 
 class TestResolveAgentBinary:
@@ -377,13 +401,36 @@ class TestDockerDiagnosticsAndPortConflicts:
 
     def test_docker_daemon_not_running(self) -> None:
         mock_res = MagicMock()
+        mock_res.returncode = 1
         with (
             patch("shutil.which", return_value="/usr/local/bin/docker"),
-            patch("subprocess.run", return_value=mock_res),
+            patch("subprocess.run", return_value=mock_res) as mock_run,
         ):
             ok, err = check_docker_daemon()
             assert ok is False
             assert "Docker daemon is not running" in err
+            mock_run.assert_called_once_with(
+                ["docker", "info"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5.0,
+            )
+
+    def test_docker_daemon_timeout(self) -> None:
+        timeout_err = subprocess.TimeoutExpired(cmd=["docker", "info"], timeout=5.0)
+        with (
+            patch("shutil.which", return_value="/usr/local/bin/docker"),
+            patch("subprocess.run", side_effect=timeout_err) as mock_run,
+        ):
+            ok, err = check_docker_daemon()
+            assert ok is False
+            assert "timed out" in err
+            mock_run.assert_called_once_with(
+                ["docker", "info"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5.0,
+            )
 
     def test_port_conflict_detection_when_container_not_running(self) -> None:
         with (
@@ -412,6 +459,7 @@ class TestDockerDiagnosticsAndPortConflicts:
         with (
             patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.cli.is_port_in_use", return_value=False),
+            patch("holon_coherence.cli.is_container_running", return_value=False),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch(
@@ -426,6 +474,19 @@ class TestDockerDiagnosticsAndPortConflicts:
         ):
             started = ensure_proxy_running(port=8080)
             assert started is True
+
+    def test_container_already_running_on_different_port_error(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", return_value=False),
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            ensure_proxy_running(port=9090)
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Error: A holon-coherence proxy container is already running on a different port." in captured.err
+        assert "Stop it first using 'holon-coherence stop' before launching on port 9090." in captured.err
 
     def test_port_conflict_when_container_running_on_different_port(self) -> None:
         with (
@@ -462,6 +523,7 @@ class TestDockerDiagnosticsAndPortConflicts:
         with (
             patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.cli.is_port_in_use", return_value=False),
+            patch("holon_coherence.cli.is_container_running", return_value=False),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch(
@@ -486,6 +548,7 @@ class TestDockerDiagnosticsAndPortConflicts:
         with (
             patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.cli.is_port_in_use", return_value=False),
+            patch("holon_coherence.cli.is_container_running", return_value=False),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch(
@@ -506,6 +569,7 @@ class TestDockerDiagnosticsAndPortConflicts:
         with (
             patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.cli.is_port_in_use", return_value=False),
+            patch("holon_coherence.cli.is_container_running", return_value=False),
             patch("os.makedirs"),
             patch("os.path.exists", side_effect=lambda p: not str(p).endswith("Dockerfile")),
             patch(
@@ -682,3 +746,90 @@ class TestCLIDispatchAndMain:
         captured = capsys.readouterr()
         assert "note:" in captured.out
         assert "Use '--' to pass flags directly to the underlying agent" in captured.out
+
+    def test_run_command_deduplicates_no_proxy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("NO_PROXY", "127.0.0.1,api.github.com,internal.corp.com,127.0.0.1")
+        captured_env: dict[str, str] = {}
+
+        def fake_run(cmd: list[str], env: dict[str, str] | None = None, **kwargs: Any) -> MagicMock:
+            if env:
+                captured_env.update(env)
+            return MagicMock(returncode=0)
+
+        with (
+            patch("os.path.exists", return_value=False),
+            patch("subprocess.run", side_effect=fake_run),
+            pytest.raises(SystemExit) as exc,
+        ):
+            main(["run", "--", "echo", "hello"])
+        assert exc.value.code == 0
+        entries = captured_env["NO_PROXY"].split(",")
+        assert len(entries) == len(set(entries))
+        assert "internal.corp.com" in entries
+        assert "127.0.0.1" in entries
+        assert captured_env["no_proxy"] == captured_env["NO_PROXY"]
+
+
+class TestWaitForProxyReady:
+    """Tests for wait_for_proxy_ready polling and fail-fast container exit handling."""
+
+    def test_wait_for_proxy_ready_success(self) -> None:
+        with (
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch("holon_coherence.cli.is_port_in_use", return_value=True),
+        ):
+            assert wait_for_proxy_ready(8080) is True
+
+    def test_wait_for_proxy_ready_fail_fast_when_container_exits(self) -> None:
+        with (
+            patch("holon_coherence.cli.is_container_running", return_value=False),
+            patch("holon_coherence.cli.is_port_in_use", return_value=False),
+        ):
+            # Should immediately return False without polling up to timeout
+            assert wait_for_proxy_ready(8080, timeout=15.0) is False
+
+    def test_wait_for_proxy_ready_timeout(self) -> None:
+        with (
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch("holon_coherence.cli.is_port_in_use", return_value=False),
+            patch("time.sleep"),
+        ):
+            assert wait_for_proxy_ready(8080, timeout=0.001) is False
+
+
+class TestEnsureDockerImage:
+    """Tests for unified ensure_docker_image helper."""
+
+    def test_image_already_exists(self) -> None:
+        with patch("subprocess.run", return_value=MagicMock(returncode=0)) as mock_run:
+            ensure_docker_image("holon-coherence:latest", rebuild=False)
+            mock_run.assert_called_once_with(
+                ["docker", "image", "inspect", "holon-coherence:latest"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+    def test_image_builds_when_rebuild_true(self) -> None:
+        with (
+            patch("os.path.exists", return_value=True),
+            patch("subprocess.run", return_value=MagicMock(returncode=0)) as mock_run,
+        ):
+            ensure_docker_image("holon-coherence:latest", rebuild=True)
+            mock_run.assert_called_once()
+            cmd = mock_run.call_args[0][0]
+            assert cmd[:4] == ["docker", "build", "-t", "holon-coherence:latest"]
+
+    def test_image_pulls_and_ghcr_fallback(self) -> None:
+        with (
+            patch(
+                "subprocess.run",
+                side_effect=[
+                    MagicMock(returncode=1),  # inspect fails
+                    MagicMock(returncode=1),  # docker pull image fails
+                    MagicMock(returncode=0),  # docker pull ghcr succeeds
+                    MagicMock(returncode=0),  # docker tag succeeds
+                ],
+            ),
+            patch("os.path.exists", side_effect=lambda p: not str(p).endswith("Dockerfile")),
+        ):
+            ensure_docker_image("holon-coherence:latest", rebuild=False)
