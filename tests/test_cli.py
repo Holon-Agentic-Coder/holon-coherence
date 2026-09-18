@@ -14,6 +14,7 @@ import pytest
 
 from holon_coherence.cli import (
     CONTAINER_NAME,
+    DEFAULT_PROXY_PORT,
     NO_PROXY_HOSTS,
     SUPPORTED_AGENTS,
     build_agent_env,
@@ -245,9 +246,16 @@ class TestProxyEnvironmentInjectionAndMergedCA:
         monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(req_cert))
         assert find_system_ca_bundle() == str(req_cert)
 
+        monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
+        curl_cert = tmp_path / "curl-cert.pem"
+        curl_cert.write_text("curl")
+        monkeypatch.setenv("CURL_CA_BUNDLE", str(curl_cert))
+        assert find_system_ca_bundle() == str(curl_cert)
+
     def test_find_system_ca_bundle_ssl_paths(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("SSL_CERT_FILE", raising=False)
         monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
+        monkeypatch.delenv("CURL_CA_BUNDLE", raising=False)
         ssl_ca = tmp_path / "ssl-ca.pem"
         ssl_ca.write_text("ssl")
 
@@ -480,6 +488,7 @@ class TestDockerDiagnosticsAndPortConflicts:
             patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.cli.is_port_in_use", return_value=False),
             patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch("holon_coherence.cli.is_container_bound_to_port", return_value=False),
             pytest.raises(SystemExit) as exc_info,
         ):
             ensure_proxy_running(port=9090)
@@ -487,6 +496,22 @@ class TestDockerDiagnosticsAndPortConflicts:
         captured = capsys.readouterr()
         assert "Error: A holon-coherence proxy container is already running on a different port." in captured.err
         assert "Stop it first using 'holon-coherence stop' before launching on port 9090." in captured.err
+
+    def test_container_unresponsive_diagnostic(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", return_value=False),
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch("holon_coherence.cli.is_container_bound_to_port", return_value=True),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            ensure_proxy_running(port=9090)
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert (
+            "Error: A holon-coherence proxy container is running for port 9090, but is not responding." in captured.err
+        )
+        assert "Please restart it using 'holon-coherence stop' and retry." in captured.err
 
     def test_port_conflict_when_container_running_on_different_port(self) -> None:
         with (
@@ -694,6 +719,22 @@ class TestCLIDispatchAndMain:
             run_agent("codex", [], port=7777)
             mock_ensure.assert_called_once_with(port=7777)
 
+    @pytest.mark.parametrize("invalid_port", ["0", "70000", "abc"])
+    def test_run_agent_invalid_env_port_fallback(
+        self, invalid_port: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setenv("HOLON_PROXY_PORT", invalid_port)
+        with (
+            patch("holon_coherence.cli.resolve_agent_binary", return_value="/bin/dummy-agent"),
+            patch("holon_coherence.cli.ensure_proxy_running") as mock_ensure,
+            patch("holon_coherence.cli.execute_interactive_process", return_value=0),
+        ):
+            run_agent("codex", [])
+            mock_ensure.assert_called_once_with(port=DEFAULT_PROXY_PORT)
+            captured = capsys.readouterr()
+            expected_warning = f"⚠️  Invalid HOLON_PROXY_PORT '{invalid_port}', falling back to {DEFAULT_PROXY_PORT}."
+            assert expected_warning in captured.err
+
     def test_run_agent_flexible_argument_ordering(self) -> None:
         with patch("holon_coherence.cli.run_agent", return_value=0) as mock_run_agent, pytest.raises(SystemExit) as exc:
             main(["run-agent", "--ephemeral", "claude", "-p", "fix issue"])
@@ -829,7 +870,12 @@ class TestEnsureDockerImage:
                     MagicMock(returncode=0),  # docker pull ghcr succeeds
                     MagicMock(returncode=0),  # docker tag succeeds
                 ],
-            ),
+            ) as mock_run,
             patch("os.path.exists", side_effect=lambda p: not str(p).endswith("Dockerfile")),
         ):
             ensure_docker_image("holon-coherence:latest", rebuild=False)
+            assert mock_run.call_count == 4
+            pull_call = mock_run.call_args_list[1]
+            assert pull_call[0][0] == ["docker", "pull", "holon-coherence:latest"]
+            assert pull_call[1].get("stdout") == subprocess.DEVNULL
+            assert pull_call[1].get("stderr") == subprocess.DEVNULL

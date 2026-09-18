@@ -208,7 +208,7 @@ docker run --name holon-coherence --rm -it \
   holon-coherence:latest
 ```
 
-### 4. Connect Any Agent (Inline Execution)
+### 5. Connect Any Agent (Inline Execution)
 
 > [!IMPORTANT] **Why Inline Proxy Execution instead of `export`?**
 >

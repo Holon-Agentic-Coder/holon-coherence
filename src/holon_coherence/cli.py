@@ -41,7 +41,7 @@ def is_in_container() -> bool:
 
 def find_system_ca_bundle() -> str | None:
     """Locate host system or certifi CA certificate bundle."""
-    for env_var in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
+    for env_var in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"):
         val = os.environ.get(env_var)
         if val and not val.endswith("holon-merged-ca-bundle.crt") and os.path.isfile(val):
             return val
@@ -236,7 +236,11 @@ def ensure_docker_image(image: str, rebuild: bool = False) -> None:
             sys.exit(1)
     else:
         print(f"📥 Pulling Docker image '{image}'...")
-        pull_res = subprocess.run(["docker", "pull", image])
+        pull_res = subprocess.run(
+            ["docker", "pull", image],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         if pull_res.returncode != 0:
             ghcr_img = f"ghcr.io/holon-agentic-coder/{image}"
             print(f"📥 Attempting pull from {ghcr_img}...")
@@ -281,11 +285,18 @@ def ensure_proxy_running(
             )
             sys.exit(1)
     elif is_container_running(CONTAINER_NAME):
-        print(
-            "Error: A holon-coherence proxy container is already running on a different port.\n"
-            f"Stop it first using 'holon-coherence stop' before launching on port {port}.",
-            file=sys.stderr,
-        )
+        if is_container_bound_to_port(port, CONTAINER_NAME):
+            print(
+                f"Error: A holon-coherence proxy container is running for port {port}, but is not responding.\n"
+                "Please restart it using 'holon-coherence stop' and retry.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "Error: A holon-coherence proxy container is already running on a different port.\n"
+                f"Stop it first using 'holon-coherence stop' before launching on port {port}.",
+                file=sys.stderr,
+            )
         sys.exit(1)
 
     # Ensure Root CA and directories exist
@@ -559,7 +570,10 @@ def run_agent(
         env_port = os.getenv("HOLON_PROXY_PORT")
         if env_port:
             try:
-                port = int(env_port)
+                parsed_port = int(env_port)
+                if not (1 <= parsed_port <= 65535):
+                    raise ValueError(f"Port {parsed_port} out of range")
+                port = parsed_port
             except ValueError:
                 print(
                     f"⚠️  Invalid HOLON_PROXY_PORT '{env_port}', falling back to {DEFAULT_PROXY_PORT}.", file=sys.stderr
