@@ -8,6 +8,7 @@ import os
 import shutil
 import signal
 import socket
+import ssl
 import subprocess
 import sys
 import time
@@ -40,6 +41,18 @@ def is_in_container() -> bool:
 
 def find_system_ca_bundle() -> str | None:
     """Locate host system or certifi CA certificate bundle."""
+    for env_var in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
+        val = os.environ.get(env_var)
+        if val and os.path.isfile(val):
+            return val
+
+    try:
+        cafile = ssl.get_default_verify_paths().cafile
+        if cafile and os.path.isfile(cafile):
+            return cafile
+    except Exception:
+        pass
+
     try:
         import certifi
 
@@ -122,6 +135,39 @@ def is_container_running(container_name: str = CONTAINER_NAME) -> bool:
     return res.returncode == 0 and res.stdout.strip().lower() == "true"
 
 
+def is_container_bound_to_port(port: int, container_name: str = CONTAINER_NAME) -> bool:
+    """Check if the container is currently running and bound to the specified host port."""
+    res = subprocess.run(
+        ["docker", "port", container_name, "8080/tcp"],
+        capture_output=True,
+        text=True,
+    )
+    output = res.stdout
+    if res.returncode != 0 or not output.strip():
+        fallback_res = subprocess.run(
+            ["docker", "port", container_name],
+            capture_output=True,
+            text=True,
+        )
+        if fallback_res.returncode != 0:
+            return False
+        output = fallback_res.stdout
+
+    for line in output.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        host_part = line.split("->")[-1].strip()
+        if ":" in host_part:
+            try:
+                mapped_port = int(host_part.rsplit(":", 1)[1])
+                if mapped_port == port:
+                    return True
+            except ValueError:
+                continue
+    return False
+
+
 def wait_for_proxy_ready(port: int, timeout: float = PROXY_READY_TIMEOUT_SECONDS) -> bool:
     """Poll the proxy port until it accepts TCP connections or timeout occurs."""
     deadline = time.time() + timeout
@@ -162,7 +208,7 @@ def ensure_proxy_running(
 
     # Check if proxy is already healthy and listening on port
     if is_port_in_use(port):
-        if is_container_running(CONTAINER_NAME):
+        if is_container_running(CONTAINER_NAME) and is_container_bound_to_port(port, CONTAINER_NAME):
             # Proxy container is running and healthy
             return
         else:
@@ -197,14 +243,28 @@ def ensure_proxy_running(
         dockerfile = os.path.join(repo_root, "Dockerfile")
         if os.path.exists(dockerfile):
             print(f"🔨 Building Docker image '{image}' from {dockerfile}...")
-            subprocess.run(["docker", "build", "-t", image, repo_root], check=True)
+            build_res = subprocess.run(["docker", "build", "-t", image, repo_root])
+            if build_res.returncode != 0:
+                print(f"Error: Failed to build Docker image '{image}'.", file=sys.stderr)
+                sys.exit(1)
         else:
             print(f"📥 Pulling Docker image '{image}'...")
             pull_res = subprocess.run(["docker", "pull", image])
             if pull_res.returncode != 0:
                 ghcr_img = f"ghcr.io/holon-agentic-coder/{image}"
-                subprocess.run(["docker", "pull", ghcr_img], check=True)
-                subprocess.run(["docker", "tag", ghcr_img, image], check=True)
+                print(f"📥 Attempting pull from {ghcr_img}...")
+                ghcr_res = subprocess.run(["docker", "pull", ghcr_img])
+                if ghcr_res.returncode != 0:
+                    print(
+                        f"Error: Could not find or pull Docker image '{image}' or '{ghcr_img}'.\n"
+                        "Please verify your network connection or build the image locally.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+                tag_res = subprocess.run(["docker", "tag", ghcr_img, image])
+                if tag_res.returncode != 0:
+                    print(f"Error: Failed to tag Docker image '{ghcr_img}' as '{image}'.", file=sys.stderr)
+                    sys.exit(1)
 
     # Remove stopped/stale container
     subprocess.run(["docker", "rm", "-f", CONTAINER_NAME], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -243,8 +303,9 @@ def ensure_proxy_running(
     if not wait_for_proxy_ready(port):
         print(f"Error: Proxy container did not become ready within {PROXY_READY_TIMEOUT_SECONDS}s.", file=sys.stderr)
         logs_res = subprocess.run(["docker", "logs", CONTAINER_NAME], capture_output=True, text=True)
-        if logs_res.stdout:
-            print(f"Container logs:\n{logs_res.stdout.strip()}", file=sys.stderr)
+        combined_logs = f"{logs_res.stdout or ''}{logs_res.stderr or ''}".strip()
+        if combined_logs:
+            print(f"Container logs:\n{combined_logs}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -342,7 +403,7 @@ def execute_interactive_process(cmd: list[str], env: dict[str, str]) -> int:
 
     def _forward_signal(sig: int, frame: Any) -> None:
         if proc.poll() is None:
-            with contextlib.suppress(ProcessLookupError):
+            with contextlib.suppress(ProcessLookupError, ValueError, OSError):
                 proc.send_signal(sig)
 
     old_handlers: dict[int, Any] = {}

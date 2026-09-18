@@ -21,7 +21,9 @@ from holon_coherence.cli import (
     ensure_proxy_running,
     execute_interactive_process,
     extract_runner_flags,
+    find_system_ca_bundle,
     get_or_create_merged_ca_bundle,
+    is_container_bound_to_port,
     main,
     resolve_agent_binary,
     run_agent,
@@ -139,11 +141,16 @@ class TestCredentialMappingAndNativeAuth:
             env = build_agent_env(agent, port=8080)
             assert "HOLON_AGENT_KEY" not in env
             assert env.get("EXISTING_HOST_SESSION") == "present"
-            # No vendor keys forced
             if agent in ("agy", "antigravity"):
                 assert "GEMINI_API_KEY" not in env or env["GEMINI_API_KEY"] != "secret-test-key-123"
             elif agent == "claude":
                 assert "ANTHROPIC_API_KEY" not in env or env["ANTHROPIC_API_KEY"] != "secret-test-key-123"
+            elif agent == "codex":
+                assert "OPENAI_API_KEY" not in env or env["OPENAI_API_KEY"] != "secret-test-key-123"
+            elif agent == "opencode":
+                assert "OPENCODE_API_KEY" not in env or env["OPENCODE_API_KEY"] != "secret-test-key-123"
+            elif agent == "pi":
+                assert "PI_API_KEY" not in env or env["PI_API_KEY"] != "secret-test-key-123"
 
 
 class TestProxyEnvironmentInjectionAndMergedCA:
@@ -202,6 +209,28 @@ class TestProxyEnvironmentInjectionAndMergedCA:
             assert "SYSTEM_ROOT_CA" in content
             assert "HOLON_ROOT_CA" in content
 
+    def test_find_system_ca_bundle_env_vars(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        cert_file = tmp_path / "custom-cert.pem"
+        cert_file.write_text("custom")
+        monkeypatch.setenv("SSL_CERT_FILE", str(cert_file))
+        assert find_system_ca_bundle() == str(cert_file)
+
+        monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+        req_cert = tmp_path / "requests-cert.pem"
+        req_cert.write_text("requests")
+        monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(req_cert))
+        assert find_system_ca_bundle() == str(req_cert)
+
+    def test_find_system_ca_bundle_ssl_paths(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+        monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
+        ssl_ca = tmp_path / "ssl-ca.pem"
+        ssl_ca.write_text("ssl")
+
+        mock_paths = MagicMock(cafile=str(ssl_ca))
+        with patch("ssl.get_default_verify_paths", return_value=mock_paths):
+            assert find_system_ca_bundle() == str(ssl_ca)
+
 
 class TestChildProcessExecutionAndExitCodes:
     """Tests for child process exit code propagation, stdio passthrough, and signal handling."""
@@ -243,6 +272,7 @@ class TestChildProcessExecutionAndExitCodes:
     def test_signal_forwarding(self) -> None:
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
+        mock_proc.returncode = 0
 
         captured_handler: dict[int, Any] = {}
 
@@ -250,15 +280,49 @@ class TestChildProcessExecutionAndExitCodes:
             captured_handler[sig] = handler
             return MagicMock()
 
-        with patch("subprocess.Popen", return_value=mock_proc), patch("signal.signal", side_effect=mock_signal):
-            # Start process in mock
-            mock_proc.poll.side_effect = [None, None, 0]
-            mock_proc.returncode = 0
-
-            # Trigger signal handler
+        def fake_wait() -> int:
             if signal.SIGINT in captured_handler:
                 captured_handler[signal.SIGINT](signal.SIGINT, None)
-                mock_proc.send_signal.assert_called_with(signal.SIGINT)
+            mock_proc.poll.return_value = 0
+            return 0
+
+        mock_proc.wait.side_effect = fake_wait
+
+        with (
+            patch("subprocess.Popen", return_value=mock_proc),
+            patch("signal.signal", side_effect=mock_signal),
+        ):
+            code = execute_interactive_process(["test-cmd"], {})
+            assert code == 0
+            mock_proc.send_signal.assert_called_with(signal.SIGINT)
+
+    def test_signal_forwarding_suppresses_lookup_and_os_errors(self) -> None:
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.returncode = 0
+        mock_proc.send_signal.side_effect = OSError("Process not found")
+
+        captured_handler: dict[int, Any] = {}
+
+        def mock_signal(sig: int, handler: Any) -> Any:
+            captured_handler[sig] = handler
+            return MagicMock()
+
+        def fake_wait() -> int:
+            if signal.SIGINT in captured_handler:
+                captured_handler[signal.SIGINT](signal.SIGINT, None)
+            mock_proc.poll.return_value = 0
+            return 0
+
+        mock_proc.wait.side_effect = fake_wait
+
+        with (
+            patch("subprocess.Popen", return_value=mock_proc),
+            patch("signal.signal", side_effect=mock_signal),
+        ):
+            code = execute_interactive_process(["test-cmd"], {})
+            assert code == 0
+            mock_proc.send_signal.assert_called_with(signal.SIGINT)
 
 
 class TestDockerDiagnosticsAndPortConflicts:
@@ -295,11 +359,104 @@ class TestDockerDiagnosticsAndPortConflicts:
             patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.cli.is_port_in_use", return_value=True),
             patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch("holon_coherence.cli.is_container_bound_to_port", return_value=True),
             patch("subprocess.run") as mock_run,
         ):
             ensure_proxy_running(port=8080)
             # Should return immediately without docker run
             mock_run.assert_not_called()
+
+    def test_port_conflict_when_container_running_on_different_port(self) -> None:
+        with (
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", return_value=True),
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch("holon_coherence.cli.is_container_bound_to_port", return_value=False),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            ensure_proxy_running(port=8080)
+        assert exc_info.value.code == 1
+
+    def test_is_container_bound_to_port_direct_match(self) -> None:
+        mock_res = MagicMock()
+        mock_res.returncode = 0
+        mock_res.stdout = "127.0.0.1:8080\n"
+        with patch("subprocess.run", return_value=mock_res):
+            assert is_container_bound_to_port(8080) is True
+            assert is_container_bound_to_port(9090) is False
+
+    def test_is_container_bound_to_port_fallback(self) -> None:
+        failed_res = MagicMock(returncode=1, stdout="")
+        fallback_res = MagicMock(returncode=0, stdout="8080/tcp -> 127.0.0.1:9090\n")
+        with patch("subprocess.run", side_effect=[failed_res, fallback_res]):
+            assert is_container_bound_to_port(9090) is True
+
+    def test_is_container_bound_to_port_failure(self) -> None:
+        failed_res = MagicMock(returncode=1, stdout="")
+        with patch("subprocess.run", return_value=failed_res):
+            assert is_container_bound_to_port(8080) is False
+
+    def test_ensure_proxy_running_timeout_combines_logs(self, capsys: pytest.CaptureFixture[str]) -> None:
+        logs_res = MagicMock(returncode=0, stdout="out msg\n", stderr="err traceback\n")
+        with (
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", return_value=False),
+            patch(
+                "subprocess.run",
+                side_effect=[
+                    MagicMock(returncode=0),  # inspect image
+                    MagicMock(returncode=0),  # rm -f
+                    MagicMock(returncode=0),  # docker run
+                    logs_res,  # docker logs
+                ],
+            ),
+            patch("holon_coherence.cli.wait_for_proxy_ready", return_value=False),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            ensure_proxy_running(port=8080)
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "out msg" in captured.err
+        assert "err traceback" in captured.err
+
+    def test_ensure_proxy_running_build_failure(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", return_value=False),
+            patch("os.path.exists", return_value=True),
+            patch(
+                "subprocess.run",
+                side_effect=[
+                    MagicMock(returncode=1),  # inspect image fails
+                    MagicMock(returncode=1),  # docker build fails
+                ],
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            ensure_proxy_running(port=8080)
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Failed to build Docker image" in captured.err
+
+    def test_ensure_proxy_running_ghcr_pull_failure(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", return_value=False),
+            patch("os.path.exists", side_effect=lambda p: not str(p).endswith("Dockerfile")),
+            patch(
+                "subprocess.run",
+                side_effect=[
+                    MagicMock(returncode=1),  # inspect image fails
+                    MagicMock(returncode=1),  # docker pull image fails
+                    MagicMock(returncode=1),  # docker pull ghcr fails
+                ],
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            ensure_proxy_running(port=8080)
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Could not find or pull Docker image" in captured.err
 
 
 class TestProxyLifecycleAndStopCommand:
