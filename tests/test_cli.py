@@ -231,6 +231,40 @@ class TestProxyEnvironmentInjectionAndMergedCA:
         with patch("ssl.get_default_verify_paths", return_value=mock_paths):
             assert find_system_ca_bundle() == str(ssl_ca)
 
+    def test_find_system_ca_bundle_ignores_merged_bundle(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        merged_file = tmp_path / "holon-merged-ca-bundle.crt"
+        merged_file.write_text("merged")
+        real_sys_ca = tmp_path / "sys-ca.crt"
+        real_sys_ca.write_text("sys")
+
+        monkeypatch.setenv("SSL_CERT_FILE", str(merged_file))
+        monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(real_sys_ca))
+        assert find_system_ca_bundle() == str(real_sys_ca)
+
+    def test_merged_ca_bundle_duplicate_cert_guard(self, tmp_path: Path) -> None:
+        holon_ca = tmp_path / "mitmproxy-ca-cert.pem"
+        holon_ca.write_text("-----BEGIN CERTIFICATE-----\nHOLON_ROOT_CA\n-----END CERTIFICATE-----")
+
+        sys_ca = tmp_path / "system-ca.pem"
+        sys_ca.write_text(
+            "-----BEGIN CERTIFICATE-----\nSYSTEM_ROOT_CA\n-----END CERTIFICATE-----\n\n"
+            "-----BEGIN CERTIFICATE-----\nHOLON_ROOT_CA\n-----END CERTIFICATE-----"
+        )
+
+        with patch("holon_coherence.cli.find_system_ca_bundle", return_value=str(sys_ca)):
+            merged_path = get_or_create_merged_ca_bundle(str(holon_ca))
+            with open(merged_path, encoding="utf-8") as f:
+                content = f.read()
+            assert content.count("HOLON_ROOT_CA") == 1
+
+    def test_no_proxy_deduplication(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("NO_PROXY", "127.0.0.1,api.github.com,internal.corp.com,127.0.0.1")
+        env = build_agent_env("claude", port=9090)
+        entries = env["NO_PROXY"].split(",")
+        assert len(entries) == len(set(entries))
+        assert "internal.corp.com" in entries
+        assert "127.0.0.1" in entries
+
 
 class TestChildProcessExecutionAndExitCodes:
     """Tests for child process exit code propagation, stdio passthrough, and signal handling."""
@@ -324,6 +358,13 @@ class TestChildProcessExecutionAndExitCodes:
             assert code == 0
             mock_proc.send_signal.assert_called_with(signal.SIGINT)
 
+    def test_execute_interactive_process_os_error_returns_126(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with patch("subprocess.Popen", side_effect=PermissionError("Permission denied")):
+            code = execute_interactive_process(["/usr/local/bin/nonexecutable"], {})
+            assert code == 126
+            captured = capsys.readouterr()
+            assert "Error: Failed to execute '/usr/local/bin/nonexecutable': Permission denied" in captured.err
+
 
 class TestDockerDiagnosticsAndPortConflicts:
     """Tests for Docker daemon diagnostic handling and port conflict detection."""
@@ -362,9 +403,29 @@ class TestDockerDiagnosticsAndPortConflicts:
             patch("holon_coherence.cli.is_container_bound_to_port", return_value=True),
             patch("subprocess.run") as mock_run,
         ):
-            ensure_proxy_running(port=8080)
+            started = ensure_proxy_running(port=8080)
+            assert started is False
             # Should return immediately without docker run
             mock_run.assert_not_called()
+
+    def test_ensure_proxy_running_launches_new_container_returns_true(self) -> None:
+        with (
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", return_value=False),
+            patch("os.makedirs"),
+            patch("os.path.exists", return_value=True),
+            patch(
+                "subprocess.run",
+                side_effect=[
+                    MagicMock(returncode=0),  # inspect image
+                    MagicMock(returncode=0),  # rm -f
+                    MagicMock(returncode=0),  # docker run
+                ],
+            ),
+            patch("holon_coherence.cli.wait_for_proxy_ready", return_value=True),
+        ):
+            started = ensure_proxy_running(port=8080)
+            assert started is True
 
     def test_port_conflict_when_container_running_on_different_port(self) -> None:
         with (
@@ -481,7 +542,7 @@ class TestProxyLifecycleAndStopCommand:
     def test_ephemeral_mode_tears_down_proxy(self) -> None:
         with (
             patch("holon_coherence.cli.resolve_agent_binary", return_value="/bin/dummy-agent"),
-            patch("holon_coherence.cli.ensure_proxy_running") as mock_ensure,
+            patch("holon_coherence.cli.ensure_proxy_running", return_value=True) as mock_ensure,
             patch("holon_coherence.cli.execute_interactive_process", return_value=0),
             patch("holon_coherence.cli.stop_proxy_container") as mock_stop,
         ):
@@ -489,6 +550,18 @@ class TestProxyLifecycleAndStopCommand:
             assert code == 0
             mock_ensure.assert_called_once()
             mock_stop.assert_called_once()
+
+    def test_ephemeral_mode_does_not_tear_down_reused_proxy(self) -> None:
+        with (
+            patch("holon_coherence.cli.resolve_agent_binary", return_value="/bin/dummy-agent"),
+            patch("holon_coherence.cli.ensure_proxy_running", return_value=False) as mock_ensure,
+            patch("holon_coherence.cli.execute_interactive_process", return_value=0),
+            patch("holon_coherence.cli.stop_proxy_container") as mock_stop,
+        ):
+            code = run_agent("agy", ["-p", "test"], ephemeral=True)
+            assert code == 0
+            mock_ensure.assert_called_once()
+            mock_stop.assert_not_called()
 
     def test_run_agent_missing_binary_returns_exit_code_1(self, capsys: pytest.CaptureFixture[str]) -> None:
         with patch("holon_coherence.cli.resolve_agent_binary", return_value=None):
@@ -601,3 +674,11 @@ class TestCLIDispatchAndMain:
         assert exc.value.code == 0
         captured = capsys.readouterr()
         assert "usage: holon-coherence run-agent" in captured.out
+
+    def test_runner_help_mentions_delimiter_note(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(SystemExit) as exc:
+            main(["claude", "--help"])
+        assert exc.value.code == 0
+        captured = capsys.readouterr()
+        assert "note:" in captured.out
+        assert "Use '--' to pass flags directly to the underlying agent" in captured.out

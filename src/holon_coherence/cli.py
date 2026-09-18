@@ -43,7 +43,7 @@ def find_system_ca_bundle() -> str | None:
     """Locate host system or certifi CA certificate bundle."""
     for env_var in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
         val = os.environ.get(env_var)
-        if val and os.path.isfile(val):
+        if val and not val.endswith("holon-merged-ca-bundle.crt") and os.path.isfile(val):
             return val
 
     try:
@@ -101,7 +101,12 @@ def get_or_create_merged_ca_bundle(ca_cert_path: str) -> str:
         except OSError:
             pass
 
-    merged_content = f"{system_certs}\n\n{holon_cert}\n" if system_certs else f"{holon_cert}\n"
+    if not system_certs:
+        merged_content = f"{holon_cert}\n"
+    elif holon_cert in system_certs:
+        merged_content = f"{system_certs}\n"
+    else:
+        merged_content = f"{system_certs}\n\n{holon_cert}\n"
 
     try:
         os.makedirs(target_dir, exist_ok=True)
@@ -199,8 +204,12 @@ def check_docker_daemon() -> tuple[bool, str]:
 def ensure_proxy_running(
     port: int = DEFAULT_PROXY_PORT,
     image: str = "holon-coherence:latest",
-) -> None:
-    """Ensure the holon-coherence optimization proxy is running in the background and healthy."""
+) -> bool:
+    """Ensure the holon-coherence optimization proxy is running in the background and healthy.
+
+    Returns:
+        bool: True if a new container was launched, False if an existing healthy container was reused.
+    """
     ok, err_msg = check_docker_daemon()
     if not ok:
         print(err_msg, file=sys.stderr)
@@ -210,7 +219,7 @@ def ensure_proxy_running(
     if is_port_in_use(port):
         if is_container_running(CONTAINER_NAME) and is_container_bound_to_port(port, CONTAINER_NAME):
             # Proxy container is running and healthy
-            return
+            return False
         else:
             print(
                 f"Error: Port {port} is already in use by another process.\n"
@@ -308,6 +317,8 @@ def ensure_proxy_running(
             print(f"Container logs:\n{combined_logs}", file=sys.stderr)
         sys.exit(1)
 
+    return True
+
 
 def stop_proxy_container() -> None:
     """Stop and remove the holon-coherence background Docker container on demand."""
@@ -345,7 +356,9 @@ def build_agent_env(agent_name: str, port: int) -> dict[str, str]:
     env["all_proxy"] = proxy_url
 
     existing_no_proxy = os.environ.get("NO_PROXY") or os.environ.get("no_proxy")
-    merged_no_proxy = f"{NO_PROXY_HOSTS},{existing_no_proxy}" if existing_no_proxy else NO_PROXY_HOSTS
+    raw_no_proxy = f"{NO_PROXY_HOSTS},{existing_no_proxy}" if existing_no_proxy else NO_PROXY_HOSTS
+    no_proxy_entries = [entry.strip() for entry in raw_no_proxy.split(",") if entry.strip()]
+    merged_no_proxy = ",".join(dict.fromkeys(no_proxy_entries))
     env["NO_PROXY"] = merged_no_proxy
     env["no_proxy"] = merged_no_proxy
 
@@ -399,7 +412,11 @@ def execute_interactive_process(cmd: list[str], env: dict[str, str]) -> int:
     Preserves standard interactive TTY attachment (stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr)
     and terminal signal passthrough (SIGWINCH for window resizing, SIGINT/SIGTERM for interrupts).
     """
-    proc = subprocess.Popen(cmd, env=env, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr)
+    try:
+        proc = subprocess.Popen(cmd, env=env, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr)
+    except OSError as err:
+        print(f"Error: Failed to execute '{cmd[0]}': {err}", file=sys.stderr)
+        return 126
 
     def _forward_signal(sig: int, frame: Any) -> None:
         if proc.poll() is None:
@@ -527,7 +544,7 @@ def run_agent(
         return 1
 
     # Ensure proxy is running
-    ensure_proxy_running(port=port)
+    container_started = ensure_proxy_running(port=port)
 
     # Build environment
     child_env = build_agent_env(agent_name, port)
@@ -538,32 +555,36 @@ def run_agent(
     try:
         return execute_interactive_process(cmd, child_env)
     finally:
-        if ephemeral:
+        if ephemeral and container_started:
             stop_proxy_container()
 
 
 def _print_agent_help(agent_name: str) -> None:
     """Print help information for running an agent."""
-    print(f"usage: holon-coherence {agent_name} [--ephemeral] [--port PORT] [agent_args ...]\n")
+    print(f"usage: holon-coherence {agent_name} [--ephemeral] [--port PORT] [--] [agent_args ...]\n")
     print(f"Run {agent_name} coding agent with automated background proxy and wire optimization.\n")
     print("positional arguments:")
     print("  agent_args            Arguments passed directly to the agent CLI\n")
     print("options:")
     print("  --ephemeral           Stop and remove the proxy container when the agent exits")
-    print(f"  --port PORT           Proxy listen port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)")
+    print(f"  --port PORT           Proxy listen port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)\n")
+    print("note:")
+    print("  Use '--' to pass flags directly to the underlying agent (e.g. '-- --help').")
 
 
 def _print_run_agent_help() -> None:
     """Print help information for run-agent command."""
     agents_str = ", ".join(sorted(set(SUPPORTED_AGENTS)))
-    print("usage: holon-coherence run-agent <agent> [--ephemeral] [--port PORT] [agent_args ...]\n")
+    print("usage: holon-coherence run-agent <agent> [--ephemeral] [--port PORT] [--] [agent_args ...]\n")
     print("Run a coding agent with automated background proxy and wire optimization.\n")
     print("positional arguments:")
     print(f"  agent                 Target agent ({agents_str})")
     print("  agent_args            Arguments passed directly to the agent CLI\n")
     print("options:")
     print("  --ephemeral           Stop and remove the proxy container when the agent exits")
-    print(f"  --port PORT           Proxy listen port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)")
+    print(f"  --port PORT           Proxy listen port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)\n")
+    print("note:")
+    print("  Use '--' to pass flags directly to the underlying agent (e.g. '-- --help').")
 
 
 def main(argv: list[str] | None = None) -> None:
