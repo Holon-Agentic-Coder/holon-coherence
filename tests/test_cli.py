@@ -401,6 +401,7 @@ class TestDockerDiagnosticsAndPortConflicts:
         with (
             patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.cli.is_port_in_use", return_value=False),
+            patch("os.path.exists", return_value=True),
             patch(
                 "subprocess.run",
                 side_effect=[
