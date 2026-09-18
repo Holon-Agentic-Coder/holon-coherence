@@ -303,7 +303,13 @@ def build_agent_env(agent_name: str, port: int) -> dict[str, str]:
         env["CURL_CA_BUNDLE"] = merged_bundle
         env["NODE_EXTRA_CA_CERTS"] = ca_cert
     else:
-        print(f"⚠️  Warning: CA certificate not found at '{ca_cert}'.", file=sys.stderr)
+        print(
+            f"⚠️  Warning: CA certificate not found at '{ca_cert}'.\n"
+            "Outbound TLS requests through the proxy may fail verification.\n"
+            "Ensure 'holon-coherence start' has been run at least once or "
+            "initialize CA with 'holon-coherence init-ca'.",
+            file=sys.stderr,
+        )
 
     # Credential mapping: HOLON_AGENT_KEY -> vendor keys
     # Invariant Rule 5: If HOLON_AGENT_KEY is omitted, runner never validates vendor keys;

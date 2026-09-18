@@ -150,20 +150,24 @@ class TestProxyEnvironmentInjectionAndMergedCA:
     """Tests for proxy environment routing and merged CA bundle generation."""
 
     def test_proxy_routing_variables_injected(self) -> None:
-        env = build_agent_env("claude", port=9090)
-        expected_url = "http://127.0.0.1:9090"
-        assert env["HTTP_PROXY"] == expected_url
-        assert env["HTTPS_PROXY"] == expected_url
-        assert env["ALL_PROXY"] == expected_url
-        assert env["http_proxy"] == expected_url
-        assert env["https_proxy"] == expected_url
-        assert env["all_proxy"] == expected_url
-        assert env["NO_PROXY"] == NO_PROXY_HOSTS
-        assert env["no_proxy"] == NO_PROXY_HOSTS
-        assert "SSL_CERT_FILE" in env
-        assert "REQUESTS_CA_BUNDLE" in env
-        assert "CURL_CA_BUNDLE" in env
-        assert "NODE_EXTRA_CA_CERTS" in env
+        with (
+            patch("os.path.exists", return_value=True),
+            patch("holon_coherence.cli.get_or_create_merged_ca_bundle", return_value="/mock/merged.crt"),
+        ):
+            env = build_agent_env("claude", port=9090)
+            expected_url = "http://127.0.0.1:9090"
+            assert env["HTTP_PROXY"] == expected_url
+            assert env["HTTPS_PROXY"] == expected_url
+            assert env["ALL_PROXY"] == expected_url
+            assert env["http_proxy"] == expected_url
+            assert env["https_proxy"] == expected_url
+            assert env["all_proxy"] == expected_url
+            assert env["NO_PROXY"] == NO_PROXY_HOSTS
+            assert env["no_proxy"] == NO_PROXY_HOSTS
+            assert env["SSL_CERT_FILE"] == "/mock/merged.crt"
+            assert env["REQUESTS_CA_BUNDLE"] == "/mock/merged.crt"
+            assert env["CURL_CA_BUNDLE"] == "/mock/merged.crt"
+            assert "NODE_EXTRA_CA_CERTS" in env
 
     def test_proxy_routing_preserves_existing_no_proxy(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("NO_PROXY", "internal.corp.com,*.local")
@@ -180,6 +184,8 @@ class TestProxyEnvironmentInjectionAndMergedCA:
             assert "NODE_EXTRA_CA_CERTS" not in env
             captured = capsys.readouterr()
             assert "Warning: CA certificate not found" in captured.err
+            assert "Ensure 'holon-coherence start' has been run at least once" in captured.err
+            assert "initialize CA with 'holon-coherence init-ca'" in captured.err
 
     def test_merged_ca_bundle_generation(self, tmp_path: Path) -> None:
         holon_ca = tmp_path / "mitmproxy-ca-cert.pem"
