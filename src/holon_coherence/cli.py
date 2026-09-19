@@ -411,22 +411,16 @@ def resolve_agent_binary(agent_name: str) -> str | None:
     return None
 
 
-def build_agent_env(agent_name: str, port: int) -> dict[str, str]:
-    """Construct environment variables for the child agent subprocess.
-
-    Configures proxy routing, merged CA bundle, and maps universal HOLON_AGENT_KEY
-    to vendor keys without inspecting or validating native host auth if omitted.
-    """
-    env = os.environ.copy()
-    proxy_url = f"http://127.0.0.1:{port}"
-
-    # Routing
-    env["HTTP_PROXY"] = proxy_url
-    env["HTTPS_PROXY"] = proxy_url
-    env["ALL_PROXY"] = proxy_url
-    env["http_proxy"] = proxy_url
-    env["https_proxy"] = proxy_url
-    env["all_proxy"] = proxy_url
+def build_proxy_env(proxy_url: str, ca_cert_path: str | None = None) -> dict[str, str]:
+    """Construct environment variables for proxy routing and CA bundle trust."""
+    env: dict[str, str] = {
+        "HTTP_PROXY": proxy_url,
+        "HTTPS_PROXY": proxy_url,
+        "ALL_PROXY": proxy_url,
+        "http_proxy": proxy_url,
+        "https_proxy": proxy_url,
+        "all_proxy": proxy_url,
+    }
 
     existing_no_proxy = os.environ.get("NO_PROXY") or os.environ.get("no_proxy")
     raw_no_proxy = f"{NO_PROXY_HOSTS},{existing_no_proxy}" if existing_no_proxy else NO_PROXY_HOSTS
@@ -435,13 +429,19 @@ def build_agent_env(agent_name: str, port: int) -> dict[str, str]:
     env["NO_PROXY"] = merged_no_proxy
     env["no_proxy"] = merged_no_proxy
 
-    # Certificate bundle
-    ca_dir = os.path.expanduser("~/.holon/proxy-ca")
-    ca_cert = os.path.join(ca_dir, "mitmproxy-ca-cert.pem")
-    if not os.path.exists(ca_cert):
-        alt_ca = os.path.expanduser("~/.holon/certs/holon-root-ca.crt")
-        if os.path.exists(alt_ca):
-            ca_cert = alt_ca
+    # Certificate bundle resolution
+    if ca_cert_path is None:
+        ca_cert = os.path.expanduser("~/.holon/proxy-ca/mitmproxy-ca-cert.pem")
+        if not os.path.exists(ca_cert):
+            alt_ca = os.path.expanduser("~/.holon/certs/holon-root-ca.crt")
+            if os.path.exists(alt_ca):
+                ca_cert = alt_ca
+    else:
+        ca_cert = os.path.expanduser(ca_cert_path)
+        if not os.path.exists(ca_cert):
+            alt_ca = os.path.join(os.path.dirname(ca_cert), "holon-root-ca.crt")
+            if os.path.exists(alt_ca):
+                ca_cert = alt_ca
 
     if os.path.exists(ca_cert):
         merged_bundle = get_or_create_merged_ca_bundle(ca_cert)
@@ -457,6 +457,19 @@ def build_agent_env(agent_name: str, port: int) -> dict[str, str]:
             "initialize CA with 'holon-coherence init-ca'.",
             file=sys.stderr,
         )
+
+    return env
+
+
+def build_agent_env(agent_name: str, port: int) -> dict[str, str]:
+    """Construct environment variables for the child agent subprocess.
+
+    Configures proxy routing, merged CA bundle, and maps universal HOLON_AGENT_KEY
+    to vendor keys without inspecting or validating native host auth if omitted.
+    """
+    env = os.environ.copy()
+    proxy_url = f"http://127.0.0.1:{port}"
+    env.update(build_proxy_env(proxy_url))
 
     # Credential mapping: HOLON_AGENT_KEY -> vendor keys
     # Invariant Rule 5: If HOLON_AGENT_KEY is omitted, runner never validates vendor keys;
@@ -497,9 +510,14 @@ def execute_interactive_process(cmd: list[str], env: dict[str, str]) -> int:
                 proc.send_signal(sig)
 
     old_handlers: dict[int, Any] = {}
-    forward_signals = [signal.SIGINT, signal.SIGTERM]
+    forward_signals = [signal.SIGTERM]
     if hasattr(signal, "SIGWINCH"):
         forward_signals.append(signal.SIGWINCH)
+    if sys.stdin.isatty():
+        with contextlib.suppress(ValueError, OSError):
+            old_handlers[signal.SIGINT] = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    else:
+        forward_signals.append(signal.SIGINT)
 
     for sig in forward_signals:
         with contextlib.suppress(ValueError, OSError):
@@ -599,6 +617,10 @@ def run_agent(
     port: int | None = None,
 ) -> int:
     """Launch the optimization proxy and execute the requested coding agent with full telemetry."""
+    if port is not None and not (1 <= port <= 65535):
+        print(f"Error: Port must be between 1 and 65535, got {port}.", file=sys.stderr)
+        return 1
+
     if port is None:
         env_port = os.getenv("HOLON_PROXY_PORT")
         if env_port:
@@ -685,7 +707,7 @@ def main(argv: list[str] | None = None) -> None:
         elif first == "run-agent":
             if not argv[1:]:
                 _print_run_agent_help()
-                sys.exit(0)
+                sys.exit(1)
             flags = extract_runner_flags(argv[1:])
             if flags.help_requested:
                 if flags.agent_args and flags.agent_args[0] in SUPPORTED_AGENTS:
@@ -828,38 +850,7 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(1)
 
         env = os.environ.copy()
-        env["HTTP_PROXY"] = args.proxy_url
-        env["HTTPS_PROXY"] = args.proxy_url
-        env["ALL_PROXY"] = args.proxy_url
-        env["http_proxy"] = args.proxy_url
-        env["https_proxy"] = args.proxy_url
-        env["all_proxy"] = args.proxy_url
-        existing_no_proxy = os.environ.get("NO_PROXY") or os.environ.get("no_proxy")
-        raw_no_proxy = f"{NO_PROXY_HOSTS},{existing_no_proxy}" if existing_no_proxy else NO_PROXY_HOSTS
-        no_proxy_entries = [entry.strip() for entry in raw_no_proxy.split(",") if entry.strip()]
-        merged_no_proxy = ",".join(dict.fromkeys(no_proxy_entries))
-        env["NO_PROXY"] = merged_no_proxy
-        env["no_proxy"] = merged_no_proxy
-        ca_cert = os.path.expanduser(args.ca_cert)
-        if not os.path.exists(ca_cert):
-            alt_ca = os.path.join(os.path.dirname(ca_cert), "holon-root-ca.crt")
-            if os.path.exists(alt_ca):
-                ca_cert = alt_ca
-
-        if os.path.exists(ca_cert):
-            merged_ca = get_or_create_merged_ca_bundle(ca_cert)
-            env["SSL_CERT_FILE"] = merged_ca
-            env["REQUESTS_CA_BUNDLE"] = merged_ca
-            env["CURL_CA_BUNDLE"] = merged_ca
-            env["NODE_EXTRA_CA_CERTS"] = ca_cert
-        else:
-            print(
-                f"⚠️  Warning: CA certificate not found at '{ca_cert}'.\n"
-                "Outbound TLS requests through the proxy may fail verification.\n"
-                "Ensure 'holon-coherence start' has been run at least once or "
-                "initialize CA with 'holon-coherence init-ca'.",
-                file=sys.stderr,
-            )
+        env.update(build_proxy_env(args.proxy_url, args.ca_cert))
 
         result = subprocess.run(raw_cmd, env=env)
         sys.exit(result.returncode)

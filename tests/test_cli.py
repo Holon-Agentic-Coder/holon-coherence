@@ -18,6 +18,7 @@ from holon_coherence.cli import (
     NO_PROXY_HOSTS,
     SUPPORTED_AGENTS,
     build_agent_env,
+    build_proxy_env,
     check_docker_daemon,
     ensure_docker_image,
     ensure_proxy_running,
@@ -219,6 +220,59 @@ class TestProxyEnvironmentInjectionAndMergedCA:
             assert "Ensure 'holon-coherence start' has been run at least once" in captured.err
             assert "initialize CA with 'holon-coherence init-ca'" in captured.err
 
+    def test_build_proxy_env_sets_all_proxy_vars_and_node_extra_ca_certs(self) -> None:
+        with (
+            patch("os.path.exists", return_value=True),
+            patch("holon_coherence.cli.get_or_create_merged_ca_bundle", return_value="/path/merged.crt"),
+        ):
+            env = build_proxy_env("http://127.0.0.1:8888")
+            assert env["HTTP_PROXY"] == "http://127.0.0.1:8888"
+            assert env["HTTPS_PROXY"] == "http://127.0.0.1:8888"
+            assert env["ALL_PROXY"] == "http://127.0.0.1:8888"
+            assert env["http_proxy"] == "http://127.0.0.1:8888"
+            assert env["https_proxy"] == "http://127.0.0.1:8888"
+            assert env["all_proxy"] == "http://127.0.0.1:8888"
+            assert env["NO_PROXY"] == NO_PROXY_HOSTS
+            assert env["no_proxy"] == NO_PROXY_HOSTS
+            assert env["SSL_CERT_FILE"] == "/path/merged.crt"
+            assert env["REQUESTS_CA_BUNDLE"] == "/path/merged.crt"
+            assert env["CURL_CA_BUNDLE"] == "/path/merged.crt"
+            assert env["NODE_EXTRA_CA_CERTS"] == "/path/merged.crt"
+
+    def test_build_proxy_env_custom_ca_path_and_alt_fallback(self) -> None:
+        def fake_exists(path: str) -> bool:
+            return path == "/custom/dir/holon-root-ca.crt"
+
+        with (
+            patch("os.path.exists", side_effect=fake_exists),
+            patch("holon_coherence.cli.get_or_create_merged_ca_bundle", return_value="/alt/merged.crt") as mock_merge,
+        ):
+            env = build_proxy_env("http://127.0.0.1:8888", "/custom/dir/mitmproxy-ca-cert.pem")
+            assert env["NODE_EXTRA_CA_CERTS"] == "/alt/merged.crt"
+            mock_merge.assert_called_once_with("/custom/dir/holon-root-ca.crt")
+
+    def test_build_proxy_env_default_ca_fallback(self) -> None:
+        expected_root_ca = os.path.expanduser("~/.holon/certs/holon-root-ca.crt")
+
+        def fake_exists(path: str) -> bool:
+            return path == expected_root_ca
+
+        with (
+            patch("os.path.exists", side_effect=fake_exists),
+            patch("holon_coherence.cli.get_or_create_merged_ca_bundle", return_value="/root/merged.crt") as mock_merge,
+        ):
+            env = build_proxy_env("http://127.0.0.1:8888")
+            assert env["NODE_EXTRA_CA_CERTS"] == "/root/merged.crt"
+            mock_merge.assert_called_once_with(expected_root_ca)
+
+    def test_build_proxy_env_missing_ca_warning(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with patch("os.path.exists", return_value=False):
+            env = build_proxy_env("http://127.0.0.1:8888", "/nonexistent/ca.pem")
+            assert "SSL_CERT_FILE" not in env
+            assert "NODE_EXTRA_CA_CERTS" not in env
+            captured = capsys.readouterr()
+            assert "Warning: CA certificate not found at '/nonexistent/ca.pem'" in captured.err
+
     def test_merged_ca_bundle_generation(self, tmp_path: Path) -> None:
         holon_ca = tmp_path / "mitmproxy-ca-cert.pem"
         holon_ca.write_text("-----BEGIN CERTIFICATE-----\nHOLON_ROOT_CA\n-----END CERTIFICATE-----")
@@ -382,7 +436,28 @@ class TestChildProcessExecutionAndExitCodes:
             code = execute_interactive_process(["test-cmd"], {})
             assert code == 128 + signal.SIGINT
 
-    def test_signal_forwarding(self) -> None:
+    def test_execute_interactive_process_sigint_suppressed_in_tty(self) -> None:
+        mock_proc = MagicMock()
+        mock_proc.poll.side_effect = [None, 0]
+        mock_proc.returncode = 0
+
+        signal_calls: list[tuple[int, Any]] = []
+
+        def mock_signal(sig: int, handler: Any) -> Any:
+            signal_calls.append((sig, handler))
+            return MagicMock()
+
+        with (
+            patch("subprocess.Popen", return_value=mock_proc),
+            patch("sys.stdin.isatty", return_value=True),
+            patch("signal.signal", side_effect=mock_signal),
+        ):
+            code = execute_interactive_process(["test-cmd"], {})
+            assert code == 0
+            assert (signal.SIGINT, signal.SIG_IGN) in signal_calls
+            mock_proc.send_signal.assert_not_called()
+
+    def test_execute_interactive_process_sigint_forwarded_when_not_tty(self) -> None:
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
         mock_proc.returncode = 0
@@ -403,6 +478,7 @@ class TestChildProcessExecutionAndExitCodes:
 
         with (
             patch("subprocess.Popen", return_value=mock_proc),
+            patch("sys.stdin.isatty", return_value=False),
             patch("signal.signal", side_effect=mock_signal),
         ):
             code = execute_interactive_process(["test-cmd"], {})
@@ -431,6 +507,7 @@ class TestChildProcessExecutionAndExitCodes:
 
         with (
             patch("subprocess.Popen", return_value=mock_proc),
+            patch("sys.stdin.isatty", return_value=False),
             patch("signal.signal", side_effect=mock_signal),
         ):
             code = execute_interactive_process(["test-cmd"], {})
@@ -722,6 +799,19 @@ class TestProxyLifecycleAndStopCommand:
             captured = capsys.readouterr()
             assert "Agent CLI binary 'agy' not found on PATH" in captured.err
 
+    def test_run_agent_invalid_port_returns_one(self, capsys: pytest.CaptureFixture[str]) -> None:
+        assert run_agent("agy", [], port=0) == 1
+        captured = capsys.readouterr()
+        assert "Error: Port must be between 1 and 65535, got 0." in captured.err
+
+        assert run_agent("agy", [], port=70000) == 1
+        captured = capsys.readouterr()
+        assert "Error: Port must be between 1 and 65535, got 70000." in captured.err
+
+        assert run_agent("agy", [], port=-1) == 1
+        captured = capsys.readouterr()
+        assert "Error: Port must be between 1 and 65535, got -1." in captured.err
+
     def test_stop_proxy_container_invokes_docker_rm(self, capsys: pytest.CaptureFixture[str]) -> None:
         mock_res = MagicMock(returncode=0, stderr="")
         with patch("subprocess.run", return_value=mock_res) as mock_run:
@@ -863,6 +953,13 @@ class TestCLIDispatchAndMain:
         captured = capsys.readouterr()
         assert "usage: holon-coherence run-agent" in captured.out
 
+    def test_run_agent_parameterless_exits_one(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(SystemExit) as exc:
+            main(["run-agent"])
+        assert exc.value.code == 1
+        captured = capsys.readouterr()
+        assert "usage: holon-coherence run-agent" in captured.out
+
     def test_runner_help_mentions_delimiter_note(self, capsys: pytest.CaptureFixture[str]) -> None:
         with pytest.raises(SystemExit) as exc:
             main(["claude", "--help"])
@@ -892,6 +989,25 @@ class TestCLIDispatchAndMain:
         assert "internal.corp.com" in entries
         assert "127.0.0.1" in entries
         assert captured_env["no_proxy"] == captured_env["NO_PROXY"]
+
+    def test_run_command_sets_merged_ca_in_node_extra_ca_certs(self) -> None:
+        captured_env: dict[str, str] = {}
+
+        def fake_run(cmd: list[str], env: dict[str, str] | None = None, **kwargs: Any) -> MagicMock:
+            if env:
+                captured_env.update(env)
+            return MagicMock(returncode=0)
+
+        with (
+            patch("os.path.exists", return_value=True),
+            patch("holon_coherence.cli.get_or_create_merged_ca_bundle", return_value="/mock/merged.crt"),
+            patch("subprocess.run", side_effect=fake_run),
+            pytest.raises(SystemExit) as exc,
+        ):
+            main(["run", "--", "echo", "hello"])
+        assert exc.value.code == 0
+        assert captured_env["NODE_EXTRA_CA_CERTS"] == "/mock/merged.crt"
+        assert captured_env["SSL_CERT_FILE"] == "/mock/merged.crt"
 
 
 class TestWaitForProxyReady:
