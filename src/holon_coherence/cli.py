@@ -48,7 +48,7 @@ def find_system_ca_bundle() -> str | None:
             and not val.endswith(("holon-merged-ca-bundle.crt", "mitmproxy-ca-cert.pem", "holon-root-ca.crt"))
             and os.path.isfile(val)
         ):
-            return val
+            return os.path.abspath(val)
 
     try:
         cafile = ssl.get_default_verify_paths().cafile
@@ -152,28 +152,40 @@ def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
 
 def is_container_running(container_name: str = CONTAINER_NAME) -> bool:
     """Check if the Docker container is currently running."""
-    res = subprocess.run(
-        ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
-        capture_output=True,
-        text=True,
-    )
-    return res.returncode == 0 and res.stdout.strip().lower() == "true"
+    try:
+        res = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+        )
+        return res.returncode == 0 and res.stdout.strip().lower() == "true"
+    except (subprocess.TimeoutExpired, OSError):
+        return False
 
 
 def is_container_bound_to_port(port: int, container_name: str = CONTAINER_NAME) -> bool:
     """Check if the container is currently running and bound to the specified host port."""
-    res = subprocess.run(
-        ["docker", "port", container_name, "8080/tcp"],
-        capture_output=True,
-        text=True,
-    )
-    output = res.stdout
-    if res.returncode != 0 or not output.strip():
-        fallback_res = subprocess.run(
-            ["docker", "port", container_name],
+    try:
+        res = subprocess.run(
+            ["docker", "port", container_name, "8080/tcp"],
             capture_output=True,
             text=True,
+            timeout=5.0,
         )
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    output = res.stdout
+    if res.returncode != 0 or not output.strip():
+        try:
+            fallback_res = subprocess.run(
+                ["docker", "port", container_name],
+                capture_output=True,
+                text=True,
+                timeout=5.0,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return False
         if fallback_res.returncode != 0:
             return False
         output = fallback_res.stdout
@@ -443,11 +455,16 @@ def build_proxy_env(proxy_url: str, ca_cert_path: str | None = None) -> dict[str
 
     # Certificate bundle resolution
     if ca_cert_path is None:
-        ca_cert = os.path.expanduser("~/.holon/proxy-ca/mitmproxy-ca-cert.pem")
-        if not os.path.exists(ca_cert):
-            alt_ca = os.path.expanduser("~/.holon/certs/holon-root-ca.crt")
-            if os.path.exists(alt_ca):
-                ca_cert = alt_ca
+        # Allow custom CA certificate path via HOLON_CA_CERT env var (useful in CI/CD or containerized environments)
+        env_ca = os.environ.get("HOLON_CA_CERT")
+        if env_ca and os.path.exists(os.path.expanduser(env_ca)):
+            ca_cert = os.path.expanduser(env_ca)
+        else:
+            ca_cert = os.path.expanduser("~/.holon/proxy-ca/mitmproxy-ca-cert.pem")
+            if not os.path.exists(ca_cert):
+                alt_ca = os.path.expanduser("~/.holon/certs/holon-root-ca.crt")
+                if os.path.exists(alt_ca):
+                    ca_cert = alt_ca
     else:
         ca_cert = os.path.expanduser(ca_cert_path)
         if not os.path.exists(ca_cert):
@@ -885,8 +902,8 @@ def main(argv: list[str] | None = None) -> None:
         env = os.environ.copy()
         env.update(build_proxy_env(args.proxy_url, args.ca_cert))
 
-        result = subprocess.run(raw_cmd, env=env)
-        sys.exit(result.returncode)
+        exit_code = execute_interactive_process(raw_cmd, env)
+        sys.exit(exit_code)
 
     elif args.command == "start":
         # If running inside container or explicitly requested --native, launch mitmproxy directly
@@ -980,7 +997,7 @@ def main(argv: list[str] | None = None) -> None:
                     stderr=subprocess.DEVNULL,
                 )
     else:
-        parser.print_help()
+        parser.print_help(sys.stderr)
         sys.exit(1)
 
 

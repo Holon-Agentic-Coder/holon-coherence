@@ -27,6 +27,7 @@ from holon_coherence.cli import (
     find_system_ca_bundle,
     get_or_create_merged_ca_bundle,
     is_container_bound_to_port,
+    is_container_running,
     main,
     resolve_agent_binary,
     run_agent,
@@ -277,6 +278,40 @@ class TestProxyEnvironmentInjectionAndMergedCA:
             captured = capsys.readouterr()
             assert "Warning: CA certificate not found at '/nonexistent/ca.pem'" in captured.err
 
+    def test_build_proxy_env_holon_ca_cert_env_var(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """HOLON_CA_CERT env var is consulted before falling back to default path."""
+        ca_cert = tmp_path / "custom-ca.pem"
+        ca_cert.write_text("custom cert")
+        monkeypatch.setenv("HOLON_CA_CERT", str(ca_cert))
+        monkeypatch.delenv("HOLON_AGENT_KEY", raising=False)
+
+        with patch(
+            "holon_coherence.cli.get_or_create_merged_ca_bundle", return_value="/merged/custom.crt"
+        ) as mock_merge:
+            env = build_proxy_env("http://127.0.0.1:8888")
+            mock_merge.assert_called_once_with(str(ca_cert))
+            assert env["NODE_EXTRA_CA_CERTS"] == "/merged/custom.crt"
+
+    def test_build_proxy_env_holon_ca_cert_env_var_not_found_falls_back(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If HOLON_CA_CERT points to a non-existent file, build_proxy_env falls back to default path."""
+        monkeypatch.setenv("HOLON_CA_CERT", "/nonexistent/env-ca.pem")
+        default_ca = os.path.expanduser("~/.holon/proxy-ca/mitmproxy-ca-cert.pem")
+
+        def fake_exists(path: str) -> bool:
+            return path == default_ca
+
+        with (
+            patch("os.path.exists", side_effect=fake_exists),
+            patch(
+                "holon_coherence.cli.get_or_create_merged_ca_bundle", return_value="/merged/default.crt"
+            ) as mock_merge,
+        ):
+            env = build_proxy_env("http://127.0.0.1:8888")
+            mock_merge.assert_called_once_with(default_ca)
+            assert env["NODE_EXTRA_CA_CERTS"] == "/merged/default.crt"
+
     def test_merged_ca_bundle_generation(self, tmp_path: Path) -> None:
         holon_ca = tmp_path / "mitmproxy-ca-cert.pem"
         holon_ca.write_text("-----BEGIN CERTIFICATE-----\nHOLON_ROOT_CA\n-----END CERTIFICATE-----")
@@ -356,6 +391,17 @@ class TestProxyEnvironmentInjectionAndMergedCA:
         curl_cert.write_text("curl")
         monkeypatch.setenv("CURL_CA_BUNDLE", str(curl_cert))
         assert find_system_ca_bundle() == str(curl_cert)
+
+    def test_find_system_ca_bundle_env_var_returns_abspath(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """find_system_ca_bundle normalizes env var paths to absolute paths."""
+        cert_file = tmp_path / "custom-cert.pem"
+        cert_file.write_text("custom")
+        monkeypatch.setenv("SSL_CERT_FILE", str(cert_file))
+        result = find_system_ca_bundle()
+        assert result is not None
+        assert os.path.isabs(result), f"Expected abspath, got: {result}"
 
     def test_find_system_ca_bundle_ssl_paths(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("SSL_CERT_FILE", raising=False)
@@ -763,6 +809,35 @@ class TestDockerDiagnosticsAndPortConflicts:
         with patch("subprocess.run", return_value=failed_res):
             assert is_container_bound_to_port(8080) is False
 
+    def test_is_container_running_timeout_returns_false(self) -> None:
+        """is_container_running returns False when docker inspect times out."""
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd=["docker"], timeout=5.0)):
+            assert is_container_running() is False
+
+    def test_is_container_running_oserror_returns_false(self) -> None:
+        """is_container_running returns False when docker binary is missing (OSError)."""
+        with patch("subprocess.run", side_effect=OSError("docker not found")):
+            assert is_container_running() is False
+
+    def test_is_container_bound_to_port_primary_timeout_returns_false(self) -> None:
+        """is_container_bound_to_port returns False if primary docker port call times out."""
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd=["docker", "port"], timeout=5.0)):
+            assert is_container_bound_to_port(8080) is False
+
+    def test_is_container_bound_to_port_fallback_timeout_returns_false(self) -> None:
+        """is_container_bound_to_port returns False if fallback docker port call times out."""
+        failed_res = MagicMock(returncode=1, stdout="")
+        with patch(
+            "subprocess.run",
+            side_effect=[failed_res, subprocess.TimeoutExpired(cmd=["docker", "port"], timeout=5.0)],
+        ):
+            assert is_container_bound_to_port(8080) is False
+
+    def test_is_container_bound_to_port_oserror_returns_false(self) -> None:
+        """is_container_bound_to_port returns False when OSError raised on primary call."""
+        with patch("subprocess.run", side_effect=OSError("no docker")):
+            assert is_container_bound_to_port(8080) is False
+
     def test_ensure_proxy_running_timeout_combines_logs(self, capsys: pytest.CaptureFixture[str]) -> None:
         logs_res = MagicMock(returncode=0, stdout="out msg\n", stderr="err traceback\n")
         with (
@@ -1061,14 +1136,13 @@ class TestCLIDispatchAndMain:
         monkeypatch.setenv("NO_PROXY", "127.0.0.1,api.github.com,internal.corp.com,127.0.0.1")
         captured_env: dict[str, str] = {}
 
-        def fake_run(cmd: list[str], env: dict[str, str] | None = None, **kwargs: Any) -> MagicMock:
-            if env:
-                captured_env.update(env)
-            return MagicMock(returncode=0)
+        def fake_execute(cmd: list[str], env: dict[str, str]) -> int:
+            captured_env.update(env)
+            return 0
 
         with (
             patch("os.path.exists", return_value=False),
-            patch("subprocess.run", side_effect=fake_run),
+            patch("holon_coherence.cli.execute_interactive_process", side_effect=fake_execute),
             pytest.raises(SystemExit) as exc,
         ):
             main(["run", "--", "echo", "hello"])
@@ -1082,15 +1156,14 @@ class TestCLIDispatchAndMain:
     def test_run_command_sets_merged_ca_in_node_extra_ca_certs(self) -> None:
         captured_env: dict[str, str] = {}
 
-        def fake_run(cmd: list[str], env: dict[str, str] | None = None, **kwargs: Any) -> MagicMock:
-            if env:
-                captured_env.update(env)
-            return MagicMock(returncode=0)
+        def fake_execute(cmd: list[str], env: dict[str, str]) -> int:
+            captured_env.update(env)
+            return 0
 
         with (
             patch("os.path.exists", return_value=True),
             patch("holon_coherence.cli.get_or_create_merged_ca_bundle", return_value="/mock/merged.crt"),
-            patch("subprocess.run", side_effect=fake_run),
+            patch("holon_coherence.cli.execute_interactive_process", side_effect=fake_execute),
             pytest.raises(SystemExit) as exc,
         ):
             main(["run", "--", "echo", "hello"])
@@ -1098,6 +1171,19 @@ class TestCLIDispatchAndMain:
         assert captured_env["NODE_EXTRA_CA_CERTS"] == "/mock/merged.crt"
         assert captured_env["SSL_CERT_FILE"] == "/mock/merged.crt"
         assert captured_env["GIT_SSL_CAINFO"] == "/mock/merged.crt"
+
+    def test_run_command_uses_execute_interactive_process(self) -> None:
+        """run subcommand delegates to execute_interactive_process, not subprocess.run."""
+        with (
+            patch("os.path.exists", return_value=False),
+            patch("holon_coherence.cli.execute_interactive_process", return_value=42) as mock_exec,
+            pytest.raises(SystemExit) as exc,
+        ):
+            main(["run", "--", "my-tool", "--flag"])
+        assert exc.value.code == 42
+        mock_exec.assert_called_once()
+        cmd_arg = mock_exec.call_args[0][0]
+        assert cmd_arg == ["my-tool", "--flag"]
 
     def test_start_command_defaults_port_to_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HOLON_PROXY_PORT", "9191")

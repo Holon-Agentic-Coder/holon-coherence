@@ -56,7 +56,7 @@ When contributing or executing tasks in `holon-coherence`:
 3. **Coding Agent Runners & Automated Proxy**: Use `holon-coherence <agent>` (or `holon-coherence run-agent <agent>`) to
    launch agents (`agy`, `claude`, `codex`, `opencode`, `pi`) through the optimization proxy. The proxy runs in
    background daemon mode by default and supports `--ephemeral` for one-off task teardowns.
-4. **Universal Credentials & Native Auth Fallback (Rule 5)**: Standardize host credentials on `HOLON_AGENT_KEY`. Never
+4. **Universal Credentials & Native Auth Fallback (Rule 4)**: Standardize host credentials on `HOLON_AGENT_KEY`. Never
    require vendor-specific API keys. If `HOLON_AGENT_KEY` is omitted, runners transparently fallback to native host auth
    sessions (such as `~/.gemini`, `~/.claude.json`).
 5. **Strict Repository Separation**: Commands targeting `holon-coherence` must be executed strictly inside
