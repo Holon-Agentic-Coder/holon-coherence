@@ -43,12 +43,20 @@ def find_system_ca_bundle() -> str | None:
     """Locate host system or certifi CA certificate bundle."""
     for env_var in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"):
         val = os.environ.get(env_var)
-        if val and not val.endswith("holon-merged-ca-bundle.crt") and os.path.isfile(val):
+        if (
+            val
+            and not val.endswith(("holon-merged-ca-bundle.crt", "mitmproxy-ca-cert.pem", "holon-root-ca.crt"))
+            and os.path.isfile(val)
+        ):
             return val
 
     try:
         cafile = ssl.get_default_verify_paths().cafile
-        if cafile and not cafile.endswith("holon-merged-ca-bundle.crt") and os.path.isfile(cafile):
+        if (
+            cafile
+            and not cafile.endswith(("holon-merged-ca-bundle.crt", "mitmproxy-ca-cert.pem", "holon-root-ca.crt"))
+            and os.path.isfile(cafile)
+        ):
             return cafile
     except Exception:
         pass
@@ -344,6 +352,7 @@ def ensure_proxy_running(
         "docker",
         "run",
         "-d",
+        "--init",
         "--name",
         CONTAINER_NAME,
         "-p",
@@ -515,6 +524,8 @@ def execute_interactive_process(cmd: list[str], env: dict[str, str]) -> int:
 
     old_handlers: dict[int, Any] = {}
     forward_signals = [signal.SIGTERM]
+    if hasattr(signal, "SIGHUP"):
+        forward_signals.append(signal.SIGHUP)
     if hasattr(signal, "SIGWINCH"):
         forward_signals.append(signal.SIGWINCH)
     if sys.stdin and sys.stdin.isatty():
@@ -740,7 +751,21 @@ def main(argv: list[str] | None = None) -> None:
 
     # Start proxy
     start_parser = subparsers.add_parser("start", help="Start the optimization proxy sidecar (via Docker by default)")
-    start_parser.add_argument("--port", type=int, default=DEFAULT_PROXY_PORT, help="Proxy listen port (default: 8080)")
+    default_start_port = DEFAULT_PROXY_PORT
+    env_proxy_port = os.getenv("HOLON_PROXY_PORT")
+    if env_proxy_port:
+        try:
+            parsed_port = int(env_proxy_port)
+            if 1 <= parsed_port <= 65535:
+                default_start_port = parsed_port
+        except ValueError:
+            pass
+    start_parser.add_argument(
+        "--port",
+        type=int,
+        default=default_start_port,
+        help=f"Proxy listen port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)",
+    )
     start_parser.add_argument("--web", action="store_true", help="Launch mitmweb dashboard on port 8081")
     start_parser.add_argument("--web-port", type=int, default=8081, help="Web dashboard port (default: 8081)")
     start_parser.add_argument("-d", "--detach", action="store_true", help="Run Docker container in background")
@@ -908,6 +933,7 @@ def main(argv: list[str] | None = None) -> None:
         docker_cmd = [
             "docker",
             "run",
+            "--init",
             "--name",
             CONTAINER_NAME,
             "-p",

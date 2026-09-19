@@ -378,6 +378,23 @@ class TestProxyEnvironmentInjectionAndMergedCA:
         monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(real_sys_ca))
         assert find_system_ca_bundle() == str(real_sys_ca)
 
+    def test_find_system_ca_bundle_ignores_unmerged_holon_certificates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mitm_ca = tmp_path / "mitmproxy-ca-cert.pem"
+        mitm_ca.write_text("mitm")
+        root_ca = tmp_path / "holon-root-ca.crt"
+        root_ca.write_text("root")
+        real_sys_ca = tmp_path / "sys-ca.crt"
+        real_sys_ca.write_text("sys")
+
+        monkeypatch.setenv("SSL_CERT_FILE", str(mitm_ca))
+        monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(real_sys_ca))
+        assert find_system_ca_bundle() == str(real_sys_ca)
+
+        monkeypatch.setenv("SSL_CERT_FILE", str(root_ca))
+        assert find_system_ca_bundle() == str(real_sys_ca)
+
     def test_find_system_ca_bundle_ssl_paths_ignores_merged_bundle(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -518,6 +535,36 @@ class TestChildProcessExecutionAndExitCodes:
             assert code == 0
             mock_proc.send_signal.assert_called_with(signal.SIGINT)
 
+    def test_execute_interactive_process_sighup_forwarded_when_available(self) -> None:
+        if not hasattr(signal, "SIGHUP"):
+            pytest.skip("SIGHUP not available on this platform")
+
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_proc.returncode = 0
+
+        captured_handler: dict[int, Any] = {}
+
+        def mock_signal(sig: int, handler: Any) -> Any:
+            captured_handler[sig] = handler
+            return MagicMock()
+
+        def fake_wait() -> int:
+            if signal.SIGHUP in captured_handler:
+                captured_handler[signal.SIGHUP](signal.SIGHUP, None)
+            mock_proc.poll.return_value = 0
+            return 0
+
+        mock_proc.wait.side_effect = fake_wait
+
+        with (
+            patch("subprocess.Popen", return_value=mock_proc),
+            patch("signal.signal", side_effect=mock_signal),
+        ):
+            code = execute_interactive_process(["test-cmd"], {})
+            assert code == 0
+            mock_proc.send_signal.assert_called_with(signal.SIGHUP)
+
     def test_signal_forwarding_suppresses_lookup_and_os_errors(self) -> None:
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
@@ -634,11 +681,13 @@ class TestDockerDiagnosticsAndPortConflicts:
                     MagicMock(returncode=0),  # rm -f
                     MagicMock(returncode=0),  # docker run
                 ],
-            ),
+            ) as mock_run,
             patch("holon_coherence.cli.wait_for_proxy_ready", return_value=True),
         ):
             started = ensure_proxy_running(port=8080)
             assert started is True
+            docker_cmd = mock_run.call_args_list[2][0][0]
+            assert "--init" in docker_cmd
 
     def test_container_already_running_on_different_port_error(self, capsys: pytest.CaptureFixture[str]) -> None:
         with (
@@ -1049,6 +1098,54 @@ class TestCLIDispatchAndMain:
         assert captured_env["NODE_EXTRA_CA_CERTS"] == "/mock/merged.crt"
         assert captured_env["SSL_CERT_FILE"] == "/mock/merged.crt"
         assert captured_env["GIT_SSL_CAINFO"] == "/mock/merged.crt"
+
+    def test_start_command_defaults_port_to_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HOLON_PROXY_PORT", "9191")
+        with (
+            patch("holon_coherence.cli.is_in_container", return_value=False),
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.ensure_docker_image"),
+            patch("os.makedirs"),
+            patch("os.path.exists", return_value=True),
+            patch("subprocess.run") as mock_run,
+        ):
+            main(["start", "-d"])
+            assert mock_run.call_count == 2
+            docker_cmd = mock_run.call_args_list[1][0][0]
+            assert "--init" in docker_cmd
+            port_index = docker_cmd.index("-p") + 1
+            assert docker_cmd[port_index] == "127.0.0.1:9191:8080"
+
+    def test_start_command_default_port_fallback_on_invalid_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HOLON_PROXY_PORT", "invalid_port")
+        with (
+            patch("holon_coherence.cli.is_in_container", return_value=False),
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.ensure_docker_image"),
+            patch("os.makedirs"),
+            patch("os.path.exists", return_value=True),
+            patch("subprocess.run") as mock_run,
+        ):
+            main(["start", "-d"])
+            docker_cmd = mock_run.call_args_list[1][0][0]
+            assert "--init" in docker_cmd
+            port_index = docker_cmd.index("-p") + 1
+            assert docker_cmd[port_index] == f"127.0.0.1:{DEFAULT_PROXY_PORT}:8080"
+
+    def test_start_command_interactive_includes_init_flag(self) -> None:
+        with (
+            patch("holon_coherence.cli.is_in_container", return_value=False),
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.ensure_docker_image"),
+            patch("os.makedirs"),
+            patch("os.path.exists", return_value=True),
+            patch("subprocess.run") as mock_run,
+        ):
+            main(["start"])
+            assert mock_run.call_count == 2
+            docker_cmd = mock_run.call_args_list[1][0][0]
+            assert "--init" in docker_cmd
+            assert "--rm" in docker_cmd
 
 
 class TestWaitForProxyReady:
