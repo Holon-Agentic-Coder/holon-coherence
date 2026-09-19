@@ -80,6 +80,7 @@ def get_or_create_merged_ca_bundle(ca_cert_path: str) -> str:
     This ensures direct connections via NO_PROXY succeed without TLS failures while still trusting
     the Holon proxy for intercepted endpoints.
     """
+    ca_cert_path = os.path.abspath(ca_cert_path)
     target_dir = os.path.dirname(ca_cert_path)
     merged_path = os.path.join(target_dir, "holon-merged-ca-bundle.crt")
 
@@ -422,9 +423,11 @@ def build_proxy_env(proxy_url: str, ca_cert_path: str | None = None) -> dict[str
         "all_proxy": proxy_url,
     }
 
-    existing_no_proxy = os.environ.get("NO_PROXY") or os.environ.get("no_proxy")
-    raw_no_proxy = f"{NO_PROXY_HOSTS},{existing_no_proxy}" if existing_no_proxy else NO_PROXY_HOSTS
-    no_proxy_entries = [entry.strip() for entry in raw_no_proxy.split(",") if entry.strip()]
+    no_proxy_entries = [e.strip() for e in NO_PROXY_HOSTS.split(",") if e.strip()]
+    for var in ("NO_PROXY", "no_proxy"):
+        val = os.environ.get(var)
+        if val:
+            no_proxy_entries.extend(e.strip() for e in val.split(",") if e.strip())
     merged_no_proxy = ",".join(dict.fromkeys(no_proxy_entries))
     env["NO_PROXY"] = merged_no_proxy
     env["no_proxy"] = merged_no_proxy
@@ -449,6 +452,7 @@ def build_proxy_env(proxy_url: str, ca_cert_path: str | None = None) -> dict[str
         env["REQUESTS_CA_BUNDLE"] = merged_bundle
         env["CURL_CA_BUNDLE"] = merged_bundle
         env["NODE_EXTRA_CA_CERTS"] = merged_bundle
+        env["GIT_SSL_CAINFO"] = merged_bundle
     else:
         print(
             f"⚠️  Warning: CA certificate not found at '{ca_cert}'.\n"
@@ -513,7 +517,7 @@ def execute_interactive_process(cmd: list[str], env: dict[str, str]) -> int:
     forward_signals = [signal.SIGTERM]
     if hasattr(signal, "SIGWINCH"):
         forward_signals.append(signal.SIGWINCH)
-    if sys.stdin.isatty():
+    if sys.stdin and sys.stdin.isatty():
         with contextlib.suppress(ValueError, OSError):
             old_handlers[signal.SIGINT] = signal.signal(signal.SIGINT, signal.SIG_IGN)
     else:
@@ -810,6 +814,10 @@ def main(argv: list[str] | None = None) -> None:
         alias_parser.add_argument("agent_args", nargs=argparse.REMAINDER, help="Arguments passed to the agent")
 
     args = parser.parse_args(argv)
+
+    if not argv or args.command is None:
+        parser.print_help(sys.stderr)
+        sys.exit(1)
 
     if args.command == "init-ca":
         ca_cert, ca_key = generate_root_ca(output_dir=args.output_dir)

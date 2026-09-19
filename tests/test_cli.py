@@ -201,6 +201,7 @@ class TestProxyEnvironmentInjectionAndMergedCA:
             assert env["REQUESTS_CA_BUNDLE"] == "/mock/merged.crt"
             assert env["CURL_CA_BUNDLE"] == "/mock/merged.crt"
             assert env["NODE_EXTRA_CA_CERTS"] == "/mock/merged.crt"
+            assert env["GIT_SSL_CAINFO"] == "/mock/merged.crt"
 
     def test_proxy_routing_preserves_existing_no_proxy(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("NO_PROXY", "internal.corp.com,*.local")
@@ -215,6 +216,7 @@ class TestProxyEnvironmentInjectionAndMergedCA:
             assert "REQUESTS_CA_BUNDLE" not in env
             assert "CURL_CA_BUNDLE" not in env
             assert "NODE_EXTRA_CA_CERTS" not in env
+            assert "GIT_SSL_CAINFO" not in env
             captured = capsys.readouterr()
             assert "Warning: CA certificate not found" in captured.err
             assert "Ensure 'holon-coherence start' has been run at least once" in captured.err
@@ -238,6 +240,7 @@ class TestProxyEnvironmentInjectionAndMergedCA:
             assert env["REQUESTS_CA_BUNDLE"] == "/path/merged.crt"
             assert env["CURL_CA_BUNDLE"] == "/path/merged.crt"
             assert env["NODE_EXTRA_CA_CERTS"] == "/path/merged.crt"
+            assert env["GIT_SSL_CAINFO"] == "/path/merged.crt"
 
     def test_build_proxy_env_custom_ca_path_and_alt_fallback(self) -> None:
         def fake_exists(path: str) -> bool:
@@ -270,6 +273,7 @@ class TestProxyEnvironmentInjectionAndMergedCA:
             env = build_proxy_env("http://127.0.0.1:8888", "/nonexistent/ca.pem")
             assert "SSL_CERT_FILE" not in env
             assert "NODE_EXTRA_CA_CERTS" not in env
+            assert "GIT_SSL_CAINFO" not in env
             captured = capsys.readouterr()
             assert "Warning: CA certificate not found at '/nonexistent/ca.pem'" in captured.err
 
@@ -283,6 +287,24 @@ class TestProxyEnvironmentInjectionAndMergedCA:
         with patch("holon_coherence.cli.find_system_ca_bundle", return_value=str(sys_ca)):
             merged_path = get_or_create_merged_ca_bundle(str(holon_ca))
             assert os.path.isfile(merged_path)
+            with open(merged_path, encoding="utf-8") as f:
+                content = f.read()
+            assert "SYSTEM_ROOT_CA" in content
+            assert "HOLON_ROOT_CA" in content
+
+    def test_merged_ca_bundle_relative_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        holon_ca = tmp_path / "mitmproxy-ca-cert.pem"
+        holon_ca.write_text("-----BEGIN CERTIFICATE-----\nHOLON_ROOT_CA\n-----END CERTIFICATE-----")
+
+        sys_ca = tmp_path / "system-ca.pem"
+        sys_ca.write_text("-----BEGIN CERTIFICATE-----\nSYSTEM_ROOT_CA\n-----END CERTIFICATE-----")
+
+        monkeypatch.chdir(tmp_path)
+        with patch("holon_coherence.cli.find_system_ca_bundle", return_value=str(sys_ca)):
+            merged_path = get_or_create_merged_ca_bundle("mitmproxy-ca-cert.pem")
+            assert os.path.isabs(merged_path)
+            assert os.path.isfile(merged_path)
+            assert os.path.basename(merged_path) == "holon-merged-ca-bundle.crt"
             with open(merged_path, encoding="utf-8") as f:
                 content = f.read()
             assert "SYSTEM_ROOT_CA" in content
@@ -397,6 +419,17 @@ class TestProxyEnvironmentInjectionAndMergedCA:
         assert len(entries) == len(set(entries))
         assert "internal.corp.com" in entries
         assert "127.0.0.1" in entries
+
+    def test_no_proxy_aggregates_upper_and_lower_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("NO_PROXY", "internal.corp.com,shared.host")
+        monkeypatch.setenv("no_proxy", "local.domain,shared.host")
+        env = build_proxy_env("http://127.0.0.1:8888")
+        entries = env["NO_PROXY"].split(",")
+        assert "internal.corp.com" in entries
+        assert "local.domain" in entries
+        assert "shared.host" in entries
+        assert entries.count("shared.host") == 1
+        assert env["no_proxy"] == env["NO_PROXY"]
 
 
 class TestChildProcessExecutionAndExitCodes:
@@ -960,6 +993,13 @@ class TestCLIDispatchAndMain:
         captured = capsys.readouterr()
         assert "usage: holon-coherence run-agent" in captured.out
 
+    def test_parameterless_cli_prints_usage_to_stderr_and_exits_one(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(SystemExit) as exc:
+            main([])
+        assert exc.value.code == 1
+        captured = capsys.readouterr()
+        assert "usage: holon-coherence" in captured.err
+
     def test_runner_help_mentions_delimiter_note(self, capsys: pytest.CaptureFixture[str]) -> None:
         with pytest.raises(SystemExit) as exc:
             main(["claude", "--help"])
@@ -1008,6 +1048,7 @@ class TestCLIDispatchAndMain:
         assert exc.value.code == 0
         assert captured_env["NODE_EXTRA_CA_CERTS"] == "/mock/merged.crt"
         assert captured_env["SSL_CERT_FILE"] == "/mock/merged.crt"
+        assert captured_env["GIT_SSL_CAINFO"] == "/mock/merged.crt"
 
 
 class TestWaitForProxyReady:

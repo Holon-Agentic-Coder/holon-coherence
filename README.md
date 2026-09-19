@@ -191,7 +191,8 @@ holon-coherence claude -- --dangerously-skip-permissions
 - **Background Daemon Mode (Default)**: The proxy container starts once in detached mode and stays running across
   invocations to eliminate container startup latency.
 - **Ephemeral Teardown (`--ephemeral`)**: Pass `--ephemeral` to automatically stop and remove the proxy container when
-  the agent process exits:
+  the agent process exits. Pre-existing proxy containers are preserved when `--ephemeral` is used to avoid disrupting
+  concurrent sessions:
   ```bash
   holon-coherence agy --ephemeral -p "Run single task"
   ```
