@@ -199,7 +199,7 @@ class TestProxyEnvironmentInjectionAndMergedCA:
             assert env["SSL_CERT_FILE"] == "/mock/merged.crt"
             assert env["REQUESTS_CA_BUNDLE"] == "/mock/merged.crt"
             assert env["CURL_CA_BUNDLE"] == "/mock/merged.crt"
-            assert "NODE_EXTRA_CA_CERTS" in env
+            assert env["NODE_EXTRA_CA_CERTS"] == "/mock/merged.crt"
 
     def test_proxy_routing_preserves_existing_no_proxy(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("NO_PROXY", "internal.corp.com,*.local")
@@ -233,6 +233,35 @@ class TestProxyEnvironmentInjectionAndMergedCA:
                 content = f.read()
             assert "SYSTEM_ROOT_CA" in content
             assert "HOLON_ROOT_CA" in content
+
+    def test_merged_ca_bundle_mtime_caching(self, tmp_path: Path) -> None:
+        holon_ca = tmp_path / "mitmproxy-ca-cert.pem"
+        holon_ca.write_text("-----BEGIN CERTIFICATE-----\nHOLON_ROOT_CA\n-----END CERTIFICATE-----")
+
+        sys_ca = tmp_path / "system-ca.pem"
+        sys_ca.write_text("-----BEGIN CERTIFICATE-----\nSYSTEM_ROOT_CA\n-----END CERTIFICATE-----")
+
+        merged_path = tmp_path / "holon-merged-ca-bundle.crt"
+        merged_path.write_text("CACHED_CONTENT")
+
+        t0 = 1000000.0
+        os.utime(holon_ca, (t0, t0))
+        os.utime(sys_ca, (t0, t0))
+        os.utime(merged_path, (t0 + 100, t0 + 100))
+
+        with patch("holon_coherence.cli.find_system_ca_bundle", return_value=str(sys_ca)):
+            result = get_or_create_merged_ca_bundle(str(holon_ca))
+            assert result == str(merged_path)
+            assert merged_path.read_text() == "CACHED_CONTENT"
+
+        # When source ca_cert is newer than merged bundle, it should regenerate
+        os.utime(holon_ca, (t0 + 200, t0 + 200))
+        with patch("holon_coherence.cli.find_system_ca_bundle", return_value=str(sys_ca)):
+            result = get_or_create_merged_ca_bundle(str(holon_ca))
+            assert result == str(merged_path)
+            content = merged_path.read_text()
+            assert "SYSTEM_ROOT_CA" in content
+            assert "CACHED_CONTENT" not in content
 
     def test_find_system_ca_bundle_env_vars(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         cert_file = tmp_path / "custom-cert.pem"
@@ -593,10 +622,12 @@ class TestDockerDiagnosticsAndPortConflicts:
                 ],
             ),
             patch("holon_coherence.cli.wait_for_proxy_ready", return_value=False),
+            patch("holon_coherence.cli.stop_proxy_container") as mock_stop,
             pytest.raises(SystemExit) as exc_info,
         ):
             ensure_proxy_running(port=8080)
         assert exc_info.value.code == 1
+        mock_stop.assert_called_once()
         captured = capsys.readouterr()
         assert "out msg" in captured.err
         assert "err traceback" in captured.err
@@ -709,6 +740,14 @@ class TestProxyLifecycleAndStopCommand:
             stop_proxy_container()
         captured = capsys.readouterr()
         assert "⚠️  Failed to remove container: daemon is not running" in captured.out
+
+    def test_stop_proxy_container_no_such_container(self, capsys: pytest.CaptureFixture[str]) -> None:
+        mock_res = MagicMock(returncode=1, stderr="Error response from daemon: No such container: holon-coherence\n")
+        with patch("subprocess.run", return_value=mock_res):
+            stop_proxy_container()
+        captured = capsys.readouterr()
+        assert "✅ No active holon-coherence container found." in captured.out
+        assert "Failed to remove container" not in captured.out
 
     def test_stop_proxy_container_suppresses_os_error(self, capsys: pytest.CaptureFixture[str]) -> None:
         with patch("subprocess.run", side_effect=FileNotFoundError("docker not found")):

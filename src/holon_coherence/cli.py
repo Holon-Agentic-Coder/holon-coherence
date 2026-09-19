@@ -86,6 +86,18 @@ def get_or_create_merged_ca_bundle(ca_cert_path: str) -> str:
     if not os.path.isfile(ca_cert_path):
         return ca_cert_path
 
+    system_ca = find_system_ca_bundle()
+    if os.path.isfile(merged_path):
+        try:
+            merged_mtime = os.path.getmtime(merged_path)
+            ca_mtime = os.path.getmtime(ca_cert_path)
+            if merged_mtime >= ca_mtime and (
+                not system_ca or not os.path.isfile(system_ca) or merged_mtime >= os.path.getmtime(system_ca)
+            ):
+                return merged_path
+        except OSError:
+            pass
+
     try:
         with open(ca_cert_path, encoding="utf-8", errors="replace") as f:
             holon_cert = f.read().strip()
@@ -93,7 +105,6 @@ def get_or_create_merged_ca_bundle(ca_cert_path: str) -> str:
         return ca_cert_path
 
     system_certs = ""
-    system_ca = find_system_ca_bundle()
     if system_ca and os.path.isfile(system_ca):
         try:
             with open(system_ca, encoding="utf-8", errors="replace") as f:
@@ -365,6 +376,7 @@ def ensure_proxy_running(
         combined_logs = f"{logs_res.stdout or ''}{logs_res.stderr or ''}".strip()
         if combined_logs:
             print(f"Container logs:\n{combined_logs}", file=sys.stderr)
+        stop_proxy_container()
         sys.exit(1)
 
     return True
@@ -381,6 +393,8 @@ def stop_proxy_container() -> None:
         )
         if res.returncode == 0:
             print("✅ holon-coherence container stopped and removed.")
+        elif "no such container" in (res.stderr or "").lower():
+            print("✅ No active holon-coherence container found.")
         else:
             print(f"⚠️  Failed to remove container: {res.stderr.strip()}")
     except OSError as e:
@@ -434,7 +448,7 @@ def build_agent_env(agent_name: str, port: int) -> dict[str, str]:
         env["SSL_CERT_FILE"] = merged_bundle
         env["REQUESTS_CA_BUNDLE"] = merged_bundle
         env["CURL_CA_BUNDLE"] = merged_bundle
-        env["NODE_EXTRA_CA_CERTS"] = ca_cert
+        env["NODE_EXTRA_CA_CERTS"] = merged_bundle
     else:
         print(
             f"⚠️  Warning: CA certificate not found at '{ca_cert}'.\n"
