@@ -48,7 +48,7 @@ def find_system_ca_bundle() -> str | None:
 
     try:
         cafile = ssl.get_default_verify_paths().cafile
-        if cafile and os.path.isfile(cafile):
+        if cafile and not cafile.endswith("holon-merged-ca-bundle.crt") and os.path.isfile(cafile):
             return cafile
     except Exception:
         pass
@@ -242,19 +242,27 @@ def ensure_docker_image(image: str, rebuild: bool = False) -> None:
             stderr=subprocess.DEVNULL,
         )
         if pull_res.returncode != 0:
-            ghcr_img = f"ghcr.io/holon-agentic-coder/{image}"
-            print(f"📥 Attempting pull from {ghcr_img}...")
-            ghcr_res = subprocess.run(["docker", "pull", ghcr_img])
-            if ghcr_res.returncode != 0:
+            if "/" not in image:
+                ghcr_img = f"ghcr.io/holon-agentic-coder/{image}"
+                print(f"📥 Attempting pull from {ghcr_img}...")
+                ghcr_res = subprocess.run(["docker", "pull", ghcr_img])
+                if ghcr_res.returncode != 0:
+                    print(
+                        f"Error: Could not find or pull Docker image '{image}' or '{ghcr_img}'.\n"
+                        "Please verify your network connection or build the image locally.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+                tag_res = subprocess.run(["docker", "tag", ghcr_img, image])
+                if tag_res.returncode != 0:
+                    print(f"Error: Failed to tag Docker image '{ghcr_img}' as '{image}'.", file=sys.stderr)
+                    sys.exit(1)
+            else:
                 print(
-                    f"Error: Could not find or pull Docker image '{image}' or '{ghcr_img}'.\n"
+                    f"Error: Could not find or pull Docker image '{image}'.\n"
                     "Please verify your network connection or build the image locally.",
                     file=sys.stderr,
                 )
-                sys.exit(1)
-            tag_res = subprocess.run(["docker", "tag", ghcr_img, image])
-            if tag_res.returncode != 0:
-                print(f"Error: Failed to tag Docker image '{ghcr_img}' as '{image}'.", file=sys.stderr)
                 sys.exit(1)
 
 
@@ -286,6 +294,8 @@ def ensure_proxy_running(
             sys.exit(1)
     elif is_container_running(CONTAINER_NAME):
         if is_container_bound_to_port(port, CONTAINER_NAME):
+            if wait_for_proxy_ready(port):
+                return False
             print(
                 f"Error: A holon-coherence proxy container is running for port {port}, but is not responding.\n"
                 "Please restart it using 'holon-coherence stop' and retry.",
@@ -363,9 +373,18 @@ def ensure_proxy_running(
 def stop_proxy_container() -> None:
     """Stop and remove the holon-coherence background Docker container on demand."""
     print("🛑 Stopping and removing holon-coherence Docker container...")
-    with contextlib.suppress(OSError):
-        subprocess.run(["docker", "rm", "-f", CONTAINER_NAME], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    print("✅ holon-coherence container stopped and removed.")
+    try:
+        res = subprocess.run(
+            ["docker", "rm", "-f", CONTAINER_NAME],
+            capture_output=True,
+            text=True,
+        )
+        if res.returncode == 0:
+            print("✅ holon-coherence container stopped and removed.")
+        else:
+            print(f"⚠️  Failed to remove container: {res.stderr.strip()}")
+    except OSError as e:
+        print(f"⚠️  Failed to remove container: {e}")
 
 
 def resolve_agent_binary(agent_name: str) -> str | None:

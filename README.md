@@ -153,8 +153,25 @@ holon-coherence opencode
 # Run Inflection Pi agent
 holon-coherence pi
 
+# Pass flags directly to underlying agent CLI using '--'
+holon-coherence agy -- --help
+holon-coherence claude -- --dangerously-skip-permissions
+
 # Generic runner syntax
 holon-coherence run-agent <agent> [agent_args...]
+```
+
+#### Direct Flag Passthrough (`--`)
+
+To pass flags directly to child agent binaries without them being intercepted or parsed as runner options, use the
+standard `--` delimiter:
+
+```bash
+# Pass help flag to agent binary rather than holon-coherence runner
+holon-coherence agy -- --help
+
+# Forward agent-specific flags directly to child agent CLI
+holon-coherence claude -- --dangerously-skip-permissions
 ```
 
 #### Universal Credentials (`HOLON_AGENT_KEY`) & Native Auth Fallback

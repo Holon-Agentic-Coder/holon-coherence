@@ -273,6 +273,24 @@ class TestProxyEnvironmentInjectionAndMergedCA:
         monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(real_sys_ca))
         assert find_system_ca_bundle() == str(real_sys_ca)
 
+    def test_find_system_ca_bundle_ssl_paths_ignores_merged_bundle(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+        monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
+        monkeypatch.delenv("CURL_CA_BUNDLE", raising=False)
+        merged_file = tmp_path / "holon-merged-ca-bundle.crt"
+        merged_file.write_text("merged")
+        fallback_ca = tmp_path / "fallback-ca.pem"
+        fallback_ca.write_text("fallback")
+
+        mock_paths = MagicMock(cafile=str(merged_file))
+        with (
+            patch("ssl.get_default_verify_paths", return_value=mock_paths),
+            patch("certifi.where", return_value=str(fallback_ca)),
+        ):
+            assert find_system_ca_bundle() == str(fallback_ca)
+
     def test_merged_ca_bundle_duplicate_cert_guard(self, tmp_path: Path) -> None:
         holon_ca = tmp_path / "mitmproxy-ca-cert.pem"
         holon_ca.write_text("-----BEGIN CERTIFICATE-----\nHOLON_ROOT_CA\n-----END CERTIFICATE-----")
@@ -503,15 +521,29 @@ class TestDockerDiagnosticsAndPortConflicts:
             patch("holon_coherence.cli.is_port_in_use", return_value=False),
             patch("holon_coherence.cli.is_container_running", return_value=True),
             patch("holon_coherence.cli.is_container_bound_to_port", return_value=True),
+            patch("holon_coherence.cli.wait_for_proxy_ready", return_value=False) as mock_wait,
             pytest.raises(SystemExit) as exc_info,
         ):
             ensure_proxy_running(port=9090)
         assert exc_info.value.code == 1
+        mock_wait.assert_called_once_with(9090)
         captured = capsys.readouterr()
         assert (
             "Error: A holon-coherence proxy container is running for port 9090, but is not responding." in captured.err
         )
         assert "Please restart it using 'holon-coherence stop' and retry." in captured.err
+
+    def test_ensure_proxy_running_bound_container_becomes_ready(self) -> None:
+        with (
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", return_value=False),
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch("holon_coherence.cli.is_container_bound_to_port", return_value=True),
+            patch("holon_coherence.cli.wait_for_proxy_ready", return_value=True) as mock_wait,
+        ):
+            result = ensure_proxy_running(port=9090)
+        assert result is False
+        mock_wait.assert_called_once_with(9090)
 
     def test_port_conflict_when_container_running_on_different_port(self) -> None:
         with (
@@ -659,19 +691,31 @@ class TestProxyLifecycleAndStopCommand:
             captured = capsys.readouterr()
             assert "Agent CLI binary 'agy' not found on PATH" in captured.err
 
-    def test_stop_proxy_container_invokes_docker_rm(self) -> None:
-        with patch("subprocess.run") as mock_run:
+    def test_stop_proxy_container_invokes_docker_rm(self, capsys: pytest.CaptureFixture[str]) -> None:
+        mock_res = MagicMock(returncode=0, stderr="")
+        with patch("subprocess.run", return_value=mock_res) as mock_run:
             stop_proxy_container()
             mock_run.assert_called_once_with(
                 ["docker", "rm", "-f", CONTAINER_NAME],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
             )
+        captured = capsys.readouterr()
+        assert "✅ holon-coherence container stopped and removed." in captured.out
 
-    def test_stop_proxy_container_suppresses_os_error(self) -> None:
+    def test_stop_proxy_container_failure(self, capsys: pytest.CaptureFixture[str]) -> None:
+        mock_res = MagicMock(returncode=1, stderr="daemon is not running")
+        with patch("subprocess.run", return_value=mock_res):
+            stop_proxy_container()
+        captured = capsys.readouterr()
+        assert "⚠️  Failed to remove container: daemon is not running" in captured.out
+
+    def test_stop_proxy_container_suppresses_os_error(self, capsys: pytest.CaptureFixture[str]) -> None:
         with patch("subprocess.run", side_effect=FileNotFoundError("docker not found")):
             # Should not raise exception
             stop_proxy_container()
+        captured = capsys.readouterr()
+        assert "⚠️  Failed to remove container: docker not found" in captured.out
 
 
 class TestCLIDispatchAndMain:
@@ -879,3 +923,19 @@ class TestEnsureDockerImage:
             assert pull_call[0][0] == ["docker", "pull", "holon-coherence:latest"]
             assert pull_call[1].get("stdout") == subprocess.DEVNULL
             assert pull_call[1].get("stderr") == subprocess.DEVNULL
+
+    def test_image_pull_slash_not_prefixed_to_ghcr(self) -> None:
+        with (
+            patch(
+                "subprocess.run",
+                side_effect=[
+                    MagicMock(returncode=1),  # inspect fails
+                    MagicMock(returncode=1),  # docker pull image fails
+                ],
+            ) as mock_run,
+            patch("os.path.exists", side_effect=lambda p: not str(p).endswith("Dockerfile")),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            ensure_docker_image("custom-org/custom-img:latest", rebuild=False)
+        assert exc_info.value.code == 1
+        assert mock_run.call_count == 2
