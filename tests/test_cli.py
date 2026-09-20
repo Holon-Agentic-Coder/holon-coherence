@@ -15,6 +15,7 @@ import pytest
 from holon_coherence.cli import (
     CONTAINER_NAME,
     DEFAULT_PROXY_PORT,
+    DOCKER_BUILD_TIMEOUT_SECONDS,
     NO_PROXY_HOSTS,
     SUPPORTED_AGENTS,
     build_agent_env,
@@ -40,34 +41,34 @@ class TestExtractRunnerFlags:
     """Tests for CLI runner flag extraction."""
 
     def test_default_flags(self) -> None:
-        ephemeral, port, agent_args = extract_runner_flags(["arg1", "arg2"])
-        assert ephemeral is False
-        assert port is None
-        assert agent_args == ["arg1", "arg2"]
+        flags = extract_runner_flags(["arg1", "arg2"])
+        assert flags.ephemeral is False
+        assert flags.port is None
+        assert flags.agent_args == ["arg1", "arg2"]
 
     def test_ephemeral_flag(self) -> None:
-        ephemeral, port, agent_args = extract_runner_flags(["--ephemeral", "-p", "hello"])
-        assert ephemeral is True
-        assert port is None
-        assert agent_args == ["-p", "hello"]
+        flags = extract_runner_flags(["--ephemeral", "-p", "hello"])
+        assert flags.ephemeral is True
+        assert flags.port is None
+        assert flags.agent_args == ["-p", "hello"]
 
     def test_port_flag_separated(self) -> None:
-        ephemeral, port, agent_args = extract_runner_flags(["--port", "9090", "--model", "flash"])
-        assert ephemeral is False
-        assert port == 9090
-        assert agent_args == ["--model", "flash"]
+        flags = extract_runner_flags(["--port", "9090", "--model", "flash"])
+        assert flags.ephemeral is False
+        assert flags.port == 9090
+        assert flags.agent_args == ["--model", "flash"]
 
     def test_port_flag_equals(self) -> None:
-        ephemeral, port, agent_args = extract_runner_flags(["--port=9090", "--ephemeral", "task.py"])
-        assert ephemeral is True
-        assert port == 9090
-        assert agent_args == ["task.py"]
+        flags = extract_runner_flags(["--port=9090", "--ephemeral", "task.py"])
+        assert flags.ephemeral is True
+        assert flags.port == 9090
+        assert flags.agent_args == ["task.py"]
 
     def test_double_dash_delimiter(self) -> None:
-        ephemeral, port, agent_args = extract_runner_flags(["--ephemeral", "--", "--port", "1234"])
-        assert ephemeral is True
-        assert port is None
-        assert agent_args == ["--port", "1234"]
+        flags = extract_runner_flags(["--ephemeral", "--", "--port", "1234"])
+        assert flags.ephemeral is True
+        assert flags.port is None
+        assert flags.agent_args == ["--port", "1234"]
 
     def test_invalid_port_value(self) -> None:
         with pytest.raises(SystemExit):
@@ -94,10 +95,8 @@ class TestExtractRunnerFlags:
         assert f"Error: Port must be between 1 and 65535, got {invalid_port}." in captured.err
 
     def test_port_valid_boundary_values(self) -> None:
-        _, port1, _ = extract_runner_flags(["--port", "1"])
-        assert port1 == 1
-        _, port2, _ = extract_runner_flags(["--port=65535"])
-        assert port2 == 65535
+        assert extract_runner_flags(["--port", "1"]).port == 1
+        assert extract_runner_flags(["--port=65535"]).port == 65535
 
 
 class TestResolveAgentBinary:
@@ -1318,3 +1317,101 @@ class TestEnsureDockerImage:
             ensure_docker_image("custom-org/custom-img:latest", rebuild=False)
         assert exc_info.value.code == 1
         assert mock_run.call_count == 2
+
+    def test_docker_build_timeout_exits(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """ensure_docker_image exits 1 when docker build times out."""
+        with (
+            patch("os.path.exists", return_value=True),
+            patch(
+                "subprocess.run",
+                side_effect=subprocess.TimeoutExpired(cmd=["docker", "build"], timeout=DOCKER_BUILD_TIMEOUT_SECONDS),
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            ensure_docker_image("holon-coherence:latest", rebuild=True)
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert f"timed out after {DOCKER_BUILD_TIMEOUT_SECONDS}s" in captured.err
+
+    def test_docker_pull_timeout_exits(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """ensure_docker_image exits 1 when docker pull times out."""
+        with (
+            patch("os.path.exists", side_effect=lambda p: not str(p).endswith("Dockerfile")),
+            patch(
+                "subprocess.run",
+                side_effect=[
+                    MagicMock(returncode=1),  # inspect fails
+                    subprocess.TimeoutExpired(cmd=["docker", "pull"], timeout=DOCKER_BUILD_TIMEOUT_SECONDS),
+                ],
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            ensure_docker_image("holon-coherence:latest", rebuild=False)
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "timed out" in captured.err
+
+    def test_docker_ghcr_pull_timeout_exits(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """ensure_docker_image exits 1 when GHCR pull fallback times out."""
+        with (
+            patch("os.path.exists", side_effect=lambda p: not str(p).endswith("Dockerfile")),
+            patch(
+                "subprocess.run",
+                side_effect=[
+                    MagicMock(returncode=1),  # inspect fails
+                    MagicMock(returncode=1),  # docker pull primary fails
+                    subprocess.TimeoutExpired(cmd=["docker", "pull"], timeout=DOCKER_BUILD_TIMEOUT_SECONDS),
+                ],
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            ensure_docker_image("holon-coherence:latest", rebuild=False)
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "timed out" in captured.err
+
+    def test_docker_tag_timeout_exits(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """ensure_docker_image exits 1 when docker tag times out after successful GHCR pull."""
+        with (
+            patch("os.path.exists", side_effect=lambda p: not str(p).endswith("Dockerfile")),
+            patch(
+                "subprocess.run",
+                side_effect=[
+                    MagicMock(returncode=1),  # inspect fails
+                    MagicMock(returncode=1),  # docker pull primary fails
+                    MagicMock(returncode=0),  # docker pull ghcr succeeds
+                    subprocess.TimeoutExpired(cmd=["docker", "tag"], timeout=30),
+                ],
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            ensure_docker_image("holon-coherence:latest", rebuild=False)
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "timed out" in captured.err
+
+
+class TestEndToEndDispatch:
+    """End-to-end integration tests for CLI dispatch paths through main()."""
+
+    def test_main_agent_missing_binary_exits_one(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """main(['agy']) with no agy binary on PATH should print an error and exit 1."""
+        with (
+            patch("shutil.which", return_value=None),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main(["agy"])
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "not found on PATH" in captured.err
+
+    def test_main_run_agent_missing_binary_exits_one(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """main(['run-agent', 'claude']) with no claude binary should print an error and exit 1."""
+        with (
+            patch("shutil.which", return_value=None),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main(["run-agent", "claude"])
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "not found on PATH" in captured.err

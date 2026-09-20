@@ -12,13 +12,14 @@ import ssl
 import subprocess
 import sys
 import time
-from typing import Any
+from typing import Any, NamedTuple
 
 from holon_coherence.ca_generator import generate_root_ca
 
 DEFAULT_PROXY_PORT = 8080
 PROXY_READY_TIMEOUT_SECONDS = 15.0
 PROXY_POLL_INTERVAL_SECONDS = 0.25
+DOCKER_BUILD_TIMEOUT_SECONDS = 600
 NO_PROXY_HOSTS = "localhost,127.0.0.1,::1,169.254.169.254,api.github.com,github.com"
 CONTAINER_NAME = "holon-coherence"
 
@@ -262,22 +263,51 @@ def ensure_docker_image(image: str, rebuild: bool = False) -> None:
     dockerfile = os.path.join(repo_root, "Dockerfile")
     if os.path.exists(dockerfile):
         print(f"🔨 Building Docker image '{image}' from {dockerfile}...")
-        build_res = subprocess.run(["docker", "build", "-t", image, repo_root])
+        try:
+            build_res = subprocess.run(
+                ["docker", "build", "-t", image, repo_root],
+                timeout=DOCKER_BUILD_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            print(
+                f"Error: Docker build timed out after {DOCKER_BUILD_TIMEOUT_SECONDS}s. "
+                "Check your Docker daemon or network connection.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         if build_res.returncode != 0:
             print(f"Error: Failed to build Docker image '{image}'.", file=sys.stderr)
             sys.exit(1)
     else:
         print(f"📥 Pulling Docker image '{image}'...")
-        pull_res = subprocess.run(
-            ["docker", "pull", image],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        try:
+            pull_res = subprocess.run(
+                ["docker", "pull", image],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=DOCKER_BUILD_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            print(
+                f"Error: Docker pull timed out after {DOCKER_BUILD_TIMEOUT_SECONDS}s.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         if pull_res.returncode != 0:
             if "/" not in image:
                 ghcr_img = f"ghcr.io/holon-agentic-coder/{image}"
                 print(f"📥 Attempting pull from {ghcr_img}...")
-                ghcr_res = subprocess.run(["docker", "pull", ghcr_img])
+                try:
+                    ghcr_res = subprocess.run(
+                        ["docker", "pull", ghcr_img],
+                        timeout=DOCKER_BUILD_TIMEOUT_SECONDS,
+                    )
+                except subprocess.TimeoutExpired:
+                    print(
+                        f"Error: Docker pull from GHCR timed out after {DOCKER_BUILD_TIMEOUT_SECONDS}s.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
                 if ghcr_res.returncode != 0:
                     print(
                         f"Error: Could not find or pull Docker image '{image}' or '{ghcr_img}'.\n"
@@ -285,7 +315,17 @@ def ensure_docker_image(image: str, rebuild: bool = False) -> None:
                         file=sys.stderr,
                     )
                     sys.exit(1)
-                tag_res = subprocess.run(["docker", "tag", ghcr_img, image])
+                try:
+                    tag_res = subprocess.run(
+                        ["docker", "tag", ghcr_img, image],
+                        timeout=30,
+                    )
+                except subprocess.TimeoutExpired:
+                    print(
+                        "Error: Docker tag timed out after 30s.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
                 if tag_res.returncode != 0:
                     print(f"Error: Failed to tag Docker image '{ghcr_img}' as '{image}'.", file=sys.stderr)
                     sys.exit(1)
@@ -570,27 +610,13 @@ def execute_interactive_process(cmd: list[str], env: dict[str, str]) -> int:
     return returncode if returncode is not None else 0
 
 
-class RunnerFlags(tuple):
-    """Container for extracted runner flags maintaining tuple backward compatibility."""
+class RunnerFlags(NamedTuple):
+    """Parsed runner flags extracted from raw argv before argparse takes over."""
 
     ephemeral: bool
     port: int | None
     agent_args: list[str]
-    help_requested: bool
-
-    def __new__(
-        cls,
-        ephemeral: bool,
-        port: int | None,
-        agent_args: list[str],
-        help_requested: bool = False,
-    ) -> RunnerFlags:
-        obj = super().__new__(cls, (ephemeral, port, agent_args))
-        obj.ephemeral = ephemeral
-        obj.port = port
-        obj.agent_args = agent_args
-        obj.help_requested = help_requested
-        return obj
+    help_requested: bool = False
 
 
 def extract_runner_flags(argv: list[str]) -> RunnerFlags:
@@ -831,7 +857,10 @@ def main(argv: list[str] | None = None) -> None:
     )
     run_parser.add_argument("cmd", nargs=argparse.REMAINDER, help="Command and arguments to execute")
 
-    # Register run-agent and agent aliases in parser so --help describes them
+    # Register run-agent and agent alias subparsers so they appear in `holon-coherence --help` output.
+    # NOTE: These parsers are intentionally never dispatched here — actual agent invocation is handled
+    # by the early-return block above (before parse_args() is reached). The subparsers exist purely
+    # for documentation purposes so users can discover supported agents via --help.
     run_agent_parser = subparsers.add_parser("run-agent", help="Run a coding agent with automated background proxy")
     run_agent_parser.add_argument("agent", choices=sorted(set(SUPPORTED_AGENTS)), help="Target agent")
     run_agent_parser.add_argument(
