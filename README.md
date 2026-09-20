@@ -202,6 +202,10 @@ holon-coherence claude -- --dangerously-skip-permissions
   ```
 - **Port Allocation & Conflict Detection**: Configure the proxy port via `--port <port>` or the `HOLON_PROXY_PORT`
   environment variable (default: `8080`). Port conflicts are detected during startup with actionable guidance.
+- **Custom CA Certificate (`HOLON_CA_CERT`)**: Override the default CA certificate path used for TLS bundle merging by
+  setting `HOLON_CA_CERT=/path/to/ca.pem`. Useful in CI/CD or containerized environments where the Holon CA certificate
+  is mounted at a non-default location. Falls back to `~/.holon/proxy-ca/mitmproxy-ca-cert.pem` if unset or if the
+  specified file does not exist.
 - **Interactive TTY & Signal Forwarding**: Full interactive TTY attachment (`sys.stdin`, `sys.stdout`, `sys.stderr`)
   preserves ANSI styling, cursor controls, readline prompts, and terminal resize events (`SIGWINCH`), with clean exit
   code propagation.

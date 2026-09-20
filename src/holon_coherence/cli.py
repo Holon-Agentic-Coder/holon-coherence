@@ -398,7 +398,13 @@ def ensure_proxy_running(
     ensure_docker_image(image, rebuild=False)
 
     # Remove stopped/stale container
-    subprocess.run(["docker", "rm", "-f", CONTAINER_NAME], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    with contextlib.suppress(subprocess.TimeoutExpired, OSError):
+        subprocess.run(
+            ["docker", "rm", "-f", CONTAINER_NAME],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5.0,
+        )
 
     docker_cmd = [
         "docker",
@@ -542,7 +548,7 @@ def build_agent_env(agent_name: str, port: int) -> dict[str, str]:
     env.update(build_proxy_env(proxy_url))
 
     # Credential mapping: HOLON_AGENT_KEY -> vendor keys
-    # Invariant Rule 5: If HOLON_AGENT_KEY is omitted, runner never validates vendor keys;
+    # Invariant Rule 4: If HOLON_AGENT_KEY is omitted, runner never validates vendor keys;
     # child process transparently inherits native host auth sessions (e.g. ~/.gemini, ~/.claude.json).
     holon_key = env.get("HOLON_AGENT_KEY")
     if holon_key:
@@ -567,9 +573,23 @@ def execute_interactive_process(cmd: list[str], env: dict[str, str]) -> int:
 
     Preserves standard interactive TTY attachment (stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr)
     and terminal signal passthrough (SIGWINCH for window resizing, SIGINT/SIGTERM for interrupts).
+    Falls back to subprocess.PIPE for stdin when sys.stdin is a pseudofile (e.g. in CI or redirected contexts).
     """
+    # Determine whether sys.stdin has a real OS file descriptor (TTY or pipe).
+    # In some contexts (CI, testing, pytest capture) sys.stdin is a StringIO pseudofile whose
+    # fileno() raises io.UnsupportedOperation. Using such an object with Popen raises OSError.
+    def _real_fd(stream: Any, default: int) -> Any:
+        try:
+            return stream if (stream and stream.fileno() >= 0) else default
+        except Exception:
+            return default
+
+    stdin_fd = _real_fd(sys.stdin, subprocess.PIPE)
+    stdout_fd = _real_fd(sys.stdout, subprocess.PIPE)
+    stderr_fd = _real_fd(sys.stderr, subprocess.PIPE)
+
     try:
-        proc = subprocess.Popen(cmd, env=env, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr)
+        proc = subprocess.Popen(cmd, env=env, stdin=stdin_fd, stdout=stdout_fd, stderr=stderr_fd)
     except OSError as err:
         print(f"Error: Failed to execute '{cmd[0]}': {err}", file=sys.stderr)
         return 126

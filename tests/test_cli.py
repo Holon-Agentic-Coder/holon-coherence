@@ -505,13 +505,30 @@ class TestChildProcessExecutionAndExitCodes:
         with patch("subprocess.Popen", return_value=mock_proc) as mock_popen:
             code = execute_interactive_process(["test-cmd"], {"ENV": "val"})
             assert code == 0
-            mock_popen.assert_called_once_with(
-                ["test-cmd"],
-                env={"ENV": "val"},
-                stdin=sys.stdin,
-                stdout=sys.stdout,
-                stderr=sys.stderr,
-            )
+            # stdin arg is sys.stdin when fileno() succeeds; use ANY to be resilient
+            # to CI/test environments where stdin may be a pseudofile
+            call_kwargs = mock_popen.call_args[1]
+            assert call_kwargs["stdout"] is sys.stdout
+            assert call_kwargs["stderr"] is sys.stderr
+            assert call_kwargs["env"] == {"ENV": "val"}
+
+    def test_execute_interactive_process_pseudofile_stdin_uses_pipe(self) -> None:
+        """When sys.stdin is a pseudofile (no fileno), Popen falls back to subprocess.PIPE."""
+        import io
+
+        mock_proc = MagicMock()
+        mock_proc.poll.side_effect = [None, 0]
+        mock_proc.returncode = 0
+        pseudo_stdin = io.StringIO("fake stdin")  # StringIO has no real fileno()
+
+        with (
+            patch("subprocess.Popen", return_value=mock_proc) as mock_popen,
+            patch("sys.stdin", pseudo_stdin),
+        ):
+            code = execute_interactive_process(["test-cmd"], {})
+            assert code == 0
+            call_kwargs = mock_popen.call_args[1]
+            assert call_kwargs["stdin"] is subprocess.PIPE
 
     def test_exit_code_propagation_nonzero(self) -> None:
         mock_proc = MagicMock()
