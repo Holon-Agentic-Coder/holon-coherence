@@ -575,6 +575,7 @@ def execute_interactive_process(cmd: list[str], env: dict[str, str]) -> int:
     and terminal signal passthrough (SIGWINCH for window resizing, SIGINT/SIGTERM for interrupts).
     Falls back to subprocess.PIPE for stdin when sys.stdin is a pseudofile (e.g. in CI or redirected contexts).
     """
+
     # Determine whether sys.stdin has a real OS file descriptor (TTY or pipe).
     # In some contexts (CI, testing, pytest capture) sys.stdin is a StringIO pseudofile whose
     # fileno() raises io.UnsupportedOperation. Using such an object with Popen raises OSError.
