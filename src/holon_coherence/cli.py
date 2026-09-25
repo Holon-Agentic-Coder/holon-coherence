@@ -15,6 +15,19 @@ import time
 from typing import Any, NamedTuple
 
 from holon_coherence.ca_generator import generate_root_ca
+from holon_coherence.host_local import (
+    GATEWAY_HOSTNAME,
+    HOST_LOCAL_ENV_VAR,
+    LocalTarget,
+    PruningPlan,
+    decode_targets,
+    detect_host_addresses,
+    encode_targets,
+    expand_equivalence_class,
+    parse_local_target,
+    parse_no_proxy,
+    plan_no_proxy_pruning,
+)
 
 DEFAULT_PROXY_PORT = 8080
 PROXY_READY_TIMEOUT_SECONDS = 15.0
@@ -22,6 +35,62 @@ PROXY_POLL_INTERVAL_SECONDS = 0.25
 DOCKER_BUILD_TIMEOUT_SECONDS = 600
 NO_PROXY_HOSTS = "localhost,127.0.0.1,::1,169.254.169.254,api.github.com,github.com"
 CONTAINER_NAME = "holon-coherence"
+
+# Resolves the Docker host gateway inside the container and dials a TCP port on it.
+# Used to prove a host-local endpoint is reachable before NO_PROXY is pruned.
+_CONTAINER_GATEWAY_PROBE = (
+    "import socket,sys\n"
+    "try:\n"
+    # SECURITY: GATEWAY_HOSTNAME is a module constant (never user input); !r escaping is safe here.
+    # If GATEWAY_HOSTNAME ever becomes configurable, replace this with env/argv to prevent injection.
+    f"    infos = socket.getaddrinfo({GATEWAY_HOSTNAME!r}, None, type=socket.SOCK_STREAM)\n"
+    "except OSError:\n"
+    "    infos = []\n"
+    "if not infos:\n"
+    "    sys.stderr.write('gateway name does not resolve\\n')\n"
+    "    sys.exit(3)\n"
+    "candidates = []\n"
+    "fallback = None\n"
+    "for info in infos:\n"
+    "    host = info[4][0].strip('[]')\n"
+    "    if host.startswith('127.') or host == '::1':\n"
+    "        continue\n"
+    "    if '.' in host and host not in candidates:\n"
+    "        candidates.append(host)\n"
+    "    fallback = fallback or host\n"
+    "if fallback and fallback not in candidates:\n"
+    "    candidates.append(fallback)\n"
+    "if not candidates:\n"
+    "    sys.stderr.write('no non-loopback gateway IP found\\n')\n"
+    "    sys.exit(3)\n"
+    "port = int(sys.argv[1])\n"
+    "last_err = None\n"
+    "for ip in candidates:\n"
+    "    try:\n"
+    "        s = socket.create_connection((ip, port), timeout=3)\n"
+    "        s.close()\n"
+    "        sys.exit(0)\n"
+    "    except OSError as err:\n"
+    "        last_err = err\n"
+    "sys.stderr.write(f'failed to connect to gateway: {last_err}\\n')\n"
+    "sys.exit(1)\n"
+)
+
+
+class LocalLlmRoute(NamedTuple):
+    """A validated ``--local-llm-base`` declaration, ready to be applied to a session."""
+
+    target: LocalTarget
+    targets: tuple[LocalTarget, ...]
+    container_env_value: str
+    host_addresses: tuple[str, ...]
+    no_proxy_plan: PruningPlan
+
+    @property
+    def prunes_no_proxy(self) -> tuple[str, ...]:
+        """``NO_PROXY`` entries that must go for the proxy to see this endpoint."""
+        return self.no_proxy_plan.remove
+
 
 SUPPORTED_AGENTS = ("agy", "antigravity", "claude", "codex", "opencode", "pi")
 
@@ -338,25 +407,213 @@ def ensure_docker_image(image: str, rebuild: bool = False) -> None:
                 sys.exit(1)
 
 
+def docker_host_alias_args() -> list[str]:
+    """Flags making the Docker host reachable from inside the proxy container.
+
+    ``host-gateway`` is honoured by Docker Engine and Docker Desktop alike; without it the
+    gateway name exists only as a Docker Desktop convention and Linux containers cannot
+    resolve it at all.
+    """
+    return ["--add-host", f"{GATEWAY_HOSTNAME}:host-gateway"]
+
+
+def host_local_container_args(host_local_spec: str) -> list[str]:
+    """Environment flags passing the host-local allow list into the container."""
+    if not host_local_spec:
+        return []
+    return ["-e", f"{HOST_LOCAL_ENV_VAR}={host_local_spec}"]
+
+
+def container_host_local_spec(container_name: str = CONTAINER_NAME) -> str:
+    """Read back the host-local allow list a running proxy container was started with."""
+    try:
+        res = subprocess.run(
+            ["docker", "inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", container_name],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    for line in (res.stdout or "").splitlines():
+        if line.startswith(f"{HOST_LOCAL_ENV_VAR}="):
+            return line.split("=", 1)[1].strip()
+    return ""
+
+
+def host_local_covered(required_spec: str, existing_spec: str) -> bool:
+    """True when a container started with ``existing_spec`` already intercepts ``required_spec``."""
+    required = decode_targets(required_spec)
+    if not required:
+        return True
+    existing = decode_targets(existing_spec)
+
+    def covered(target: LocalTarget) -> bool:
+        return any(
+            candidate.host == target.host and (candidate.port is None or candidate.port == target.port)
+            for candidate in existing
+        )
+
+    return all(covered(target) for target in required)
+
+
+def probe_host_local_reachable(
+    port: int, timeout: float = 15.0, container_name: str = CONTAINER_NAME
+) -> tuple[bool, str]:
+    """Check from inside the container that the Docker host gateway answers on ``port``.
+
+    Pruning ``NO_PROXY`` turns a loopback call that works today into one that depends on the
+    container reaching the host, so it is only done once this probe succeeds.
+    """
+    for interpreter in ("python3", "python"):
+        try:
+            res = subprocess.run(
+                ["docker", "exec", container_name, interpreter, "-c", _CONTAINER_GATEWAY_PROBE, str(port)],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return False, "probe timed out"
+        except OSError as exc:
+            return False, str(exc)
+
+        if res.returncode == 0:
+            return True, ""
+        err_lower = (res.stderr or "").lower()
+        if res.returncode in (126, 127) or any(
+            needle in err_lower for needle in ("no such file", "not found", "executable file not found")
+        ):
+            continue
+        detail = (res.stderr or res.stdout or "").strip().splitlines()
+        return False, detail[-1] if detail else f"exit code {res.returncode}"
+    return False, "unreachable"
+
+
+def plan_local_llm_route(raw_base: str) -> LocalLlmRoute | None:
+    """Turn a ``--local-llm-base`` value into the route a runner session applies.
+
+    Returns ``None`` when the value cannot be parsed; callers report the failure.
+    """
+    target = parse_local_target(raw_base)
+    if target is None:
+        return None
+    host_addresses = detect_host_addresses()
+    targets = expand_equivalence_class(target, host_addresses)
+    return LocalLlmRoute(
+        target=target,
+        targets=targets,
+        container_env_value=encode_targets(targets),
+        host_addresses=host_addresses,
+        no_proxy_plan=plan_no_proxy_pruning(merge_no_proxy_values(), target, host_addresses),
+    )
+
+
+def report_local_llm_route(route: LocalLlmRoute, reachable: bool, detail: str) -> tuple[str, ...]:
+    """Print what interception means for this session and return entries to drop from ``NO_PROXY``.
+
+    When the container cannot reach the host the bypass is deliberately left in place:
+    keeping the original direct route beats routing a working call into a broken one.
+    """
+    plan = route.no_proxy_plan
+    print(
+        f"🔌 Local LLM endpoint {route.target.canonical}: proxy-side allow list "
+        f"[{route.container_env_value}] -> {GATEWAY_HOSTNAME}"
+    )
+
+    if plan.blocked_by_wildcard:
+        print(
+            "⚠️  NO_PROXY contains '*', which bypasses the proxy for everything; refusing to "
+            "rewrite it. Remove the wildcard to intercept the local endpoint.",
+            file=sys.stderr,
+        )
+        return ()
+
+    if not reachable:
+        if plan.remove:
+            print(
+                f"⚠️  Container cannot reach {route.target.canonical} via {GATEWAY_HOSTNAME} ({detail}).\n"
+                f"   Keeping NO_PROXY as-is ({', '.join(plan.remove)} retained), so the agent talks to the "
+                "endpoint directly and traffic is NOT intercepted.\n"
+                "   A server bound only to 127.0.0.1 is unreachable this way on Linux: bind it to a "
+                "non-loopback interface (e.g. OLLAMA_HOST=0.0.0.0, or 'systemctl edit ollama.service') and retry.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"⚠️  Container cannot reach {route.target.canonical} via {GATEWAY_HOSTNAME} ({detail}).\n"
+                f"   Because {route.target.canonical} is not in NO_PROXY, traffic will still be sent to the proxy "
+                "and requests may fail (502 Bad Gateway or timeout).\n"
+                "   Ensure the target server is listening and reachable from the host gateway, or add it to "
+                "NO_PROXY to bypass the proxy directly.",
+                file=sys.stderr,
+            )
+        return ()
+
+    if not plan.remove:
+        print(f"✅ {route.target.canonical} is not matched by NO_PROXY, so it is already intercepted.")
+        return ()
+
+    print(
+        f"✂️  Removing {', '.join(plan.remove)} from the agent's NO_PROXY so {route.target.canonical} "
+        "is intercepted (payload cleaning, caching, wire telemetry)."
+    )
+    print(
+        "   Other loopback traffic now transits the proxy and is forwarded to the host unmodified; "
+        "it stops working if the proxy is killed."
+    )
+    return plan.remove
+
+
 def ensure_proxy_running(
     port: int = DEFAULT_PROXY_PORT,
     image: str = "holon-coherence:latest",
+    host_local_spec: str = "",
 ) -> bool:
     """Ensure the holon-coherence optimization proxy is running in the background and healthy.
 
+    Args:
+        port: Host port the proxy is published on.
+        image: Docker image to launch when nothing healthy exists yet.
+        host_local_spec: Host-local authorities the container must be able to reach.
+
     Returns:
-        bool: True if a new container was launched, False if an existing healthy container was reused.
+        bool: True if a brand-new container was launched, False if an existing healthy container was reused
+        or recreated from an already-running container.
     """
     ok, err_msg = check_docker_daemon()
     if not ok:
         print(err_msg, file=sys.stderr)
         sys.exit(1)
 
+    was_running = False
     # Check if proxy is already healthy and listening on port
     if is_port_in_use(port):
         if is_container_running(CONTAINER_NAME) and is_container_bound_to_port(port, CONTAINER_NAME):
-            # Proxy container is running and healthy
-            return False
+            if not host_local_spec:
+                return False
+            existing_spec = container_host_local_spec()
+            if host_local_covered(host_local_spec, existing_spec):
+                # Proxy container is running and healthy, and already intercepts what we need.
+                return False
+            was_running = True
+            merged_targets = (*decode_targets(existing_spec), *decode_targets(host_local_spec))
+            host_local_spec = encode_targets(merged_targets)
+            print(
+                f"♻️  Running proxy container does not intercept {host_local_spec}; recreating it. "
+                "Other sessions sharing this proxy will briefly lose interception."
+            )
+            stop_proxy_container()
+            deadline = time.monotonic() + 10.0
+            while is_port_in_use(port) and time.monotonic() < deadline:
+                time.sleep(PROXY_POLL_INTERVAL_SECONDS)
+            if is_port_in_use(port):
+                print(
+                    f"Error: Port {port} could not be freed after stopping container.\n"
+                    "Another process may have bound to this port.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
         else:
             print(
                 f"Error: Port {port} is already in use by another process.\n"
@@ -413,6 +670,7 @@ def ensure_proxy_running(
         "--init",
         "--name",
         CONTAINER_NAME,
+        *docker_host_alias_args(),
         "-p",
         f"127.0.0.1:{port}:8080",
         "-v",
@@ -425,6 +683,9 @@ def ensure_proxy_running(
         "HOLON_IN_CONTAINER=1",
         "-e",
         "WIRE_LOG_DIR=/tmp/wire_logs",
+        "-e",
+        f"HOLON_PROXY_PORT={port}",
+        *host_local_container_args(host_local_spec),
         image,
         "start",
         "--port",
@@ -447,7 +708,7 @@ def ensure_proxy_running(
         stop_proxy_container()
         sys.exit(1)
 
-    return True
+    return not was_running
 
 
 def stop_proxy_container() -> None:
@@ -479,8 +740,27 @@ def resolve_agent_binary(agent_name: str) -> str | None:
     return None
 
 
-def build_proxy_env(proxy_url: str, ca_cert_path: str | None = None) -> dict[str, str]:
-    """Construct environment variables for proxy routing and CA bundle trust."""
+def merge_no_proxy_values(env: dict[str, str] | None = None) -> str:
+    """Combine the built-in ``NO_PROXY`` defaults with whatever the caller's environment sets."""
+    environ = os.environ if env is None else env
+    entries = [entry.strip() for entry in NO_PROXY_HOSTS.split(",") if entry.strip()]
+    for var in ("NO_PROXY", "no_proxy"):
+        value = environ.get(var)
+        if value:
+            entries.extend(entry.strip() for entry in value.split(",") if entry.strip())
+    return ",".join(dict.fromkeys(entries))
+
+
+def build_proxy_env(
+    proxy_url: str,
+    ca_cert_path: str | None = None,
+    drop_no_proxy: tuple[str, ...] = (),
+) -> dict[str, str]:
+    """Construct environment variables for proxy routing and CA bundle trust.
+
+    ``drop_no_proxy`` removes entries that would keep a declared host-local LLM endpoint
+    away from the proxy (see ``plan_no_proxy_pruning``).
+    """
     env: dict[str, str] = {
         "HTTP_PROXY": proxy_url,
         "HTTPS_PROXY": proxy_url,
@@ -490,12 +770,10 @@ def build_proxy_env(proxy_url: str, ca_cert_path: str | None = None) -> dict[str
         "all_proxy": proxy_url,
     }
 
-    no_proxy_entries = [e.strip() for e in NO_PROXY_HOSTS.split(",") if e.strip()]
-    for var in ("NO_PROXY", "no_proxy"):
-        val = os.environ.get(var)
-        if val:
-            no_proxy_entries.extend(e.strip() for e in val.split(",") if e.strip())
-    merged_no_proxy = ",".join(dict.fromkeys(no_proxy_entries))
+    merged_no_proxy = merge_no_proxy_values()
+    if drop_no_proxy:
+        dropped = {entry.strip().lower() for entry in drop_no_proxy if entry.strip()}
+        merged_no_proxy = ",".join(entry for entry in parse_no_proxy(merged_no_proxy) if entry.lower() not in dropped)
     env["NO_PROXY"] = merged_no_proxy
     env["no_proxy"] = merged_no_proxy
 
@@ -537,7 +815,11 @@ def build_proxy_env(proxy_url: str, ca_cert_path: str | None = None) -> dict[str
     return env
 
 
-def build_agent_env(agent_name: str, port: int) -> dict[str, str]:
+def build_agent_env(
+    agent_name: str,
+    port: int,
+    drop_no_proxy: tuple[str, ...] = (),
+) -> dict[str, str]:
     """Construct environment variables for the child agent subprocess.
 
     Configures proxy routing, merged CA bundle, and maps universal HOLON_AGENT_KEY
@@ -545,7 +827,7 @@ def build_agent_env(agent_name: str, port: int) -> dict[str, str]:
     """
     env = os.environ.copy()
     proxy_url = f"http://127.0.0.1:{port}"
-    env.update(build_proxy_env(proxy_url))
+    env.update(build_proxy_env(proxy_url, drop_no_proxy=drop_no_proxy))
 
     # Credential mapping: HOLON_AGENT_KEY -> vendor keys
     # Invariant Rule 4: If HOLON_AGENT_KEY is omitted, runner never validates vendor keys;
@@ -638,13 +920,15 @@ class RunnerFlags(NamedTuple):
     port: int | None
     agent_args: list[str]
     help_requested: bool = False
+    local_llm_base: str | None = None
 
 
 def extract_runner_flags(argv: list[str]) -> RunnerFlags:
-    """Extract --ephemeral, --port, and runner --help flags from arguments, preserving agent argument order."""
+    """Extract runner flags and ``--help`` from arguments, preserving agent argument order."""
     ephemeral = False
     port = None
     help_requested = False
+    local_llm_base = None
     agent_args: list[str] = []
     i = 0
     while i < len(argv):
@@ -655,8 +939,21 @@ def extract_runner_flags(argv: list[str]) -> RunnerFlags:
         elif arg in ("--help", "-h"):
             help_requested = True
             i += 1
+        elif arg == "--local-llm-base":
+            if i + 1 >= len(argv) or argv[i + 1] == "--":
+                print("Error: Option --local-llm-base requires an argument, e.g. localhost:8081.", file=sys.stderr)
+                sys.exit(1)
+            local_llm_base = argv[i + 1]
+            i += 2
+        elif arg.startswith("--local-llm-base="):
+            val = arg.split("=", 1)[1]
+            if not val:
+                print("Error: Option --local-llm-base requires an argument, e.g. localhost:8081.", file=sys.stderr)
+                sys.exit(1)
+            local_llm_base = val
+            i += 1
         elif arg == "--port":
-            if i + 1 < len(argv):
+            if i + 1 < len(argv) and argv[i + 1] != "--":
                 try:
                     port = int(argv[i + 1])
                 except ValueError:
@@ -671,6 +968,9 @@ def extract_runner_flags(argv: list[str]) -> RunnerFlags:
                 sys.exit(1)
         elif arg.startswith("--port="):
             val = arg.split("=", 1)[1]
+            if not val:
+                print("Error: Option --port requires an argument.", file=sys.stderr)
+                sys.exit(1)
             try:
                 port = int(val)
             except ValueError:
@@ -686,7 +986,7 @@ def extract_runner_flags(argv: list[str]) -> RunnerFlags:
         else:
             agent_args.append(arg)
             i += 1
-    return RunnerFlags(ephemeral, port, agent_args, help_requested=help_requested)
+    return RunnerFlags(ephemeral, port, agent_args, help_requested=help_requested, local_llm_base=local_llm_base)
 
 
 def run_agent(
@@ -694,6 +994,7 @@ def run_agent(
     agent_args: list[str],
     ephemeral: bool = False,
     port: int | None = None,
+    local_llm_base: str | None = None,
 ) -> int:
     """Launch the optimization proxy and execute the requested coding agent with full telemetry."""
     if port is not None and not (1 <= port <= 65535):
@@ -727,10 +1028,46 @@ def run_agent(
         return 1
 
     # Ensure proxy is running
-    container_started = ensure_proxy_running(port=port)
+    if local_llm_base is None:
+        env_base = os.getenv("HOLON_LOCAL_LLM_BASE")
+        if env_base:
+            local_llm_base = env_base.strip() or None
+
+    route = None
+    if local_llm_base is not None:
+        route = plan_local_llm_route(local_llm_base)
+        if route is None:
+            print(
+                f"Error: --local-llm-base '{local_llm_base}' is not a usable endpoint.\n"
+                "Expected host:port or a base URL, e.g. localhost:8081, 127.0.0.1:8081, "
+                "192.168.2.13:8081, http://localhost:11434/v1.",
+                file=sys.stderr,
+            )
+            return 1
+        if route.target.port == port:
+            print(
+                f"Error: --local-llm-base port ({route.target.port}) cannot be the same as proxy port ({port}).",
+                file=sys.stderr,
+            )
+            return 1
+
+    container_started = ensure_proxy_running(port=port, host_local_spec=route.container_env_value if route else "")
+
+    drop_no_proxy: tuple[str, ...] = ()
+    if route is not None:
+        if route.target.port is None:
+            print(
+                "⚠️  --local-llm-base without a port skips the container reachability preflight; "
+                "prefer localhost:8081 so the route can be verified before NO_PROXY is changed.",
+                file=sys.stderr,
+            )
+            reachable, detail = True, "preflight skipped (no port given)"
+        else:
+            reachable, detail = probe_host_local_reachable(route.target.port)
+        drop_no_proxy = report_local_llm_route(route, reachable, detail)
 
     # Build environment
-    child_env = build_agent_env(agent_name, port)
+    child_env = build_agent_env(agent_name, port, drop_no_proxy=drop_no_proxy)
 
     # Assemble command
     cmd = [binary_path, *agent_args]
@@ -744,13 +1081,20 @@ def run_agent(
 
 def _print_agent_help(agent_name: str) -> None:
     """Print help information for running an agent."""
-    print(f"usage: holon-coherence {agent_name} [--ephemeral] [--port PORT] [--] [agent_args ...]\n")
+    print(
+        f"usage: holon-coherence {agent_name} [--ephemeral] [--port PORT] "
+        "[--local-llm-base BASE] [--] [agent_args ...]\n"
+    )
     print(f"Run {agent_name} coding agent with automated background proxy and wire optimization.\n")
     print("positional arguments:")
     print("  agent_args            Arguments passed directly to the agent CLI\n")
     print("options:")
     print("  --ephemeral           Stop and remove the proxy container when the agent exits")
-    print(f"  --port PORT           Proxy listen port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)\n")
+    print(f"  --port PORT           Proxy listen port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)")
+    print(
+        "  --local-llm-base BASE Host-local model server (e.g. localhost:8081) to intercept\n"
+        f"                       and reroute via {GATEWAY_HOSTNAME} instead of bypassing the proxy\n"
+    )
     print("note:")
     print("  Use '--' to pass flags directly to the underlying agent (e.g. '-- --help').")
 
@@ -758,14 +1102,21 @@ def _print_agent_help(agent_name: str) -> None:
 def _print_run_agent_help() -> None:
     """Print help information for run-agent command."""
     agents_str = ", ".join(sorted(set(SUPPORTED_AGENTS)))
-    print("usage: holon-coherence run-agent <agent> [--ephemeral] [--port PORT] [--] [agent_args ...]\n")
+    print(
+        "usage: holon-coherence run-agent <agent> [--ephemeral] [--port PORT] "
+        "[--local-llm-base BASE] [--] [agent_args ...]\n"
+    )
     print("Run a coding agent with automated background proxy and wire optimization.\n")
     print("positional arguments:")
     print(f"  agent                 Target agent ({agents_str})")
     print("  agent_args            Arguments passed directly to the agent CLI\n")
     print("options:")
     print("  --ephemeral           Stop and remove the proxy container when the agent exits")
-    print(f"  --port PORT           Proxy listen port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)\n")
+    print(f"  --port PORT           Proxy listen port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)")
+    print(
+        "  --local-llm-base BASE Host-local model server (e.g. localhost:8081) to intercept\n"
+        f"                       and reroute via {GATEWAY_HOSTNAME} instead of bypassing the proxy\n"
+    )
     print("note:")
     print("  Use '--' to pass flags directly to the underlying agent (e.g. '-- --help').")
 
@@ -782,7 +1133,15 @@ def main(argv: list[str] | None = None) -> None:
             if flags.help_requested:
                 _print_agent_help(first)
                 sys.exit(0)
-            sys.exit(run_agent(first, flags.agent_args, ephemeral=flags.ephemeral, port=flags.port))
+            sys.exit(
+                run_agent(
+                    first,
+                    flags.agent_args,
+                    ephemeral=flags.ephemeral,
+                    port=flags.port,
+                    local_llm_base=flags.local_llm_base,
+                )
+            )
         elif first == "run-agent":
             if not argv[1:]:
                 _print_run_agent_help()
@@ -805,7 +1164,15 @@ def main(argv: list[str] | None = None) -> None:
                     file=sys.stderr,
                 )
                 sys.exit(1)
-            sys.exit(run_agent(agent_target, flags.agent_args[1:], ephemeral=flags.ephemeral, port=flags.port))
+            sys.exit(
+                run_agent(
+                    agent_target,
+                    flags.agent_args[1:],
+                    ephemeral=flags.ephemeral,
+                    port=flags.port,
+                    local_llm_base=flags.local_llm_base,
+                )
+            )
 
     parser = argparse.ArgumentParser(
         prog="holon-coherence",
@@ -829,6 +1196,11 @@ def main(argv: list[str] | None = None) -> None:
         type=int,
         default=default_start_port,
         help=f"Proxy listen port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)",
+    )
+    start_parser.add_argument(
+        "--local-llm-base",
+        default=os.getenv("HOLON_LOCAL_LLM_BASE"),
+        help=f"Host-local model server (e.g. localhost:8081) to intercept and route via {GATEWAY_HOSTNAME}",
     )
     start_parser.add_argument("--web", action="store_true", help="Launch mitmweb dashboard on port 8081")
     start_parser.add_argument("--web-port", type=int, default=8081, help="Web dashboard port (default: 8081)")
@@ -887,6 +1259,12 @@ def main(argv: list[str] | None = None) -> None:
     run_agent_parser.add_argument(
         "--port", type=int, default=None, help=f"Proxy port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)"
     )
+    run_agent_parser.add_argument(
+        "--local-llm-base",
+        default=None,
+        metavar="BASE",
+        help="Host-local model server endpoint to intercept and reroute via the Docker host gateway",
+    )
     run_agent_parser.add_argument("agent_args", nargs=argparse.REMAINDER, help="Arguments passed to the agent")
 
     for agent_alias in sorted(set(SUPPORTED_AGENTS)):
@@ -899,6 +1277,12 @@ def main(argv: list[str] | None = None) -> None:
         )
         alias_parser.add_argument(
             "--port", type=int, default=None, help=f"Proxy port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)"
+        )
+        alias_parser.add_argument(
+            "--local-llm-base",
+            default=None,
+            metavar="BASE",
+            help="Host-local model server endpoint to intercept and reroute via the Docker host gateway",
         )
         alias_parser.add_argument("agent_args", nargs=argparse.REMAINDER, help="Arguments passed to the agent")
 
@@ -953,8 +1337,30 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(exit_code)
 
     elif args.command == "start":
+        start_host_local_spec = os.environ.get(HOST_LOCAL_ENV_VAR, "").strip()
+        if getattr(args, "local_llm_base", None):
+            start_route = plan_local_llm_route(args.local_llm_base)
+            if start_route is None:
+                print(
+                    f"Error: --local-llm-base '{args.local_llm_base}' is not a usable endpoint.\n"
+                    "Expected host:port or a base URL, e.g. localhost:8081, 127.0.0.1:8081, "
+                    "192.168.2.13:8081, http://localhost:11434/v1.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            if start_route.target.port == args.port:
+                print(
+                    f"Error: --local-llm-base port ({start_route.target.port}) "
+                    f"cannot be the same as proxy port ({args.port}).",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            merged = (*decode_targets(start_host_local_spec), *start_route.targets)
+            start_host_local_spec = encode_targets(merged)
+
         # Inside the container the image entrypoint runs this command, so mitmproxy is launched directly
         if is_in_container():
+            os.environ[HOST_LOCAL_ENV_VAR] = start_host_local_spec
             addon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mitm_addon.py")
             tool = "mitmweb" if args.web else "mitmdump"
             tool_candidate = os.path.join(os.path.dirname(sys.executable), tool)
@@ -1000,6 +1406,7 @@ def main(argv: list[str] | None = None) -> None:
             "--init",
             "--name",
             CONTAINER_NAME,
+            *docker_host_alias_args(),
             "-p",
             f"127.0.0.1:{args.port}:8080",
             "-v",
@@ -1012,6 +1419,9 @@ def main(argv: list[str] | None = None) -> None:
             "HOLON_IN_CONTAINER=1",
             "-e",
             "WIRE_LOG_DIR=/tmp/wire_logs",
+            "-e",
+            f"HOLON_PROXY_PORT={args.port}",
+            *host_local_container_args(start_host_local_spec),
         ]
         if args.web:
             docker_cmd.extend(["-p", f"127.0.0.1:{args.web_port}:8081"])

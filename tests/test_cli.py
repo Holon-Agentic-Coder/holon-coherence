@@ -21,20 +21,29 @@ from holon_coherence.cli import (
     build_agent_env,
     build_proxy_env,
     check_docker_daemon,
+    container_host_local_spec,
+    docker_host_alias_args,
     ensure_docker_image,
     ensure_proxy_running,
     execute_interactive_process,
     extract_runner_flags,
     find_system_ca_bundle,
     get_or_create_merged_ca_bundle,
+    host_local_container_args,
+    host_local_covered,
     is_container_bound_to_port,
     is_container_running,
     main,
+    merge_no_proxy_values,
+    plan_local_llm_route,
+    probe_host_local_reachable,
+    report_local_llm_route,
     resolve_agent_binary,
     run_agent,
     stop_proxy_container,
     wait_for_proxy_ready,
 )
+from holon_coherence.host_local import HOST_LOCAL_ENV_VAR, decode_targets
 
 
 class TestExtractRunnerFlags:
@@ -77,6 +86,18 @@ class TestExtractRunnerFlags:
     def test_missing_port_argument(self) -> None:
         with pytest.raises(SystemExit):
             extract_runner_flags(["--port"])
+
+    def test_missing_port_before_delimiter_exits(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(SystemExit) as exc:
+            extract_runner_flags(["--port", "--"])
+        assert exc.value.code == 1
+        assert "Option --port requires an argument." in capsys.readouterr().err
+
+    def test_empty_port_equals_exits(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(SystemExit) as exc:
+            extract_runner_flags(["--port="])
+        assert exc.value.code == 1
+        assert "Option --port requires an argument." in capsys.readouterr().err
 
     @pytest.mark.parametrize("invalid_port", ["0", "70000"])
     def test_port_out_of_range_separated(self, invalid_port: str, capsys: pytest.CaptureFixture[str]) -> None:
@@ -1027,13 +1048,17 @@ class TestCLIDispatchAndMain:
         with patch("holon_coherence.cli.run_agent", return_value=0) as mock_run_agent, pytest.raises(SystemExit) as exc:
             main(["agy", "--ephemeral", "--port", "9090", "-p", "fix issue"])
         assert exc.value.code == 0
-        mock_run_agent.assert_called_once_with("agy", ["-p", "fix issue"], ephemeral=True, port=9090)
+        mock_run_agent.assert_called_once_with(
+            "agy", ["-p", "fix issue"], ephemeral=True, port=9090, local_llm_base=None
+        )
 
     def test_run_agent_dispatch(self) -> None:
         with patch("holon_coherence.cli.run_agent", return_value=0) as mock_run_agent, pytest.raises(SystemExit) as exc:
             main(["run-agent", "claude", "--port", "8085", "src/main.py"])
         assert exc.value.code == 0
-        mock_run_agent.assert_called_once_with("claude", ["src/main.py"], ephemeral=False, port=8085)
+        mock_run_agent.assert_called_once_with(
+            "claude", ["src/main.py"], ephemeral=False, port=8085, local_llm_base=None
+        )
 
     def test_run_agent_unsupported_agent(self) -> None:
         with pytest.raises(SystemExit) as exc:
@@ -1053,7 +1078,7 @@ class TestCLIDispatchAndMain:
             patch("holon_coherence.cli.execute_interactive_process", return_value=0),
         ):
             run_agent("codex", [])
-            mock_ensure.assert_called_once_with(port=9999)
+            mock_ensure.assert_called_once_with(port=9999, host_local_spec="")
 
     def test_port_flag_overrides_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HOLON_PROXY_PORT", "9999")
@@ -1063,7 +1088,7 @@ class TestCLIDispatchAndMain:
             patch("holon_coherence.cli.execute_interactive_process", return_value=0),
         ):
             run_agent("codex", [], port=7777)
-            mock_ensure.assert_called_once_with(port=7777)
+            mock_ensure.assert_called_once_with(port=7777, host_local_spec="")
 
     @pytest.mark.parametrize("invalid_port", ["0", "70000", "abc"])
     def test_run_agent_invalid_env_port_fallback(
@@ -1076,7 +1101,7 @@ class TestCLIDispatchAndMain:
             patch("holon_coherence.cli.execute_interactive_process", return_value=0),
         ):
             run_agent("codex", [])
-            mock_ensure.assert_called_once_with(port=DEFAULT_PROXY_PORT)
+            mock_ensure.assert_called_once_with(port=DEFAULT_PROXY_PORT, host_local_spec="")
             captured = capsys.readouterr()
             expected_warning = f"⚠️  Invalid HOLON_PROXY_PORT '{invalid_port}', falling back to {DEFAULT_PROXY_PORT}."
             assert expected_warning in captured.err
@@ -1085,25 +1110,27 @@ class TestCLIDispatchAndMain:
         with patch("holon_coherence.cli.run_agent", return_value=0) as mock_run_agent, pytest.raises(SystemExit) as exc:
             main(["run-agent", "--ephemeral", "claude", "-p", "fix issue"])
         assert exc.value.code == 0
-        mock_run_agent.assert_called_once_with("claude", ["-p", "fix issue"], ephemeral=True, port=None)
+        mock_run_agent.assert_called_once_with(
+            "claude", ["-p", "fix issue"], ephemeral=True, port=None, local_llm_base=None
+        )
 
     def test_run_agent_flexible_ordering_with_port(self) -> None:
         with patch("holon_coherence.cli.run_agent", return_value=0) as mock_run_agent, pytest.raises(SystemExit) as exc:
             main(["run-agent", "--port", "9090", "--ephemeral", "claude"])
         assert exc.value.code == 0
-        mock_run_agent.assert_called_once_with("claude", [], ephemeral=True, port=9090)
+        mock_run_agent.assert_called_once_with("claude", [], ephemeral=True, port=9090, local_llm_base=None)
 
     def test_direct_alias_help_passthrough_after_delimiter(self) -> None:
         with patch("holon_coherence.cli.run_agent", return_value=0) as mock_run_agent, pytest.raises(SystemExit) as exc:
             main(["claude", "--", "--help"])
         assert exc.value.code == 0
-        mock_run_agent.assert_called_once_with("claude", ["--help"], ephemeral=False, port=None)
+        mock_run_agent.assert_called_once_with("claude", ["--help"], ephemeral=False, port=None, local_llm_base=None)
 
     def test_run_agent_help_passthrough_after_delimiter(self) -> None:
         with patch("holon_coherence.cli.run_agent", return_value=0) as mock_run_agent, pytest.raises(SystemExit) as exc:
             main(["run-agent", "--ephemeral", "claude", "--", "--help"])
         assert exc.value.code == 0
-        mock_run_agent.assert_called_once_with("claude", ["--help"], ephemeral=True, port=None)
+        mock_run_agent.assert_called_once_with("claude", ["--help"], ephemeral=True, port=None, local_llm_base=None)
 
     def test_direct_alias_runner_help_intercept(self, capsys: pytest.CaptureFixture[str]) -> None:
         with pytest.raises(SystemExit) as exc:
@@ -1111,6 +1138,7 @@ class TestCLIDispatchAndMain:
         assert exc.value.code == 0
         captured = capsys.readouterr()
         assert "usage: holon-coherence claude" in captured.out
+        assert "[--local-llm-base BASE]" in captured.out
 
     def test_run_agent_runner_help_intercept(self, capsys: pytest.CaptureFixture[str]) -> None:
         with pytest.raises(SystemExit) as exc:
@@ -1118,6 +1146,7 @@ class TestCLIDispatchAndMain:
         assert exc.value.code == 0
         captured = capsys.readouterr()
         assert "usage: holon-coherence claude" in captured.out
+        assert "[--local-llm-base BASE]" in captured.out
 
     def test_run_agent_general_help(self, capsys: pytest.CaptureFixture[str]) -> None:
         with pytest.raises(SystemExit) as exc:
@@ -1125,6 +1154,7 @@ class TestCLIDispatchAndMain:
         assert exc.value.code == 0
         captured = capsys.readouterr()
         assert "usage: holon-coherence run-agent" in captured.out
+        assert "[--local-llm-base BASE]" in captured.out
 
     def test_run_agent_parameterless_exits_one(self, capsys: pytest.CaptureFixture[str]) -> None:
         with pytest.raises(SystemExit) as exc:
@@ -1132,6 +1162,7 @@ class TestCLIDispatchAndMain:
         assert exc.value.code == 1
         captured = capsys.readouterr()
         assert "usage: holon-coherence run-agent" in captured.out
+        assert "[--local-llm-base BASE]" in captured.out
 
     def test_parameterless_cli_prints_usage_to_stderr_and_exits_one(self, capsys: pytest.CaptureFixture[str]) -> None:
         with pytest.raises(SystemExit) as exc:
@@ -1462,3 +1493,601 @@ class TestEndToEndDispatch:
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert "not found on PATH" in captured.err
+
+
+class TestLocalLlmRunnerFlag:
+    """`--local-llm-base` must intercept a host-local model server instead of bypassing the proxy."""
+
+    HOST_IPS = ("192.168.2.13",)
+
+    def test_flag_extraction_equals_form(self) -> None:
+        flags = extract_runner_flags(["--local-llm-base=localhost:8081", "-p", "fix issue"])
+        assert flags.local_llm_base == "localhost:8081"
+        assert flags.agent_args == ["-p", "fix issue"]
+
+    def test_flag_extraction_separated_form_before_delimiter(self) -> None:
+        flags = extract_runner_flags(["--local-llm-base", "127.0.0.1:8081", "--", "--model", "qwen"])
+        assert flags.local_llm_base == "127.0.0.1:8081"
+        assert flags.agent_args == ["--model", "qwen"]
+
+    def test_flag_is_not_forwarded_to_the_agent(self) -> None:
+        flags = extract_runner_flags(["--local-llm-base", "localhost:8081"])
+        assert flags.agent_args == []
+
+    def test_base_url_value_is_accepted(self) -> None:
+        flags = extract_runner_flags(["--local-llm-base=http://localhost:11434/v1"])
+        assert flags.local_llm_base == "http://localhost:11434/v1"
+
+    def test_missing_argument_exits(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            extract_runner_flags(["--local-llm-base"])
+        assert exc_info.value.code == 1
+        assert "--local-llm-base requires an argument" in capsys.readouterr().err
+
+    def test_missing_argument_before_delimiter_exits(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            extract_runner_flags(["--local-llm-base", "--", "-p", "hi"])
+        assert exc_info.value.code == 1
+        assert "--local-llm-base requires an argument" in capsys.readouterr().err
+
+    def test_empty_equals_argument_exits(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            extract_runner_flags(["--local-llm-base="])
+        assert exc_info.value.code == 1
+        assert "--local-llm-base requires an argument" in capsys.readouterr().err
+
+    def test_main_dispatch_passes_flag_through(self) -> None:
+        with patch("holon_coherence.cli.run_agent", return_value=0) as mock_run_agent, pytest.raises(SystemExit):
+            main(["pi", "--local-llm-base", "localhost:8081", "-p", "hi"])
+        assert mock_run_agent.call_args.kwargs["local_llm_base"] == "localhost:8081"
+
+    def test_invalid_endpoint_fails_before_proxy_starts(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("holon_coherence.cli.resolve_agent_binary", return_value="/bin/pi"),
+            patch("holon_coherence.cli.ensure_proxy_running") as mock_ensure,
+        ):
+            code = run_agent("pi", [], local_llm_base="localhost:notaport")
+        assert code == 1
+        mock_ensure.assert_not_called()
+        assert "--local-llm-base" in capsys.readouterr().err
+
+    def test_route_is_passed_to_container_and_pruned_from_no_proxy(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        monkeypatch.delenv("no_proxy", raising=False)
+        monkeypatch.delenv("HOLON_PROXY_PORT", raising=False)
+        with (
+            patch("holon_coherence.cli.resolve_agent_binary", return_value="/bin/pi"),
+            patch("holon_coherence.cli.detect_host_addresses", return_value=self.HOST_IPS),
+            patch("holon_coherence.cli.ensure_proxy_running", return_value=False) as mock_ensure,
+            patch("holon_coherence.cli.probe_host_local_reachable", return_value=(True, "")),
+            patch("holon_coherence.cli.build_agent_env", return_value={}) as mock_env,
+            patch("holon_coherence.cli.execute_interactive_process", return_value=0),
+        ):
+            assert run_agent("pi", [], local_llm_base="localhost:8081") == 0
+
+        spec = decode_targets(mock_ensure.call_args.kwargs["host_local_spec"])
+        assert {target.host for target in spec} == {"localhost", "127.0.0.1", "::1", *self.HOST_IPS}
+        assert {target.port for target in spec} == {8081}
+
+        dropped = set(mock_env.call_args.kwargs["drop_no_proxy"])
+        assert {"localhost", "127.0.0.1", "::1"} <= dropped
+        assert "github.com" not in dropped
+        assert "169.254.169.254" not in dropped
+        assert "intercepted" in capsys.readouterr().out
+
+    def test_unreachable_host_keeps_the_bypass(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Pruning a working direct route into a broken proxied one is worse than bypassing."""
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        monkeypatch.delenv("no_proxy", raising=False)
+        monkeypatch.delenv("HOLON_PROXY_PORT", raising=False)
+        with (
+            patch("holon_coherence.cli.resolve_agent_binary", return_value="/bin/pi"),
+            patch("holon_coherence.cli.detect_host_addresses", return_value=self.HOST_IPS),
+            patch("holon_coherence.cli.ensure_proxy_running", return_value=False),
+            patch(
+                "holon_coherence.cli.probe_host_local_reachable",
+                return_value=(False, "Connection refused"),
+            ),
+            patch("holon_coherence.cli.build_agent_env", return_value={}) as mock_env,
+            patch("holon_coherence.cli.execute_interactive_process", return_value=0),
+        ):
+            assert run_agent("pi", [], local_llm_base="localhost:8081") == 0
+
+        assert mock_env.call_args.kwargs["drop_no_proxy"] == ()
+        captured = capsys.readouterr()
+        assert "Keeping NO_PROXY as-is" in captured.err
+        assert "NOT intercepted" in captured.err
+
+    def test_host_ip_declaration_leaves_loopback_bypass_alone(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        monkeypatch.delenv("no_proxy", raising=False)
+        monkeypatch.delenv("HOLON_PROXY_PORT", raising=False)
+        with (
+            patch("holon_coherence.cli.resolve_agent_binary", return_value="/bin/pi"),
+            patch("holon_coherence.cli.detect_host_addresses", return_value=self.HOST_IPS),
+            patch("holon_coherence.cli.ensure_proxy_running", return_value=False),
+            patch("holon_coherence.cli.probe_host_local_reachable", return_value=(True, "")),
+            patch("holon_coherence.cli.build_agent_env", return_value={}) as mock_env,
+            patch("holon_coherence.cli.execute_interactive_process", return_value=0),
+        ):
+            run_agent("pi", [], local_llm_base="192.168.2.13:8081")
+
+        assert mock_env.call_args.kwargs["drop_no_proxy"] == ()
+        assert "already intercepted" in capsys.readouterr().out
+
+    def test_wildcard_no_proxy_is_refused_not_rewritten(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setenv("NO_PROXY", "*")
+        monkeypatch.delenv("HOLON_PROXY_PORT", raising=False)
+        with (
+            patch("holon_coherence.cli.resolve_agent_binary", return_value="/bin/pi"),
+            patch("holon_coherence.cli.detect_host_addresses", return_value=self.HOST_IPS),
+            patch("holon_coherence.cli.ensure_proxy_running", return_value=False),
+            patch("holon_coherence.cli.probe_host_local_reachable", return_value=(True, "")),
+            patch("holon_coherence.cli.build_agent_env", return_value={}) as mock_env,
+            patch("holon_coherence.cli.execute_interactive_process", return_value=0),
+        ):
+            run_agent("pi", [], local_llm_base="localhost:8081")
+
+        assert mock_env.call_args.kwargs["drop_no_proxy"] == ()
+        assert "refusing to rewrite" in capsys.readouterr().err
+
+    def test_unreachable_lan_ip_reports_warning_not_success(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """When reaching a LAN IP fails, report failure even if it wasn't in NO_PROXY."""
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        monkeypatch.delenv("no_proxy", raising=False)
+        monkeypatch.delenv("HOLON_PROXY_PORT", raising=False)
+        with (
+            patch("holon_coherence.cli.resolve_agent_binary", return_value="/bin/pi"),
+            patch("holon_coherence.cli.detect_host_addresses", return_value=self.HOST_IPS),
+            patch("holon_coherence.cli.ensure_proxy_running", return_value=False),
+            patch("holon_coherence.cli.probe_host_local_reachable", return_value=(False, "exit code 3")),
+            patch("holon_coherence.cli.build_agent_env", return_value={}) as mock_env,
+            patch("holon_coherence.cli.execute_interactive_process", return_value=0),
+        ):
+            run_agent("pi", [], local_llm_base="192.168.2.13:8081")
+
+        assert mock_env.call_args.kwargs["drop_no_proxy"] == ()
+        captured = capsys.readouterr()
+        assert "Container cannot reach 192.168.2.13:8081" in captured.err
+        assert "traffic will still be sent to the proxy" in captured.err
+        assert "already intercepted" not in captured.out
+
+    def test_local_llm_base_port_collision_with_proxy_port_fails(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setenv("HOLON_PROXY_PORT", "8080")
+        with (
+            patch("holon_coherence.cli.resolve_agent_binary", return_value="/bin/pi"),
+            patch("holon_coherence.cli.detect_host_addresses", return_value=self.HOST_IPS),
+        ):
+            exit_code = run_agent("pi", [], local_llm_base="localhost:8080", port=8080)
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "cannot be the same as proxy port" in captured.err
+
+    def test_portless_local_llm_base_skips_reachability_probe(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        monkeypatch.delenv("no_proxy", raising=False)
+        monkeypatch.delenv("HOLON_PROXY_PORT", raising=False)
+        with (
+            patch("holon_coherence.cli.resolve_agent_binary", return_value="/bin/pi"),
+            patch("holon_coherence.cli.detect_host_addresses", return_value=self.HOST_IPS),
+            patch("holon_coherence.cli.ensure_proxy_running", return_value=False),
+            patch("holon_coherence.cli.probe_host_local_reachable") as mock_probe,
+            patch("holon_coherence.cli.build_agent_env", return_value={}) as mock_env,
+            patch("holon_coherence.cli.execute_interactive_process", return_value=0),
+        ):
+            run_agent("pi", [], local_llm_base="localhost")
+
+        mock_probe.assert_not_called()
+        captured = capsys.readouterr()
+        assert "without a port skips the container reachability preflight" in captured.err
+        assert "localhost" in mock_env.call_args.kwargs["drop_no_proxy"]
+
+    def test_local_llm_base_fallback_from_env_var(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setenv("HOLON_LOCAL_LLM_BASE", "localhost:8081")
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        monkeypatch.delenv("no_proxy", raising=False)
+        monkeypatch.delenv("HOLON_PROXY_PORT", raising=False)
+        with (
+            patch("holon_coherence.cli.resolve_agent_binary", return_value="/bin/pi"),
+            patch("holon_coherence.cli.detect_host_addresses", return_value=self.HOST_IPS),
+            patch("holon_coherence.cli.ensure_proxy_running", return_value=False) as mock_ensure,
+            patch("holon_coherence.cli.probe_host_local_reachable", return_value=(True, "")),
+            patch("holon_coherence.cli.build_agent_env", return_value={}),
+            patch("holon_coherence.cli.execute_interactive_process", return_value=0),
+        ):
+            run_agent("pi", [])
+
+        assert "localhost:8081" in mock_ensure.call_args.kwargs["host_local_spec"]
+
+    def test_start_command_supports_local_llm_base_flag(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        with (
+            patch("holon_coherence.cli.is_in_container", return_value=False),
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.ensure_docker_image"),
+            patch("os.makedirs"),
+            patch("os.path.exists", return_value=True),
+            patch("subprocess.run") as mock_subproc,
+        ):
+            main(["start", "--local-llm-base", "localhost:11434", "-d"])
+
+        cmd = mock_subproc.call_args_list[-1][0][0]
+        assert any("HOLON_HOST_LOCAL_HOSTS=" in arg and "localhost:11434" in arg for arg in cmd)
+        assert any("HOLON_PROXY_PORT=8080" in arg for arg in cmd)
+
+    def test_start_command_rejects_matching_proxy_and_local_llm_port(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            main(["start", "--port", "8080", "--local-llm-base", "localhost:8080"])
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Error: --local-llm-base port (8080) cannot be the same as proxy port (8080)." in captured.err
+
+    def test_start_command_does_not_mutate_host_os_environ(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv(HOST_LOCAL_ENV_VAR, raising=False)
+        with (
+            patch("holon_coherence.cli.is_in_container", return_value=False),
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.ensure_docker_image"),
+            patch("os.makedirs"),
+            patch("os.path.exists", return_value=True),
+            patch("subprocess.run"),
+        ):
+            main(["start", "--local-llm-base", "localhost:11434", "-d"])
+        assert HOST_LOCAL_ENV_VAR not in os.environ
+
+
+class TestHostLocalContainerWiring:
+    """The container must be able to resolve the host and know which authorities to reroute."""
+
+    def test_add_host_flag_shape(self) -> None:
+        assert docker_host_alias_args() == ["--add-host", "host.docker.internal:host-gateway"]
+
+    def test_allow_list_env_flag_shape(self) -> None:
+        assert host_local_container_args("localhost:8081") == ["-e", f"{HOST_LOCAL_ENV_VAR}=localhost:8081"]
+        assert host_local_container_args("") == []
+
+    def test_docker_run_includes_add_host_and_allow_list(self) -> None:
+        with (
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", return_value=False),
+            patch("holon_coherence.cli.is_container_running", return_value=False),
+            patch("os.makedirs"),
+            patch("os.path.exists", return_value=True),
+            patch(
+                "subprocess.run",
+                side_effect=[
+                    MagicMock(returncode=0),  # image inspect
+                    MagicMock(returncode=0),  # rm -f
+                    MagicMock(returncode=0),  # docker run
+                ],
+            ) as mock_run,
+            patch("holon_coherence.cli.wait_for_proxy_ready", return_value=True),
+        ):
+            assert ensure_proxy_running(port=8080, host_local_spec="localhost:8081") is True
+
+        docker_cmd = mock_run.call_args_list[2][0][0]
+        assert "--add-host" in docker_cmd
+        assert "host.docker.internal:host-gateway" in docker_cmd
+        assert "-e" in docker_cmd
+        assert f"{HOST_LOCAL_ENV_VAR}=localhost:8081" in docker_cmd
+
+    def test_start_command_also_adds_host_alias(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv(HOST_LOCAL_ENV_VAR, raising=False)
+        with (
+            patch("holon_coherence.cli.is_in_container", return_value=False),
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("os.makedirs"),
+            patch("holon_coherence.cli.generate_root_ca", return_value=("/tmp/ca.pem", "/tmp/ca.key")),
+            patch("holon_coherence.cli.ensure_docker_image"),
+            patch("subprocess.run") as mock_run,
+        ):
+            main(["start", "-d"])
+
+        docker_cmd = mock_run.call_args_list[-1][0][0]
+        assert docker_cmd[:2] == ["docker", "run"]
+        assert "host.docker.internal:host-gateway" in docker_cmd
+
+    def test_start_command_forwards_host_local_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(HOST_LOCAL_ENV_VAR, "localhost:11434")
+        monkeypatch.delenv("HOLON_PROXY_PORT", raising=False)
+        with (
+            patch("holon_coherence.cli.is_in_container", return_value=False),
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("os.makedirs"),
+            patch("holon_coherence.cli.generate_root_ca", return_value=("/tmp/ca.pem", "/tmp/ca.key")),
+            patch("holon_coherence.cli.ensure_docker_image"),
+            patch("subprocess.run") as mock_run,
+        ):
+            main(["start", "-d"])
+
+        docker_cmd = mock_run.call_args_list[-1][0][0]
+        assert f"{HOST_LOCAL_ENV_VAR}=localhost:11434" in docker_cmd
+        # The container only knows its own listen port, so the published port has to be handed over
+        # for the addon to refuse rewriting a client straight back into the proxy.
+        assert "HOLON_PROXY_PORT=8080" in docker_cmd
+
+    def test_running_container_env_is_read_back(self) -> None:
+        stdout = f"HOLON_IN_CONTAINER=1\n{HOST_LOCAL_ENV_VAR}=localhost:8081,127.0.0.1:8081\nPATH=/usr/bin\n"
+        with patch("subprocess.run", return_value=MagicMock(returncode=0, stdout=stdout, stderr="")):
+            assert container_host_local_spec() == "localhost:8081,127.0.0.1:8081"
+
+    def test_running_container_env_missing_is_empty(self) -> None:
+        with patch("subprocess.run", side_effect=OSError("docker missing")):
+            assert container_host_local_spec() == ""
+
+    def test_coverage_checks(self) -> None:
+        assert host_local_covered("", "anything:1") is True
+        assert host_local_covered("localhost:8081", "localhost:8081,127.0.0.1:8081") is True
+        assert host_local_covered("localhost:8081", "localhost:11434") is False
+        assert host_local_covered("localhost:8081", "") is False
+        assert host_local_covered("localhost:8081", "localhost") is True
+
+    def test_unfit_running_container_is_recreated(self) -> None:
+        with (
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", side_effect=[True, False, False]),
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch("holon_coherence.cli.is_container_bound_to_port", return_value=True),
+            patch("holon_coherence.cli.container_host_local_spec", return_value="localhost:11434"),
+            patch("holon_coherence.cli.stop_proxy_container") as mock_stop,
+            patch("holon_coherence.cli.detect_host_addresses", return_value=()),
+            patch("os.makedirs"),
+            patch("os.path.exists", return_value=True),
+            patch(
+                "subprocess.run",
+                side_effect=[
+                    MagicMock(returncode=0),  # image inspect
+                    MagicMock(returncode=0),  # rm -f
+                    MagicMock(returncode=0),  # docker run
+                ],
+            ) as mock_subproc,
+            patch("holon_coherence.cli.wait_for_proxy_ready", return_value=True),
+        ):
+            assert ensure_proxy_running(port=8080, host_local_spec="localhost:8081") is False
+        mock_stop.assert_called_once()
+        docker_run_cmd = mock_subproc.call_args_list[2][0][0]
+        assert "HOLON_HOST_LOCAL_HOSTS=localhost:11434,localhost:8081" in docker_run_cmd
+        assert "HOLON_PROXY_PORT=8080" in docker_run_cmd
+
+    def test_merged_no_proxy_keeps_defaults_and_caller_values(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("NO_PROXY", "internal.example")
+        merged = merge_no_proxy_values()
+        assert "localhost" in merged
+        assert "internal.example" in merged
+
+    def test_build_proxy_env_drops_pruned_entries(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        monkeypatch.delenv("no_proxy", raising=False)
+        env = build_proxy_env("http://127.0.0.1:8080", drop_no_proxy=("localhost", "127.0.0.1", "::1"))
+        entries = {entry.strip() for entry in env["NO_PROXY"].split(",") if entry.strip()}
+        assert {"localhost", "127.0.0.1", "::1"}.isdisjoint(entries)
+        assert {"github.com", "169.254.169.254"} <= entries
+        assert env["NO_PROXY"] == env["no_proxy"]
+
+    def test_unfit_running_container_fails_if_port_cannot_be_freed(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", return_value=True),
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch("holon_coherence.cli.is_container_bound_to_port", return_value=True),
+            patch("holon_coherence.cli.container_host_local_spec", return_value="localhost:11434"),
+            patch("holon_coherence.cli.stop_proxy_container") as mock_stop,
+            patch("time.sleep"),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            ensure_proxy_running(port=8080, host_local_spec="localhost:8081")
+
+        assert exc_info.value.code == 1
+        mock_stop.assert_called_once()
+        captured = capsys.readouterr()
+        assert "could not be freed after stopping container" in captured.err
+
+    def test_build_agent_env_forwards_pruning(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        monkeypatch.delenv("no_proxy", raising=False)
+        env = build_agent_env("pi", 8080, drop_no_proxy=("localhost",))
+        assert "localhost" not in {entry.strip() for entry in env["NO_PROXY"].split(",")}
+
+
+class TestProbeHostLocalReachable:
+    """Tests for probe_host_local_reachable() container execution and fallback."""
+
+    def test_probe_python3_success(self) -> None:
+        with patch("subprocess.run", return_value=MagicMock(returncode=0)) as mock_run:
+            ok, detail = probe_host_local_reachable(8081)
+            assert ok is True
+            assert detail == ""
+            cmd = mock_run.call_args[0][0]
+            assert cmd[:4] == ["docker", "exec", CONTAINER_NAME, "python3"]
+
+    def test_probe_python3_missing_falls_back_to_python(self) -> None:
+        missing_proc = MagicMock(
+            returncode=127,
+            stderr='OCI runtime exec failed: exec: "python3": executable file not found in $PATH',
+            stdout="",
+        )
+        success_proc = MagicMock(returncode=0, stderr="", stdout="")
+        with patch("subprocess.run", side_effect=[missing_proc, success_proc]) as mock_run:
+            ok, detail = probe_host_local_reachable(8081)
+            assert ok is True
+            assert detail == ""
+            assert mock_run.call_count == 2
+            assert mock_run.call_args_list[0][0][0][3] == "python3"
+            assert mock_run.call_args_list[1][0][0][3] == "python"
+
+    def test_probe_both_interpreters_missing(self) -> None:
+        missing_proc = MagicMock(
+            returncode=126,
+            stderr='OCI runtime exec failed: unable to start container process: exec: "python": not found',
+            stdout="",
+        )
+        with patch("subprocess.run", return_value=missing_proc) as mock_run:
+            ok, detail = probe_host_local_reachable(8081)
+            assert ok is False
+            assert detail == "unreachable"
+            assert mock_run.call_count == 2
+
+    def test_probe_target_refused(self) -> None:
+        fail_proc = MagicMock(
+            returncode=1,
+            stderr="Traceback (most recent call last):\nConnectionRefusedError: [Errno 111] Connection refused\n",
+            stdout="",
+        )
+        with patch("subprocess.run", return_value=fail_proc) as mock_run:
+            ok, detail = probe_host_local_reachable(8081)
+            assert ok is False
+            assert "ConnectionRefusedError" in detail
+            mock_run.assert_called_once()
+
+    def test_probe_timeout(self) -> None:
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="docker", timeout=15.0)):
+            ok, detail = probe_host_local_reachable(8081)
+            assert ok is False
+            assert detail == "probe timed out"
+
+    def test_probe_oserror(self) -> None:
+        with patch("subprocess.run", side_effect=OSError("docker daemon not found")):
+            ok, detail = probe_host_local_reachable(8081)
+            assert ok is False
+            assert "docker daemon not found" in detail
+
+    def test_probe_parameterized_container_name(self) -> None:
+        with patch("subprocess.run", return_value=MagicMock(returncode=0)) as mock_run:
+            ok, _ = probe_host_local_reachable(8081, container_name="custom-container")
+            assert ok is True
+            assert mock_run.call_args[0][0][2] == "custom-container"
+
+    def test_container_gateway_probe_filters_loopback_and_bracket_strips(self) -> None:
+        from holon_coherence.cli import _CONTAINER_GATEWAY_PROBE
+
+        assert "strip('[]')" in _CONTAINER_GATEWAY_PROBE
+        assert "127." in _CONTAINER_GATEWAY_PROBE
+        assert "::1" in _CONTAINER_GATEWAY_PROBE
+        assert "fallback" in _CONTAINER_GATEWAY_PROBE
+        assert "gateway name does not resolve" in _CONTAINER_GATEWAY_PROBE
+        assert "no non-loopback gateway IP found" in _CONTAINER_GATEWAY_PROBE
+
+    def test_container_gateway_probe_handles_gaierror(self) -> None:
+        from holon_coherence.cli import _CONTAINER_GATEWAY_PROBE
+
+        wrapper = (
+            "import sys, unittest.mock as mock\n"
+            "with mock.patch('socket.getaddrinfo', side_effect=OSError('mock DNS fail')):\n"
+            f"    exec({_CONTAINER_GATEWAY_PROBE!r})\n"
+        )
+        res = subprocess.run([sys.executable, "-c", wrapper, "8081"], capture_output=True, text=True)
+        assert res.returncode == 3
+        assert "gateway name does not resolve" in res.stderr
+
+    def test_container_gateway_probe_iterates_and_connects(self) -> None:
+        from holon_coherence.cli import _CONTAINER_GATEWAY_PROBE
+
+        wrapper = (
+            "import sys, unittest.mock as mock, socket\n"
+            "mock_infos = [\n"
+            "    (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('192.168.65.1', 0)),\n"
+            "    (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('192.168.65.2', 0)),\n"
+            "]\n"
+            "calls = []\n"
+            "def mock_conn(addr, timeout=3):\n"
+            "    assert timeout == 3\n"
+            "    calls.append(addr)\n"
+            "    if addr[0] == '192.168.65.1':\n"
+            "        raise OSError('Connection refused')\n"
+            "    return mock.MagicMock()\n"
+            "with (\n"
+            "    mock.patch('socket.getaddrinfo', return_value=mock_infos),\n"
+            "    mock.patch('socket.create_connection', side_effect=mock_conn),\n"
+            "):\n"
+            f"    exec({_CONTAINER_GATEWAY_PROBE!r})\n"
+        )
+        res = subprocess.run([sys.executable, "-c", wrapper, "8081"], capture_output=True, text=True)
+        assert res.returncode == 0
+
+
+class TestPlanAndReportLocalLlmRoute:
+    """Unit tests for plan_local_llm_route and report_local_llm_route."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_host_addrs(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("holon_coherence.cli.detect_host_addresses", lambda: ("192.168.2.13",))
+
+    def test_plan_local_llm_route_valid_and_invalid(self) -> None:
+        route = plan_local_llm_route("localhost:8081")
+        assert route is not None
+        assert route.target.canonical == "localhost:8081"
+        assert route.target.port == 8081
+        assert "localhost:8081" in route.container_env_value
+
+        route_portless = plan_local_llm_route("localhost")
+        assert route_portless is not None
+        assert route_portless.target.canonical == "localhost"
+        assert route_portless.target.port is None
+
+        assert plan_local_llm_route("localhost:") is None
+        assert plan_local_llm_route("localhost:notaport") is None
+        assert plan_local_llm_route("://x") is None
+
+    def test_report_local_llm_route_reachable_with_pruning(self, capsys: pytest.CaptureFixture[str]) -> None:
+        route = plan_local_llm_route("localhost:8081")
+        assert route is not None
+        dropped = report_local_llm_route(route, reachable=True, detail="ok")
+        assert len(dropped) > 0
+        captured = capsys.readouterr()
+        assert "Removing" in captured.out
+        assert "is intercepted" in captured.out
+
+    def test_report_local_llm_route_unreachable_with_pruning(self, capsys: pytest.CaptureFixture[str]) -> None:
+        route = plan_local_llm_route("localhost:8081")
+        assert route is not None
+        dropped = report_local_llm_route(route, reachable=False, detail="connection refused")
+        assert dropped == ()
+        captured = capsys.readouterr()
+        assert "Container cannot reach localhost:8081" in captured.err
+        assert "Keeping NO_PROXY as-is" in captured.err
+        assert "retained" in captured.err
+
+    def test_report_local_llm_route_unreachable_without_pruning(self, capsys: pytest.CaptureFixture[str]) -> None:
+        # 192.168.2.13:8081 is not in default NO_PROXY, so plan.remove is empty
+        route = plan_local_llm_route("192.168.2.13:8081")
+        assert route is not None
+        dropped = report_local_llm_route(route, reachable=False, detail="gateway name does not resolve")
+        assert dropped == ()
+        captured = capsys.readouterr()
+        assert "Container cannot reach 192.168.2.13:8081" in captured.err
+        assert "retained" not in captured.err
+        assert "already intercepted" not in captured.out
+
+    def test_report_local_llm_route_reachable_without_pruning(self, capsys: pytest.CaptureFixture[str]) -> None:
+        route = plan_local_llm_route("192.168.2.13:8081")
+        assert route is not None
+        dropped = report_local_llm_route(route, reachable=True, detail="ok")
+        assert dropped == ()
+        captured = capsys.readouterr()
+        assert "already intercepted" in captured.out
+
+    def test_report_local_llm_route_wildcard_blocked(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setenv("NO_PROXY", "*")
+        route = plan_local_llm_route("localhost:8081")
+        assert route is not None
+        dropped = report_local_llm_route(route, reachable=True, detail="ok")
+        assert dropped == ()
+        captured = capsys.readouterr()
+        assert "NO_PROXY contains '*'" in captured.err
