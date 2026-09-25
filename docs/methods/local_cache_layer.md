@@ -216,5 +216,5 @@ The output confirms:
   rm -f todo/cache/llm_cache.db*
   ```
 - **Semantic False Positives**: Setting `similarity_threshold` too low ($<0.75$) may cause prompts with subtle
-  differences (e.g., different file names) to incorrectly return cached code for the wrong file. Maintain threshold
-  $\ge 0.85$.
+  differences (e.g., different file names) to incorrectly return cached code for the wrong file. Maintain threshold $\ge
+  0.85$.

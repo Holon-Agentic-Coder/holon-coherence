@@ -424,8 +424,8 @@ _(with denominator guard: defaults to $0.0\%$ if $\text{Tokens}_{\text{raw}} = 0
 #### What to Measure:
 
 1. **Exact Cache Hit Rate**: Percentage of requests served directly from SQLite without outbound network calls.
-2. **Semantic Similarity Hit Rate**: Count of queries matched via Jaccard/embedding similarity above threshold
-   ($> 0.85$).
+2. **Semantic Similarity Hit Rate**: Count of queries matched via Jaccard/embedding similarity above threshold ($>
+   0.85$).
 3. **Short-Circuited Token Savings**: Cumulative API prompt and completion tokens avoided ($100\%$ discount on hits).
 4. **Staleness / Error Rate**: Frequency of cache invalidations or faulty tool actions caused by replaying previous
    responses.
@@ -563,14 +563,14 @@ _(with denominator guard: defaults to $0.0$ if $\sum \text{Tokens}_{\text{memory
 _Note on Ephemeral vs Persistent Context Overhead_: In multi-turn chat architectures, prompt context grows monotonically
 ($O(N)$ or $O(N^2)$ prompt accumulation), making turns saved toward the end of an execution trajectory yield
 significantly higher token reductions than early or average turns. Because $\sum \text{Tokens}_{\text{with\_memory}}$
-already incorporates the injected memory tokens present in the trajectory's prompts, defining Net Tokens Saved as
-$\sum \text{Tokens}_{\text{cold\_start}} - \sum \text{Tokens}_{\text{with\_memory}}$ avoids double-counting the memory
+already incorporates the injected memory tokens present in the trajectory's prompts, defining Net Tokens Saved as $\sum
+\text{Tokens}_{\text{cold\_start}} - \sum \text{Tokens}_{\text{with\_memory}}$ avoids double-counting the memory
 overhead. Meanwhile, Token ROI measures the efficiency ratio of net tokens saved per injected memory token.
 Additionally, when episodic memories are injected ephemerally (retrieved on-demand for a single turn or tool execution),
 $\sum \text{Tokens}_{\text{memory\_injected}}$ is incurred only once. Conversely, if injected into persistent system
-prompts or Turn-0 context, the memory tokens recur across all subsequent turns
-($N \times \text{Tokens}_{\text{memory\_injected}}$) unless amortized by provider prompt caching. The cumulative
-trajectory formula directly captures this distinction without relying on imprecise per-turn averages.
+prompts or Turn-0 context, the memory tokens recur across all subsequent turns ($N \times
+\text{Tokens}_{\text{memory\_injected}}$) unless amortized by provider prompt caching. The cumulative trajectory formula
+directly captures this distinction without relying on imprecise per-turn averages.
 
 #### Instrumentation:
 
@@ -593,7 +593,7 @@ trajectory formula directly captures this distinction without relying on impreci
 2. **Subagent Context Compression**: Token size of raw executor tool logs vs compressed summary returned to the
    architect.
 3. **Composite Financial Cost**: Total cost per completed task under Ringer vs a monolithic single-agent setup.
-4. **Trajectory Wall-Clock Time ($T_{\text{wall}}$)**: Total elapsed execution time across the trajectory to evaluate
+4. **Trajectory Wall-Clock Time ($T\_{\text{wall}}$)**: Total elapsed execution time across the trajectory to evaluate
    parallel subagent concurrency speedups versus inter-agent coordination overhead.
 
 #### Measurement Formula:
@@ -623,8 +623,8 @@ and internal reasoning/thinking tokens (e.g. provider `thinking` blocks or
 
 To ensure statistical rigor and eliminate non-deterministic path variance across frontier LLM trajectories (such as
 differing exploration paths or tool call sequences), benchmark evaluations must fix `temperature: 0.0`, configure a
-deterministic seed parameter (e.g., `seed: 42` for providers supporting deterministic sampling controls), and execute
-$N \ge 3$ iterations per task suite with workspace state resetting (`git clean -fdx` or sandbox container
+deterministic seed parameter (e.g., `seed: 42` for providers supporting deterministic sampling controls), and execute $N
+\ge 3$ iterations per task suite with workspace state resetting (`git clean -fdx` or sandbox container
 re-initialization) between runs. The unified scorecard reports sample mean values ($\mu$) and standard deviations
 ($\sigma$) across both baseline (unoptimized) and fully optimized runs on an identical standard task (e.g., executing a
 multi-file refactoring or bug fix). In addition to prompt tokens, cumulative output tokens are tracked explicitly to
@@ -800,8 +800,8 @@ To prevent ambiguity, benchmark evaluation separates telemetry into three distin
 2. **Per-Method Efficacy Breakdown**:
    - Each of the 6 token reduction techniques targets a distinct point of the agentic execution lifecycle and is
      measured with its own dedicated primary metric:
-     - **Method 1: Context Cleaning**: Tool output redundancy pruned (bytes/tokens omitted) and context slope
-       ($O(N^2) \to O(N)$). Directly reduces prompt tokens sent upstream in multi-turn history.
+     - **Method 1: Context Cleaning**: Tool output redundancy pruned (bytes/tokens omitted) and context slope ($O(N^2)
+       \to O(N)$). Directly reduces prompt tokens sent upstream in multi-turn history.
      - **Method 2: Hybrid & Semantic Local Cache**: Local cache short-circuits (calls) and zero-token turns served.
        Directly avoids invoking upstream LLM APIs entirely (0 tokens, $0.00 cost).
      - **Method 3: Upstream Prompt Cache Optimisation**: Provider prompt cache hit rate
@@ -809,9 +809,9 @@ To prevent ambiguity, benchmark evaluation separates telemetry into three distin
        rates (~90% off) for cached prefix tokens.
      - **Method 4: RAG Codebase Indexer**: Turn-0 prompt token size and exploratory search tool calls. Directly prevents
        massive whole-repository context dumping at session start.
-     - **Method 5: OpenBrain Memory Layer**: Trajectory turns saved
-       ($\Delta \text{Turns} = \text{Turns}_{\text{cold\_start}} - \text{Turns}_{\text{with\_memory}}$) and error
-       avoidance. Directly eliminates redundant trial-and-error reasoning turns.
+     - **Method 5: OpenBrain Memory Layer**: Trajectory turns saved ($\Delta \text{Turns} =
+       \text{Turns}_{\text{cold\_start}} - \text{Turns}_{\text{with\_memory}}$) and error avoidance. Directly eliminates
+       redundant trial-and-error reasoning turns.
      - **Method 6: Ringer Framework**: Architect / Executor token split and subagent tool output compression ratio.
        Directly shifts execution volume from Tier 1 frontier models to Tier 2 lightweight models.
 
@@ -984,8 +984,8 @@ gantt
      hits from distorting baseline measurements.
    - **Workspace Pristine State Reset**: Mandate resetting workspace state between benchmark iterations (via
      `git clean -fdx` or sandbox container re-initialization) to guarantee that each run begins from a pristine
-     repository state without inheriting modified files from earlier turns, ensuring statistical independence across
-     $N \ge 3$ iterations.
+     repository state without inheriting modified files from earlier turns, ensuring statistical independence across $N
+     \ge 3$ iterations.
    - **Empirical Metrics & Guardrail Verification**: Execute $N \ge 3$ iterations at fixed `temperature: 0.0` with
      `seed: 42`, extract exact provider usage token counts, aggregate mean ($\mu$) and standard deviation ($\sigma$)
      metrics, verify the task success rate guardrail by evaluating sandbox test execution exit codes (`pytest`
