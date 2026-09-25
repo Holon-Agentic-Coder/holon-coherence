@@ -1249,6 +1249,36 @@ class TestCLIDispatchAndMain:
             assert "--init" in docker_cmd
             assert "--rm" in docker_cmd
 
+    def test_start_command_rejects_removed_native_flag(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """The host-mitmproxy escape hatch was removed; it must not be silently accepted."""
+        with pytest.raises(SystemExit) as exc_info:
+            main(["start", "--native"])
+        assert exc_info.value.code == 2
+        assert "--native" in capsys.readouterr().err
+
+    def test_in_container_start_still_launches_mitmproxy_directly(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The Dockerfile ENTRYPOINT runs `holon-coherence start --port 8080` inside the container.
+
+        That is the only reason the direct-mitmproxy branch exists now that --native is gone, so it
+        must keep working without touching Docker.
+        """
+        launched: list[list[str]] = []
+
+        def fake_run(cmd, *args, **kwargs):
+            launched.append(list(cmd))
+            return MagicMock(returncode=0)
+
+        monkeypatch.setattr("holon_coherence.cli.is_in_container", lambda: True)
+        with patch("subprocess.run", side_effect=fake_run):
+            main(["start", "--port", "8080"])
+
+        assert len(launched) == 1, "no Docker command may run inside the container"
+        cmd = launched[0]
+        assert cmd[0].endswith("mitmdump")
+        assert "-s" in cmd
+        assert cmd[-2:] == ["--listen-port", "8080"]
+        assert "mitm_addon.py" in cmd[cmd.index("-s") + 1]
+
 
 class TestWaitForProxyReady:
     """Tests for wait_for_proxy_ready polling and fail-fast container exit handling."""
