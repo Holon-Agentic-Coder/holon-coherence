@@ -837,9 +837,6 @@ def main(argv: list[str] | None = None) -> None:
         "--image", default="holon-coherence:latest", help="Docker image tag (default: holon-coherence:latest)"
     )
     start_parser.add_argument("--build", action="store_true", help="Rebuild Docker image before starting")
-    start_parser.add_argument(
-        "--native", action="store_true", help="Run natively using host mitmproxy instead of Docker"
-    )
 
     # Stop proxy container
     subparsers.add_parser("stop", help="Stop and remove running holon-coherence Docker container")
@@ -956,8 +953,8 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(exit_code)
 
     elif args.command == "start":
-        # If running inside container or explicitly requested --native, launch mitmproxy directly
-        if is_in_container() or args.native:
+        # Inside the container the image entrypoint runs this command, so mitmproxy is launched directly
+        if is_in_container():
             addon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mitm_addon.py")
             tool = "mitmweb" if args.web else "mitmdump"
             tool_candidate = os.path.join(os.path.dirname(sys.executable), tool)

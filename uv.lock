@@ -426,11 +426,6 @@ dependencies = [
     { name = "cryptography" },
 ]
 
-[package.optional-dependencies]
-native = [
-    { name = "mitmproxy" },
-]
-
 [package.dev-dependencies]
 dev = [
     { name = "mitmproxy" },
@@ -440,11 +435,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "cryptography", specifier = "==48.0.1" },
-    { name = "mitmproxy", marker = "extra == 'native'", specifier = "==12.2.3" },
-]
-provides-extras = ["native"]
+requires-dist = [{ name = "cryptography", specifier = "==48.0.1" }]
 
 [package.metadata.requires-dev]
 dev = [
