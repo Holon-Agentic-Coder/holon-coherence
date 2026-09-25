@@ -21,6 +21,13 @@ except ImportError:
     ctx = None
     http = None
 
+from holon_coherence.host_local import (
+    GATEWAY_HOSTNAME,
+    in_container,
+    resolve_gateway_address,
+    rewrite_connection,
+    targets_from_env,
+)
 from holon_coherence.hybrid_cache import HybridCacheStore
 from holon_coherence.payload_cleaner import CleaningResult, JSONContextCleaner
 
@@ -28,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 WIRE_LOG_DIR = os.getenv("WIRE_LOG_DIR", "todo/mitm_wire_logs")
 CACHE_DIR = os.getenv("CACHE_DIR", os.path.expanduser("~/.holon/cache"))
+DEFAULT_PROXY_LISTEN_PORT = 8080
 
 _MAX_SSE_BUFFER_BYTES = 50 * 1024 * 1024
 
@@ -979,10 +987,104 @@ class MitmproxyAddon:
         self.wire_log_dir = wire_log_dir or os.getenv("WIRE_LOG_DIR", WIRE_LOG_DIR)
         self.total_requests = 0
         self.cache_hits = 0
+        self._gateway_ip: str | None = None
+        self._warned_gateway = False
 
     def done(self) -> None:
         """Called when mitmproxy is shutting down to flush in-flight logs."""
         shutdown_wire_logs(wait=True, timeout=5.0)
+
+    def _proxy_own_ports(self) -> tuple[int, ...]:
+        """Ports the proxy itself listens on, which must never be rewritten onto the gateway.
+
+        Rewriting them would dial the proxy's own published mapping and loop. In container mode,
+        dialing the host gateway reaches the host, so only the host-published port
+        (HOLON_PROXY_PORT, defaulting to DEFAULT_PROXY_LISTEN_PORT) constitutes a self-loop hazard.
+        Internal container listen ports (e.g. 8080 inside the container) must not be treated as
+        host-published ports.
+        """
+        ports: list[int] = []
+        env_port = os.getenv("HOLON_PROXY_PORT")
+        if env_port:
+            with contextlib.suppress(ValueError):
+                parsed = int(env_port)
+                if 1 <= parsed <= 65535:
+                    ports.append(parsed)
+
+        if in_container():
+            return tuple(dict.fromkeys(ports)) or (DEFAULT_PROXY_LISTEN_PORT,)
+
+        with contextlib.suppress(Exception):
+            if ctx is not None and getattr(ctx, "options", None) is not None:
+                for name in ("listen_port", "web_port"):
+                    value = getattr(ctx.options, name, None)
+                    if isinstance(value, int) and value > 0:
+                        ports.append(value)
+        return tuple(dict.fromkeys(ports)) or (DEFAULT_PROXY_LISTEN_PORT,)
+
+    def _resolve_gateway(self) -> str | None:
+        """Resolve the Docker host gateway and cache successful resolutions.
+
+        If resolution fails (e.g. transient container DNS hiccup), do not permanently
+        latch None so subsequent requests can retry.
+        """
+        if self._gateway_ip is not None:
+            return self._gateway_ip
+        ip = resolve_gateway_address()
+        if ip is not None:
+            self._gateway_ip = ip
+        return ip
+
+    def server_connect(self, data: Any) -> None:
+        """Route host-local LLM endpoints through the Docker host gateway.
+
+        Inside the container ``localhost`` / ``127.0.0.1`` resolve to the container itself
+        and the host's LAN address is unroutable from the Docker Desktop VM, so a
+        request the agent addressed at its own machine (Ollama, vMLX, LM Studio, vLLM)
+        would die with 502 or a timeout. Only loopback and authorities explicitly declared
+        via ``HOLON_HOST_LOCAL_HOSTS`` are rewritten; anything else is left alone so a
+        genuinely remote peer on the LAN is never hijacked onto the host.
+
+        Rewriting the dial address leaves ``flow.request`` -- and therefore the wire logs
+        and token telemetry -- reporting the authority the agent actually asked for.
+        """
+        if not in_container():
+            return
+        targets = targets_from_env()
+        if not targets:
+            return
+
+        server = getattr(data, "server", None)
+        address = getattr(server, "address", None) if server is not None else None
+        original = tuple(address) if address else None
+
+        decision = rewrite_connection(data, targets, self._resolve_gateway(), self._proxy_own_ports())
+        if decision.should_rewrite and decision.address is not None and original:
+            log_telemetry(
+                f"holon: host-local endpoint {original[0]}:{original[1]} -> "
+                f"{decision.address[0]}:{decision.address[1]} ({GATEWAY_HOSTNAME}, {decision.reason})"
+            )
+            return
+
+        if decision.reason == "proxy-own-port":
+            if original:
+                log_telemetry(
+                    f"holon: BLOCKED connection to proxy's own port {original[0]}:{original[1]} "
+                    "to prevent self-loop dialing"
+                )
+            server = getattr(data, "server", None)
+            if server is not None and hasattr(server, "error"):
+                server.error = "Connection to proxy's own port blocked"
+            return
+
+        if decision.reason == "gateway-unresolved" and not self._warned_gateway:
+            self._warned_gateway = True
+            log_telemetry(
+                "holon: WARNING host-local LLM traffic needs the Docker host gateway, but "
+                f"'{GATEWAY_HOSTNAME}' does not resolve inside this container. Restart the proxy so it is "
+                "created with --add-host=host.docker.internal:host-gateway (Linux), or bind the model "
+                "server to a non-loopback interface."
+            )
 
     def _dump_flow_transaction(
         self,

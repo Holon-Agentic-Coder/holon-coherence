@@ -210,6 +210,59 @@ holon-coherence claude -- --dangerously-skip-permissions
   preserves ANSI styling, cursor controls, readline prompts, and terminal resize events (`SIGWINCH`), with clean exit
   code propagation.
 
+#### Host-Local Model Servers (`--local-llm-base`)
+
+A model server on your own machine (Ollama, vMLX, LM Studio, vLLM) is unreachable through a containerized proxy in two
+separate ways: the runner's default `NO_PROXY` contains `localhost`, so the agent never asks the proxy at all, and even
+when it does, `localhost` resolves to the container and the host's LAN address is unroutable from the Docker Desktop VM.
+Declare the endpoint and both are handled:
+
+```bash
+holon-coherence pi --local-llm-base=localhost:11434 -- -p "Summarize this repo" --model=ollama/llama3
+holon-coherence agy --local-llm-base=http://127.0.0.1:11434/v1 -- -p "Run single task" --model=ollama/llama3
+
+# or configure via environment variable:
+export HOLON_LOCAL_LLM_BASE=localhost:11434
+holon-coherence pi -- -p "Summarize this repo" --model=ollama/llama3
+```
+
+> [!NOTE] `--local-llm-base` (or environment variable `HOLON_LOCAL_LLM_BASE`) configures **proxy routing, container
+> gateway dialing and `NO_PROXY` pruning** only. It does not point the agent at the model: you still pass the agent's
+> own model arguments (`--model`, `OPENAI_BASE_URL`, or the agent's config file) so its client library targets that
+> endpoint. The flag decides what the proxy does with the requests that endpoint generates.
+
+- **One endpoint, every spelling**: `localhost:11434`, `127.0.0.1:11434`, `[::1]:11434` and the host's own LAN address
+  are treated as the same machine and are all routed to `host.docker.internal:<port>` inside the container, preserving
+  the port. `--local-llm-base` accepts `host:port` or a whole base URL.
+- **Interception, not bypass**: the matching `NO_PROXY` entries are removed from the agent's environment so requests
+  reach the proxy and receive payload cleaning, response caching and wire telemetry. Requests keep their original
+  authority in the wire logs (only the dial target changes), so `endpoint` still reads
+  `http://localhost:11434/v1/chat/completions`.
+- **Never hijacks a real peer**: only loopback plus the declared address (and the host's own detected addresses) are
+  rewritten. Other RFC1918 hosts, public endpoints and link-local addresses are left untouched, so a genuinely remote
+  inference box on the LAN cannot be silently redirected onto the host. The port the proxy itself is published on is
+  also never rewritten -- do not run the model server on the proxy port.
+- **Verified before it changes anything**: pruning happens only after the proxy container proves it can dial the
+  endpoint through the host gateway. If it cannot, `NO_PROXY` is left alone and the CLI prints why -- a working direct
+  call is preferred over a broken proxied one. A server bound only to `127.0.0.1` (Ollama's default on Linux) needs
+  `OLLAMA_HOST=0.0.0.0` (or `systemctl edit ollama.service`) to become interceptable that way.
+- **Shared proxy**: the allow list is part of the container's environment. When a running container does not cover a
+  newly required endpoint, it is recreated with the union of existing and new targets. Use `--ephemeral` when running
+  concurrent isolated sessions against different endpoints.
+- **Standalone proxy**: `holon-coherence start` accepts `--local-llm-base` directly on the CLI, reads the fallback
+  endpoint from `HOLON_LOCAL_LLM_BASE`, or reads the allow list from `HOLON_HOST_LOCAL_HOSTS`:
+  ```bash
+  holon-coherence start --local-llm-base localhost:11434
+  # or via fallback environment variable:
+  HOLON_LOCAL_LLM_BASE=localhost:11434 holon-coherence start
+  # or via raw container allow list:
+  HOLON_HOST_LOCAL_HOSTS="localhost:11434,127.0.0.1:11434" holon-coherence start
+  ```
+  Nothing prunes `NO_PROXY` for you in this mode, because no runner is launching the agent: your shell's `NO_PROXY` must
+  not match the local endpoint (drop `localhost` / `127.0.0.1` from it) or the host client bypasses the proxy entirely.
+  Note also that `start --web` publishes the dashboard on port 8081, so a model server on 8081 needs a different
+  `--web-port` or a different server port.
+
 ---
 
 ### 4. Alternative: Direct Docker Invocation
