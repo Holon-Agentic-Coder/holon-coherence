@@ -34,7 +34,15 @@ use-only-tar-bz2: false
 ## Reusable Actions
 
 - `.github/actions/docker-pull`: Reusable composite action to pull images from GHCR mirror with automatic fallback to
-  public upstream registry and local re-tagging.
+  public upstream registry and local re-tagging. Note: Workflows using this action require `packages: write` permissions
+  to push images to the GHCR mirror on fallback.
+
+  ```yaml
+  - uses: ./.github/actions/docker-pull
+    with:
+      image_name: mitmproxy/mitmproxy:12.2.3
+      github_token: ${{ secrets.GITHUB_TOKEN }}
+  ```
 
 ## Standards Alignment
 
