@@ -31,5 +31,12 @@ The `setup-miniconda` action includes:
 use-only-tar-bz2: false
 ```
 
-This setting allows Conda to use both the `.conda` and `.tar.bz2` package formats from `conda-forge`. This ensures
-modern packages like `uv` resolve quickly and reliably across both `ubuntu-latest` and `macos-latest`.
+## Reusable Actions
+
+- `.github/actions/docker-pull`: Reusable composite action to pull images from GHCR mirror with automatic fallback to
+  public upstream registry and local re-tagging.
+
+## Standards Alignment
+
+All workflows in this repository conform to the standard Holon modular CI/CD architecture derived from
+[`agentic-knowledge-base/.github`](https://github.com/thomashan/agentic-knowledge-base/tree/main/.github).

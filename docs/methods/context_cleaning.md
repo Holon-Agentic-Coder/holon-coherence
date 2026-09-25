@@ -45,19 +45,17 @@ It stores known hashes in `seen_content_hashes: dict[hash, (turn_idx, tool_use_i
   ($\text{hash}_{\text{T5}} = \text{hash}_{\text{T1}}$). Because the content is identical, the older historical turn is
   replaced with a structural tombstone pointing to Turn 1.
 - **File Modified**: If the agent edits `utils.py` in Turn 3 and re-runs `cat utils.py` in Turn 4, the output contains
-  the new lines of code. Its SHA-256 hash is completely different
-  ($\text{hash}_{\text{T4}} \neq \text{hash}_{\text{T1}}$). The cleaner recognizes $\text{hash}_{\text{T4}}$ as a new
-  state, records it as a distinct entry in `seen_content_hashes`, and **preserves the entire updated file content
-  verbatim** in the context.
+  the new lines of code. Its SHA-256 hash is completely different ($\text{hash}_{\text{T4}} \neq
+  \text{hash}_{\text{T1}}$). The cleaner recognizes $\text{hash}_{\text{T4}}$ as a new state, records it as a distinct
+  entry in `seen_content_hashes`, and **preserves the entire updated file content verbatim** in the context.
 
 #### 3. What Happens When a File is Renamed or Added (`ls`)
 
 - **Directory Unchanged**: If the directory contents have not changed, subsequent `ls` commands return the exact same
   listing text, producing an identical SHA-256 hash that triggers deduplication on historical turns.
 - **File Renamed, Created, or Deleted**: If the agent renames `app.js` to `main.js` and re-runs `ls`, the output listing
-  text changes. Because the text differs, its SHA-256 hash changes
-  ($\text{hash}_{\text{new}} \neq \text{hash}_{\text{old}}$). The cleaner sees a fresh hash and **preserves the new
-  directory listing in full**.
+  text changes. Because the text differs, its SHA-256 hash changes ($\text{hash}_{\text{new}} \neq
+  \text{hash}_{\text{old}}$). The cleaner sees a fresh hash and **preserves the new directory listing in full**.
 
 #### 4. Active Working Memory Protection (`_RECENT_TURNS_TO_KEEP = 6`)
 
