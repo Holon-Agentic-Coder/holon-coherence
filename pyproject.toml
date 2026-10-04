@@ -36,7 +36,6 @@ dev = [
 
 [project.scripts]
 holon-coherence = "holon_coherence.cli:main"
-coherence = "holon_coherence.cli:main"
 
 [tool.taskipy.tasks]
 test = "pytest -m 'not integration_test'"
