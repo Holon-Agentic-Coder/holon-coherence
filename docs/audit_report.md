@@ -165,6 +165,7 @@ The inspection covered all source files, documentation, test suites, container d
   - [`src/holon_coherence/hybrid_cache.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/hybrid_cache.py#L38-L42)
   - [`src/holon_coherence/ca_generator.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/ca_generator.py#L221)
 - **Description:** In `mitm_addon.py`, `_write_transaction_sync` creates wire log dumps:
+
   ```python
   with open(tmp_filepath, "w", encoding="utf-8") as f:
       json.dump(record, f, indent=2, ensure_ascii=False, default=str)
@@ -173,9 +174,11 @@ The inspection covered all source files, documentation, test suites, container d
   with open(jsonl_path, "a", encoding="utf-8") as f:
       f.write(line)
   ```
+
   These files are opened with default umask without setting `0o600` (owner read/write only). In `hybrid_cache.py`,
   `llm_cache.db` is initialized by `sqlite3.connect()` without permission tightening. In `ca_generator.py`,
   `os.makedirs(cert_dir, exist_ok=True)` creates `~/.holon/certs` without setting `0o700` mode.
+
 - **Security Impact:** Wire logs capture full prompt messages, tool outputs, and LLM responses. If the proxy runs on a
   shared host or shared volume, other local users or unprivileged processes can inspect sensitive conversation contents,
   code snippets, or proprietary prompts.
@@ -432,6 +435,7 @@ The inspection covered all source files, documentation, test suites, container d
 - **Affected Files:**
   - [`pyproject.toml`](file:///home/holon/.holon-sandbox/workspace/pyproject.toml#L24-L35)
 - **Description:** In `pyproject.toml`:
+
   ```toml
   dependencies = [
       "cryptography==48.0.1",
@@ -445,9 +449,11 @@ The inspection covered all source files, documentation, test suites, container d
       "taskipy>=1.14.1",
   ]
   ```
+
   `mitmproxy` is listed under `dev` rather than `project.dependencies`. If `holon-coherence` is packaged and installed
   as a library or installed via `pip install .` on a machine, `mitmproxy` is omitted, causing `mitm_addon.py` imports to
   fail.
+
 - **Recommendation:** Move `mitmproxy==12.2.3` into `project.dependencies`, or define an optional extra
   `[project.optional-dependencies] proxy = ["mitmproxy==12.2.3"]`.
 
