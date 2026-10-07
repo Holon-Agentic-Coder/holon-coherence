@@ -64,10 +64,8 @@ The inspection covered all source files, documentation, test suites, container d
 
 - **Severity:** Medium
 - **Affected Files:**
-  - [`src/holon_coherence/mitm_addon.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/mitm_addon.py#L1-L1461)
-    (1,461 lines)
-  - [`src/holon_coherence/cli.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/cli.py#L1-L1463)
-    (1,463 lines)
+  - [`src/holon_coherence/mitm_addon.py`](../src/holon_coherence/mitm_addon.py#L1-L1461) (1,461 lines)
+  - [`src/holon_coherence/cli.py`](../src/holon_coherence/cli.py#L1-L1463) (1,463 lines)
 - **Description:** Both `mitm_addon.py` and `cli.py` violate the Single Responsibility Principle by accumulating
   heterogeneous concerns into single files:
   - `mitm_addon.py` combines mitmproxy lifecycle hooks, SSE token parsers for Anthropic/OpenAI/Gemini, character
@@ -90,16 +88,14 @@ The inspection covered all source files, documentation, test suites, container d
 
 - **Severity:** Low
 - **Affected Files:**
-  - [`src/holon_coherence/openbrain_memory.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/openbrain_memory.py#L1-L130)
-  - [`src/holon_coherence/rag_indexer.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/rag_indexer.py#L1-L121)
-  - [`src/holon_coherence/ringer_orchestrator.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/ringer_orchestrator.py#L1-L82)
+  - [`src/holon_coherence/openbrain_memory.py`](../src/holon_coherence/openbrain_memory.py#L1-L130)
+  - [`src/holon_coherence/rag_indexer.py`](../src/holon_coherence/rag_indexer.py#L1-L121)
+  - [`src/holon_coherence/ringer_orchestrator.py`](../src/holon_coherence/ringer_orchestrator.py#L1-L82)
 - **Description:** `OpenBrainMemory`, `RAGCodebaseIndexer`, and `RingerOrchestrator` are exported in
-  [`src/holon_coherence/__init__.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/__init__.py#L1-L20)
-  and documented in
-  [`docs/token_reduction_architecture.md`](file:///home/holon/.holon-sandbox/workspace/docs/token_reduction_architecture.md#L107-L120)
-  as Phase 4 components. However, neither `mitm_addon.py` nor `cli.py` ever instantiates or interacts with them. They
-  exist as disconnected standalone libraries without any integration into the proxy pipeline or agent execution
-  workflow.
+  [`src/holon_coherence/__init__.py`](../src/holon_coherence/__init__.py#L1-L20) and documented in
+  [`docs/token_reduction_architecture.md`](token_reduction_architecture.md#L107-L120) as Phase 4 components. However,
+  neither `mitm_addon.py` nor `cli.py` ever instantiates or interacts with them. They exist as disconnected standalone
+  libraries without any integration into the proxy pipeline or agent execution workflow.
 - **Architectural Impact:** Misleading architecture where features documented as part of the token reduction pipeline
   are non-operational in actual proxy execution.
 - **Recommendation:** Either integrate these components into the agent lifecycle (e.g. injecting RAG bootstrap context
@@ -110,7 +106,7 @@ The inspection covered all source files, documentation, test suites, container d
 
 - **Severity:** Low
 - **Affected Files:**
-  - [`src/holon_coherence/ringer_orchestrator.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/ringer_orchestrator.py#L38-L40)
+  - [`src/holon_coherence/ringer_orchestrator.py`](../src/holon_coherence/ringer_orchestrator.py#L38-L40)
 - **Description:** `RingerOrchestrator.__init__` specifies hardcoded default models:
   ```python
   def __init__(
@@ -120,9 +116,9 @@ The inspection covered all source files, documentation, test suites, container d
   ):
   ```
   This violates the repository invariant documented in
-  [`docs/methods/context_cleaning.md`](file:///home/holon/.holon-sandbox/workspace/docs/methods/context_cleaning.md#L92-L95):
-  _"Dynamic Model Discovery (Zero Hardcoded Models): In compliance with repository invariants, never hardcode model
-  identifiers. Query the live active catalog via `agy models`."_
+  [`docs/methods/context_cleaning.md`](methods/context_cleaning.md#L92-L95): _"Dynamic Model Discovery (Zero Hardcoded
+  Models): In compliance with repository invariants, never hardcode model identifiers. Query the live active catalog via
+  `agy models`."_
 - **Recommendation:** Remove hardcoded default model strings or parameterize them to dynamically resolve via environment
   configuration or CLI arguments.
 
@@ -130,23 +126,22 @@ The inspection covered all source files, documentation, test suites, container d
 
 - **Severity:** Medium
 - **Affected Files:**
-  - [`docs/methods/context_cleaning.md`](file:///home/holon/.holon-sandbox/workspace/docs/methods/context_cleaning.md#L84-L85)
-  - [`docs/methods/local_cache_layer.md`](file:///home/holon/.holon-sandbox/workspace/docs/methods/local_cache_layer.md#L27-L28)
-  - [`docs/methods/openbrain_memory.md`](file:///home/holon/.holon-sandbox/workspace/docs/methods/openbrain_memory.md#L31-L32)
-  - [`docs/methods/prompt_cache_optimization.md`](file:///home/holon/.holon-sandbox/workspace/docs/methods/prompt_cache_optimization.md#L84)
-  - [`docs/methods/rag_codebase_indexer.md`](file:///home/holon/.holon-sandbox/workspace/docs/methods/rag_codebase_indexer.md#L29-L30)
-  - [`docs/methods/ringer_framework.md`](file:///home/holon/.holon-sandbox/workspace/docs/methods/ringer_framework.md#L29-L30)
-  - [`docs/token_reduction_measurement_plan.md`](file:///home/holon/.holon-sandbox/workspace/docs/token_reduction_measurement_plan.md#L23)
-  - [`docs/mitm_telemetry_metrics_plan.md`](file:///home/holon/.holon-sandbox/workspace/docs/mitm_telemetry_metrics_plan.md#L6)
+  - [`docs/methods/context_cleaning.md`](methods/context_cleaning.md#L84-L85)
+  - [`docs/methods/local_cache_layer.md`](methods/local_cache_layer.md#L27-L28)
+  - [`docs/methods/openbrain_memory.md`](methods/openbrain_memory.md#L31-L32)
+  - [`docs/methods/prompt_cache_optimization.md`](methods/prompt_cache_optimization.md#L84)
+  - [`docs/methods/rag_codebase_indexer.md`](methods/rag_codebase_indexer.md#L29-L30)
+  - [`docs/methods/ringer_framework.md`](methods/ringer_framework.md#L29-L30)
+  - [`docs/token_reduction_measurement_plan.md`](token_reduction_measurement_plan.md#L23)
+  - [`docs/mitm_telemetry_metrics_plan.md`](mitm_telemetry_metrics_plan.md#L6)
 - **Description:** Across all six methodology guides in `docs/methods/` and the measurement plans, file paths and Python
   import statements point to the old monolith layout:
   ```markdown
   `apps/sandbox-executor/src/sandbox_executor/token_reduction/payload_cleaner.py` from sandbox_executor.token_reduction
   import JSONContextCleaner
   ```
-  Furthermore,
-  [`docs/mitm_telemetry_metrics_plan.md`](file:///home/holon/.holon-sandbox/workspace/docs/mitm_telemetry_metrics_plan.md#L6)
-  contains an absolute local user path: `file:///Users/thomashan/git/holon-agentic-coder-ref-metadata/...`
+  Furthermore, [`docs/mitm_telemetry_metrics_plan.md`](mitm_telemetry_metrics_plan.md#L6) contains an absolute local
+  user path: `file:///Users/thomashan/git/holon-agentic-coder-ref-metadata/...`
 - **Architectural Impact:** Breaks automated documentation verification, confuses developers and agents attempting to
   follow the guides, and introduces dead file links.
 - **Recommendation:** Perform a repository-wide documentation refactoring updating all paths to `src/holon_coherence/`
@@ -161,9 +156,9 @@ The inspection covered all source files, documentation, test suites, container d
 - **Severity:** High
 - **CWE:** CWE-732 (Incorrect Permission Assignment for Critical Resource)
 - **Affected Files:**
-  - [`src/holon_coherence/mitm_addon.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/mitm_addon.py#L194-L206)
-  - [`src/holon_coherence/hybrid_cache.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/hybrid_cache.py#L38-L42)
-  - [`src/holon_coherence/ca_generator.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/ca_generator.py#L221)
+  - [`src/holon_coherence/mitm_addon.py`](../src/holon_coherence/mitm_addon.py#L194-L206)
+  - [`src/holon_coherence/hybrid_cache.py`](../src/holon_coherence/hybrid_cache.py#L38-L42)
+  - [`src/holon_coherence/ca_generator.py`](../src/holon_coherence/ca_generator.py#L221)
 - **Description:** In `mitm_addon.py`, `_write_transaction_sync` creates wire log dumps:
 
   ```python
@@ -192,8 +187,8 @@ The inspection covered all source files, documentation, test suites, container d
 - **Severity:** High
 - **CWE:** CWE-494 (Download of Code Without Integrity Check), CWE-250 (Execution with Unnecessary Privileges)
 - **Affected Files:**
-  - [`Makefile`](file:///home/holon/.holon-sandbox/workspace/Makefile#L78-L81)
-  - [`Makefile`](file:///home/holon/.holon-sandbox/workspace/Makefile#L54)
+  - [`Makefile`](../Makefile#L78-L81)
+  - [`Makefile`](../Makefile#L54)
 - **Description:** The `install-docker` target downloads an external script directly from `https://get.docker.com` and
   executes it under `sudo`:
   ```makefile
@@ -216,7 +211,7 @@ The inspection covered all source files, documentation, test suites, container d
 - **Severity:** Low
 - **CWE:** CWE-390 (Detection of Error Condition Without Action)
 - **Affected Files:**
-  - [`src/holon_coherence/ca_generator.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/ca_generator.py#L198-L207)
+  - [`src/holon_coherence/ca_generator.py`](../src/holon_coherence/ca_generator.py#L198-L207)
 - **Description:** In `_sync_mitmproxy_ca`, file writing is wrapped in `with contextlib.suppress(OSError):`:
   ```python
   with contextlib.suppress(OSError):
@@ -235,7 +230,7 @@ The inspection covered all source files, documentation, test suites, container d
 
 - **Severity:** Low
 - **Affected Files:**
-  - [`src/holon_coherence/ca_generator.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/ca_generator.py#L165)
+  - [`src/holon_coherence/ca_generator.py`](../src/holon_coherence/ca_generator.py#L165)
 - **Description:** Root CA private keys are generated with `rsa:2048`:
   ```python
   "-newkey", "rsa:2048"
@@ -254,8 +249,8 @@ The inspection covered all source files, documentation, test suites, container d
 - **Severity:** Medium
 - **CWE:** CWE-362 (Concurrent Execution using Shared Resource with Improper Synchronization)
 - **Affected Files:**
-  - [`src/holon_coherence/mitm_addon.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/mitm_addon.py#L1203)
-  - [`src/holon_coherence/mitm_addon.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/mitm_addon.py#L1239)
+  - [`src/holon_coherence/mitm_addon.py`](../src/holon_coherence/mitm_addon.py#L1203)
+  - [`src/holon_coherence/mitm_addon.py`](../src/holon_coherence/mitm_addon.py#L1239)
 - **Description:** In `MitmproxyAddon`:
   ```python
   self.total_requests += 1
@@ -275,8 +270,8 @@ The inspection covered all source files, documentation, test suites, container d
 
 - **Severity:** High
 - **Affected Files:**
-  - [`src/holon_coherence/payload_cleaner.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/payload_cleaner.py#L157-L158)
-  - [`src/holon_coherence/payload_cleaner.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/payload_cleaner.py#L234-L265)
+  - [`src/holon_coherence/payload_cleaner.py`](../src/holon_coherence/payload_cleaner.py#L157-L158)
+  - [`src/holon_coherence/payload_cleaner.py`](../src/holon_coherence/payload_cleaner.py#L234-L265)
 - **Description:** When `JSONContextCleaner` deduplicates tool results, it inserts tombstones referencing specific
   historical turns:
   ```python
@@ -306,7 +301,7 @@ The inspection covered all source files, documentation, test suites, container d
 
 - **Severity:** Medium
 - **Affected Files:**
-  - [`src/holon_coherence/payload_cleaner.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/payload_cleaner.py#L234-L265)
+  - [`src/holon_coherence/payload_cleaner.py`](../src/holon_coherence/payload_cleaner.py#L234-L265)
 - **Description:** The Anthropic Messages API strictly enforces the invariant that every `assistant` message containing
   a `tool_use` content block must be immediately followed by a `user` message containing a corresponding `tool_result`
   content block. In `_summarize_anthropic_history`, the algorithm searches for a clean user message to begin `suffix`:
@@ -330,8 +325,8 @@ The inspection covered all source files, documentation, test suites, container d
 
 - **Severity:** Medium
 - **Affected Files:**
-  - [`src/holon_coherence/mitm_addon.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/mitm_addon.py#L40)
-  - [`src/holon_coherence/mitm_addon.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/mitm_addon.py#L1308-L1313)
+  - [`src/holon_coherence/mitm_addon.py`](../src/holon_coherence/mitm_addon.py#L40)
+  - [`src/holon_coherence/mitm_addon.py`](../src/holon_coherence/mitm_addon.py#L1308-L1313)
 - **Description:** In `responseheaders`, `sse_stream_wrapper` buffers streaming chunks:
   ```python
   flow.sse_bytes = getattr(flow, "sse_bytes", 0) + len(chunk)
@@ -352,8 +347,8 @@ The inspection covered all source files, documentation, test suites, container d
 
 - **Severity:** Medium
 - **Affected Files:**
-  - [`src/holon_coherence/hybrid_cache.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/hybrid_cache.py#L236-L255)
-  - [`src/holon_coherence/hybrid_cache.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/hybrid_cache.py#L280-L302)
+  - [`src/holon_coherence/hybrid_cache.py`](../src/holon_coherence/hybrid_cache.py#L236-L255)
+  - [`src/holon_coherence/hybrid_cache.py`](../src/holon_coherence/hybrid_cache.py#L280-L302)
 - **Description:** In `HybridCacheStore.get()`:
   ```python
   cursor.execute(
@@ -379,7 +374,7 @@ The inspection covered all source files, documentation, test suites, container d
 
 - **Severity:** High
 - **Affected Files:**
-  - [`src/holon_coherence/hybrid_cache.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/hybrid_cache.py#L225-L265)
+  - [`src/holon_coherence/hybrid_cache.py`](../src/holon_coherence/hybrid_cache.py#L225-L265)
 - **Description:** Semantic cache matching extracts word tokens using regex:
   ```python
   target_tokens = set(re.findall(r"\w+", target_user_content.lower()))
@@ -408,12 +403,9 @@ The inspection covered all source files, documentation, test suites, container d
 
 - **Severity:** High
 - **Affected Files:**
-  - [`src/holon_coherence/mitm_addon.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/mitm_addon.py)
-    (1,461 lines)
-  - [`src/holon_coherence/rag_indexer.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/rag_indexer.py)
-    (121 lines)
-  - [`src/holon_coherence/payload_cleaner.py`](file:///home/holon/.holon-sandbox/workspace/src/holon_coherence/payload_cleaner.py)
-    (553 lines)
+  - [`src/holon_coherence/mitm_addon.py`](../src/holon_coherence/mitm_addon.py) (1,461 lines)
+  - [`src/holon_coherence/rag_indexer.py`](../src/holon_coherence/rag_indexer.py) (121 lines)
+  - [`src/holon_coherence/payload_cleaner.py`](../src/holon_coherence/payload_cleaner.py) (553 lines)
 - **Description:** Detailed audit of `tests/` revealed significant coverage gaps:
   - `mitm_addon.py`: Only `server_connect` is mocked in `test_host_local.py`. Zero unit tests exist for `request()`,
     `response()`, `responseheaders()`, `_dump_flow_transaction()`, `extract_token_counts()`, `extract_sse_content()`,
@@ -433,7 +425,7 @@ The inspection covered all source files, documentation, test suites, container d
 
 - **Severity:** Medium
 - **Affected Files:**
-  - [`pyproject.toml`](file:///home/holon/.holon-sandbox/workspace/pyproject.toml#L24-L35)
+  - [`pyproject.toml`](../pyproject.toml#L24-L35)
 - **Description:** In `pyproject.toml`:
 
   ```toml
@@ -461,7 +453,7 @@ The inspection covered all source files, documentation, test suites, container d
 
 - **Severity:** Medium
 - **Affected Files:**
-  - [`Dockerfile`](file:///home/holon/.holon-sandbox/workspace/Dockerfile#L8-L10)
+  - [`Dockerfile`](../Dockerfile#L8-L10)
 - **Description:** In `Dockerfile`:
   ```dockerfile
   WORKDIR /app
