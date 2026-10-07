@@ -67,6 +67,7 @@ select = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 markers = [
     "integration_test: marks tests as integration tests",
 ]
