@@ -41,6 +41,9 @@ _MAX_SSE_BUFFER_BYTES = 50 * 1024 * 1024
 
 _SECRET_HEADER_NAMES = {
     "authorization",
+    "auth",
+    "credential",
+    "credentials",
     "x-api-key",
     "api-key",
     "x-anthropic-api-key",
@@ -88,7 +91,7 @@ _BODY_SECRET_PATTERNS = [
 ]
 
 _SECRET_DICT_KEY_PATTERN = re.compile(
-    r"(?i)^(?:password|passwd|api[-_]?key|apikey|api[-_]?token|auth[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|secret[-_]?key|secret|private[-_]?key|client[-_]?secret|session[-_]?token)$"
+    r"(?i)^(?:auth|credential|credentials|password|passwd|api[-_]?key|apikey|api[-_]?token|auth[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|secret[-_]?key|secret|private[-_]?key|client[-_]?secret|session[-_]?token)$"
 )
 
 
@@ -181,7 +184,9 @@ def _get_wire_log_executor() -> concurrent.futures.ThreadPoolExecutor:
 
 def _write_transaction_sync(record: dict[str, Any], wire_log_dir: str) -> None:
     try:
-        os.makedirs(wire_log_dir, exist_ok=True)
+        os.makedirs(wire_log_dir, mode=0o700, exist_ok=True)
+        with contextlib.suppress(OSError):
+            os.chmod(wire_log_dir, 0o700)
         turn_id = record.get("turn_id", 0)
         flow_id = record.get("flow_id", "flow")
         safe_turn_id = re.sub(r"[^a-zA-Z0-9_\-]", "_", str(turn_id))
@@ -191,9 +196,14 @@ def _write_transaction_sync(record: dict[str, Any], wire_log_dir: str) -> None:
 
         tmp_filepath = f"{filepath}.{uuid.uuid4().hex[:6]}.tmp"
         try:
-            with open(tmp_filepath, "w", encoding="utf-8") as f:
+            fd = os.open(tmp_filepath, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(record, f, indent=2, ensure_ascii=False, default=str)
+            with contextlib.suppress(OSError):
+                os.chmod(tmp_filepath, 0o600)
             os.replace(tmp_filepath, filepath)
+            with contextlib.suppress(OSError):
+                os.chmod(filepath, 0o600)
         except Exception:
             if os.path.exists(tmp_filepath):
                 with contextlib.suppress(OSError):
@@ -202,8 +212,11 @@ def _write_transaction_sync(record: dict[str, Any], wire_log_dir: str) -> None:
 
         jsonl_path = os.path.join(wire_log_dir, "transactions.jsonl")
         line = json.dumps(record, ensure_ascii=False, default=str) + "\n"
-        with open(jsonl_path, "a", encoding="utf-8") as f:
+        j_fd = os.open(jsonl_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(j_fd, "a", encoding="utf-8") as f:
             f.write(line)
+        with contextlib.suppress(OSError):
+            os.chmod(jsonl_path, 0o600)
     except Exception as exc:
         logger.warning("Failed to persist wire log transaction: %s", exc)
 
