@@ -57,8 +57,14 @@ The plan MUST include the following mandatory sections:
 Include the exact metrics table formatted as:
 
 ```markdown
-| metric | value | | p_success_pred | <float> | | entropy_pred | <float> | | impact_pred | <float> | | cost_pred |
-<float> | | learning_value_pred | <float> | | ev_pred | <float> |
+| metric              | value   |
+| :------------------ | :------ |
+| p_success_pred      | <float> |
+| entropy_pred        | <float> |
+| impact_pred         | <float> |
+| cost_pred           | <float> |
+| learning_value_pred | <float> |
+| ev_pred             | <float> |
 ```
 
 Followed by a `### Strategy Rationale` subsection detailing how the metrics were computed using the physics-driven EV
