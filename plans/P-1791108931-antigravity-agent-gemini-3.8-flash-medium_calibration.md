@@ -2,8 +2,8 @@
 
 - **Plan Reference:**
   [`plans/P-1791108931-antigravity-agent-gemini-3.8-flash-medium.md`](P-1791108931-antigravity-agent-gemini-3.8-flash-medium.md)
-- **Execution Reference:**
-  [`executions/E-1791109052-antigravity-agent-gemini-3.8-flash-medium.md`](../executions/E-1791109052-antigravity-agent-gemini-3.8-flash-medium.md)
+- **Execution Reference:** `E-1791109052-antigravity-agent-gemini-3.8-flash-medium` (recorded in
+  `holon-knowledge/ledger/executions.jsonl`)
 - **Intent Branch:** `I-1791108912-remove-coherence-executable-entrypoint/_`
 - **Evaluating Agent:** `antigravity-agent/gemini-3.8-flash-medium`
 - **Evaluation Timestamp:** `2026-10-04T14:57:35.000Z`
