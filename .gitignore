@@ -42,8 +42,19 @@ mitm_wire_logs/
 transactions.jsonl
 turn_*.json
 
+# Sandbox & temporary files
+/tmp/
+*.tmp
+*.log
+.sandbox/
+scratch/
+
 # OS & IDE
 .DS_Store
 .idea/
 *.iml
 .vscode/
+*.swp
+
+# Holon
+.holon-cache/

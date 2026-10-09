@@ -1,0 +1,18 @@
+{
+  "_note": "Reserved for future entropy computation integration. Not yet loaded by the runtime.",
+  "weights": {
+    "w1_ssa": 0.3,
+    "w2_irr": 0.25,
+    "w3_cl": 0.2,
+    "w4_ser": 0.15,
+    "w5_nov": 0.1
+  },
+  "observable_weights": {
+    "u1_ssa": 0.3,
+    "u2_irr": 0.25,
+    "u3_cl": 0.2,
+    "u4_ser": 0.15,
+    "u5_nov": 0.1
+  },
+  "description": "Per-intent entropy risk and complexity weight factors"
+}
