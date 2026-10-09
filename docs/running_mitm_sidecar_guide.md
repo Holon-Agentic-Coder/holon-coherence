@@ -37,7 +37,8 @@ To enable the interactive `mitmweb` web dashboard on port `8081`:
 holon-coherence start -d --web --web-port 8081
 ```
 
-The web dashboard binds to `0.0.0.0` internally inside the container and is exposed safely at `http://127.0.0.1:8081` on the host.
+The web dashboard binds to `0.0.0.0` internally inside the container and is exposed safely at `http://127.0.0.1:8081` on
+the host.
 
 ### Direct Docker Run (Manual)
 
@@ -58,7 +59,8 @@ docker run --rm --name host-mitm-proxy \
            --set ignore_hosts='^(api\.github\.com|github\.com):443$'
 ```
 
-> [!TIP] **Enabling Web Dashboard**: When using direct `docker run`, map `-p 127.0.0.1:8081:8081`, replace `mitmdump` with `mitmweb`, and pass `--web-host 0.0.0.0 --web-port 8081` to inspect live traffic at `http://127.0.0.1:8081`.
+> [!TIP] **Enabling Web Dashboard**: When using direct `docker run`, map `-p 127.0.0.1:8081:8081`, replace `mitmdump`
+> with `mitmweb`, and pass `--web-host 0.0.0.0 --web-port 8081` to inspect live traffic at `http://127.0.0.1:8081`.
 
 > [!TIP] **Enabling Debug Logging**: Add `-e MITM_DEBUG=1` to the `docker run` command and
 > `--set termlog_verbosity=debug --set flow_detail=3` to `mitmdump` to inspect detailed request/response payloads and
