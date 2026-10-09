@@ -23,11 +23,30 @@ graph LR
 
 ## 🐳 Step 1: Start the MITM Sidecar Docker Container
 
-Run the Docker sidecar container with `mitmdump` and the `mitm_addon.py` script:
+### Using `holon-coherence` CLI (Recommended)
+
+Start the proxy container via the CLI:
+
+```bash
+holon-coherence start -d
+```
+
+To enable the interactive `mitmweb` web dashboard on port `8081`:
+
+```bash
+holon-coherence start -d --web --web-port 8081
+```
+
+The web dashboard binds to `0.0.0.0` internally inside the container and is exposed safely at `http://127.0.0.1:8081` on the host.
+
+### Direct Docker Run (Manual)
+
+Alternatively, run the Docker sidecar container directly with `mitmdump` (or `mitmweb`) and the `mitm_addon.py` script:
 
 ```bash
 docker run --rm --name host-mitm-proxy \
   -p 127.0.0.1:8080:8080 \
+  -p 127.0.0.1:8081:8081 \
   -v ~/.holon/proxy-ca:/home/mitmproxy/.mitmproxy:rw \
   -v $(pwd)/apps/sandbox-executor/src:/tmp/src \
   -e PYTHONPATH=/tmp/src \
@@ -38,6 +57,8 @@ docker run --rm --name host-mitm-proxy \
            --listen-port 8080 \
            --set ignore_hosts='^(api\.github\.com|github\.com):443$'
 ```
+
+> [!TIP] **Enabling Web Dashboard**: When using direct `docker run`, map `-p 127.0.0.1:8081:8081`, replace `mitmdump` with `mitmweb`, and pass `--web-host 0.0.0.0 --web-port 8081` to inspect live traffic at `http://127.0.0.1:8081`.
 
 > [!TIP] **Enabling Debug Logging**: Add `-e MITM_DEBUG=1` to the `docker run` command and
 > `--set termlog_verbosity=debug --set flow_detail=3` to `mitmdump` to inspect detailed request/response payloads and

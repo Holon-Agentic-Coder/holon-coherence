@@ -1310,6 +1310,81 @@ class TestCLIDispatchAndMain:
         assert cmd[-2:] == ["--listen-port", "8080"]
         assert "mitm_addon.py" in cmd[cmd.index("-s") + 1]
 
+    def test_start_command_with_web_flag(self) -> None:
+        with (
+            patch("holon_coherence.cli.is_in_container", return_value=False),
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.ensure_docker_image"),
+            patch("os.makedirs"),
+            patch("os.path.exists", return_value=True),
+            patch("subprocess.run") as mock_run,
+        ):
+            main(["start", "-d", "--web"])
+            assert mock_run.call_count == 2
+            docker_cmd = mock_run.call_args_list[1][0][0]
+            # Verify port mapping for web dashboard
+            assert "-p" in docker_cmd
+            web_port_mapping = "127.0.0.1:8081:8081"
+            assert web_port_mapping in docker_cmd
+            # Verify internal start args
+            assert "--web" in docker_cmd
+            web_port_idx = docker_cmd.index("--web-port") + 1
+            assert docker_cmd[web_port_idx] == "8081"
+
+    def test_start_command_with_custom_web_port(self) -> None:
+        with (
+            patch("holon_coherence.cli.is_in_container", return_value=False),
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.ensure_docker_image"),
+            patch("os.makedirs"),
+            patch("os.path.exists", return_value=True),
+            patch("subprocess.run") as mock_run,
+        ):
+            main(["start", "-d", "--web", "--web-port", "9090"])
+            assert mock_run.call_count == 2
+            docker_cmd = mock_run.call_args_list[1][0][0]
+            assert "127.0.0.1:9090:8081" in docker_cmd
+            assert "--web" in docker_cmd
+            web_port_idx = docker_cmd.index("--web-port") + 1
+            assert docker_cmd[web_port_idx] == "8081"
+
+    def test_start_command_without_web_flag_omits_web_port(self) -> None:
+        with (
+            patch("holon_coherence.cli.is_in_container", return_value=False),
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.ensure_docker_image"),
+            patch("os.makedirs"),
+            patch("os.path.exists", return_value=True),
+            patch("subprocess.run") as mock_run,
+        ):
+            main(["start", "-d"])
+            assert mock_run.call_count == 2
+            docker_cmd = mock_run.call_args_list[1][0][0]
+            assert "--web" not in docker_cmd
+            assert "--web-port" not in docker_cmd
+            assert not any("8081" in arg for arg in docker_cmd)
+
+    def test_in_container_start_with_web_passes_web_host(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        launched: list[list[str]] = []
+
+        def fake_run(cmd, *args, **kwargs):
+            launched.append(list(cmd))
+            return MagicMock(returncode=0)
+
+        monkeypatch.setattr("holon_coherence.cli.is_in_container", lambda: True)
+        with patch("subprocess.run", side_effect=fake_run):
+            main(["start", "--web", "--web-port", "8081"])
+
+        assert len(launched) == 1
+        cmd = launched[0]
+        assert cmd[0].endswith("mitmweb")
+        assert "--web-host" in cmd
+        host_idx = cmd.index("--web-host") + 1
+        assert cmd[host_idx] == "0.0.0.0"
+        assert "--web-port" in cmd
+        port_idx = cmd.index("--web-port") + 1
+        assert cmd[port_idx] == "8081"
+
 
 class TestWaitForProxyReady:
     """Tests for wait_for_proxy_ready polling and fail-fast container exit handling."""

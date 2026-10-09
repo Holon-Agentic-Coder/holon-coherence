@@ -1,5 +1,6 @@
 """Disk-backed hybrid & semantic caching layer for LLM prompts."""
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -30,7 +31,9 @@ class HybridCacheStore:
         """
         if cache_dir is None:
             cache_dir = os.path.expanduser("~/.holon/cache")
-        os.makedirs(cache_dir, exist_ok=True)
+        os.makedirs(cache_dir, mode=0o700, exist_ok=True)
+        with contextlib.suppress(OSError):
+            os.chmod(cache_dir, 0o700)
 
         self.cache_dir = cache_dir
         self.similarity_threshold = similarity_threshold
@@ -59,6 +62,8 @@ class HybridCacheStore:
                 "ON prompt_cache (provider, created_at DESC)"
             )
             conn.commit()
+        with contextlib.suppress(OSError):
+            os.chmod(self.db_path, 0o600)
 
     def generate_prefix_key(self, payload: dict[str, Any], provider: str = "anthropic") -> str:
         """Generates a stable prefix-tree hash key from the payload system and message turns."""

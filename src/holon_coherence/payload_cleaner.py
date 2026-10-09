@@ -4,10 +4,15 @@ import copy
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+_SECRET_DICT_KEY_PATTERN = re.compile(
+    r"(?i)^(?:auth|credential|credentials|password|passwd|api[-_]?key|apikey|api[-_]?token|auth[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|secret[-_]?key|secret|private[-_]?key|client[-_]?secret|session[-_]?token)$"
+)
 
 _RECENT_TURNS_TO_KEEP = 6
 """Number of recent conversation turns preserved verbatim at the end of the history during summarization."""

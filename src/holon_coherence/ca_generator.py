@@ -204,6 +204,7 @@ def _sync_mitmproxy_ca(ca_cert_path: str, ca_key_path: str, cert_dir: str) -> No
         pem_fd = os.open(mitm_ca_pem, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(pem_fd, "w", encoding="utf-8") as pf:
             pf.write(combined)
+        os.chmod(mitm_ca_pem, 0o600)
 
 
 def _ensure_root_ca(cert_dir: str | None = None) -> tuple[str, str, bool]:
@@ -218,7 +219,9 @@ def _ensure_root_ca(cert_dir: str | None = None) -> tuple[str, str, bool]:
     if cert_dir is None:
         cert_dir = os.path.expanduser("~/.holon/certs")
 
-    os.makedirs(cert_dir, exist_ok=True)
+    os.makedirs(cert_dir, mode=0o700, exist_ok=True)
+    with contextlib.suppress(OSError):
+        os.chmod(cert_dir, 0o700)
     ca_cert_path = os.path.join(cert_dir, _CA_CERT_FILENAME)
     ca_key_path = os.path.join(cert_dir, _CA_KEY_FILENAME)
 

@@ -1385,9 +1385,10 @@ def main(argv: list[str] | None = None) -> None:
         ca_dir = os.path.expanduser("~/.holon/proxy-ca")
         cache_dir = os.path.expanduser("~/.holon/cache")
         logs_dir = os.path.expanduser("~/.holon/logs")
-        os.makedirs(ca_dir, exist_ok=True)
-        os.makedirs(cache_dir, exist_ok=True)
-        os.makedirs(logs_dir, exist_ok=True)
+        for d in (ca_dir, cache_dir, logs_dir):
+            os.makedirs(d, mode=0o700, exist_ok=True)
+            with contextlib.suppress(OSError):
+                os.chmod(d, 0o700)
 
         ca_cert = os.path.join(ca_dir, "mitmproxy-ca-cert.pem")
         if not os.path.exists(ca_cert):
