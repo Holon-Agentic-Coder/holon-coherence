@@ -50,19 +50,27 @@ def test_makefile_dry_run(target):
     assert result.returncode == 0
 
 
-def test_create_conda_env_dry_run():
+@pytest.mark.parametrize(
+    "env_name,expected_in_output",
+    [
+        ("holon", 'env create -n "$CHOSEN_ENV" -f environment.yml'),
+        ("custom_dev", 'CHOSEN_ENV="custom_dev"'),
+        ("base", "install -y -n base -c conda-forge uv python=3.13"),
+    ],
+)
+def test_create_conda_env_dry_run(env_name, expected_in_output):
+    env_vars = {**ENV_NO_COLOR, "CONDA_ENV": env_name}
     result = subprocess.run(
         ["make", "-n", "create-conda-env"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
-        env=ENV_NO_COLOR,
+        env=env_vars,
         timeout=15,
     )
     assert result.returncode == 0
     assert "$CONDA_BIN" in result.stdout
-    assert "$CONDA_PATH" not in result.stdout
-    assert "env create -n holon -f environment.yml" in result.stdout
+    assert expected_in_output in result.stdout
 
 
 def test_config_mk_macros():
@@ -110,6 +118,9 @@ def test_check_prerequisites_dry_run():
     )
     assert result.returncode == 0
     assert "check-docker AUTO_INSTALL=false" in result.stdout
+    assert "Checking uv in Conda env" in result.stdout
+    assert "Checking OpenSSL" in result.stdout
+    assert "Checking npx (Prettier)" in result.stdout
 
 
 def test_install_miniforge_checksum_dry_run():

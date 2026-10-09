@@ -12,6 +12,13 @@ CI ?= false
 # Automated prerequisite installation (set to false in check-prerequisites for read-only probe)
 AUTO_INSTALL ?= true
 
+# Conda Environment Configuration (defaults to active CONDA_DEFAULT_ENV if set, else holon)
+ifdef CONDA_DEFAULT_ENV
+CONDA_ENV ?= $(CONDA_DEFAULT_ENV)
+else
+CONDA_ENV ?= holon
+endif
+
 # Options passed to build_image.sh (use --output-log in CI environments)
 ifeq ($(CI),true)
 BUILD_IMAGE_ARGS ?= --output-log
@@ -189,7 +196,7 @@ check-docker:
 		exit 1; \
 	fi
 
-# Check system prerequisites: Docker (CLI, buildx, daemon) and Conda
+# Check system prerequisites: Docker (CLI, buildx, daemon), Conda, uv, OpenSSL, and npx
 check-prerequisites:
 	@echo "$(COLOR_BOLD)=========================================$(COLOR_RESET)"
 	@echo "$(COLOR_BOLD) Checking Prerequisites for holon-coherence$(COLOR_RESET)"
@@ -197,6 +204,7 @@ check-prerequisites:
 	@echo "$(COLOR_BOLD)=========================================$(COLOR_RESET)"
 	@if [ -n "$(findstring n,$(firstword -$(MAKEFLAGS)))" ]; then exit 0; fi; \
 	ERRORS=0; \
+	WARNINGS=0; \
 	$(MAKE) check-docker AUTO_INSTALL=false || ERRORS=$$((ERRORS + 1)); \
 	printf "%-32s " "Checking Conda..."; \
 	$(FIND_CONDA_BIN); \
@@ -209,10 +217,58 @@ check-prerequisites:
 		ERRORS=$$((ERRORS + 1)); \
 	fi; \
 	\
+	printf "%-32s " "Checking uv in Conda env..."; \
+	TARGET_ENV="$(CONDA_ENV)"; \
+	if [ -n "$$CONDA_DEFAULT_ENV" ] && command -v uv >/dev/null 2>&1; then \
+		UV_VER=$$(uv --version 2>/dev/null); \
+		echo "$(COLOR_GREEN)✅ Found: $$UV_VER (active env: $$CONDA_DEFAULT_ENV)$(COLOR_RESET)"; \
+	elif [ -n "$$CONDA_BIN" ]; then \
+		ENV_PREFIX=$$("$$CONDA_BIN" env list 2>/dev/null | awk -v env="$$TARGET_ENV" '$$1 == env {print $$NF}'); \
+		if [ -n "$$ENV_PREFIX" ] && [ -x "$$ENV_PREFIX/bin/uv" ]; then \
+			UV_VER=$$("$$ENV_PREFIX/bin/uv" --version 2>/dev/null); \
+			echo "$(COLOR_GREEN)✅ Found: $$UV_VER (in conda env: $$TARGET_ENV)$(COLOR_RESET)"; \
+		else \
+			echo "$(COLOR_RED)❌ Missing: uv not found in active env ($$CONDA_DEFAULT_ENV) or target env ($$TARGET_ENV)$(COLOR_RESET)"; \
+			echo "   Run $(COLOR_BOLD)make create-conda-env$(COLOR_RESET) or $(COLOR_BOLD)make create-conda-env CONDA_ENV=$$TARGET_ENV$(COLOR_RESET)."; \
+			ERRORS=$$((ERRORS + 1)); \
+		fi; \
+	else \
+		echo "$(COLOR_RED)❌ Missing: uv (Conda not available)$(COLOR_RESET)"; \
+		ERRORS=$$((ERRORS + 1)); \
+	fi; \
+	\
+	printf "%-32s " "Checking OpenSSL..."; \
+	if command -v openssl >/dev/null 2>&1; then \
+		OPENSSL_VER=$$(openssl version 2>/dev/null || true); \
+		echo "$(COLOR_GREEN)✅ Found: $$OPENSSL_VER$(COLOR_RESET)"; \
+	else \
+		echo "$(COLOR_RED)❌ Missing: openssl not found$(COLOR_RESET)"; \
+		echo "   OpenSSL is required by ca_generator.py for Root CA generation."; \
+		if [ "$(DETECTED_OS)" = "Darwin" ]; then \
+			echo "   Install via Homebrew: brew install openssl"; \
+		else \
+			echo "   Install via package manager: sudo apt install openssl"; \
+		fi; \
+		ERRORS=$$((ERRORS + 1)); \
+	fi; \
+	\
+	printf "%-32s " "Checking npx (Prettier)..."; \
+	if command -v npx >/dev/null 2>&1; then \
+		NPX_VER=$$(npx --version 2>/dev/null || true); \
+		echo "$(COLOR_GREEN)✅ Found: npx v$$NPX_VER$(COLOR_RESET)"; \
+	else \
+		echo "$(COLOR_YELLOW)⚠️  Missing: npx not found$(COLOR_RESET)"; \
+		echo "   npx is required for Prettier markdown documentation hygiene checks."; \
+		WARNINGS=$$((WARNINGS + 1)); \
+	fi; \
+	\
 	echo "$(COLOR_BOLD)=========================================$(COLOR_RESET)"; \
 	if [ $$ERRORS -gt 0 ]; then \
 		echo "$(COLOR_RED)❌ $$ERRORS prerequisite check(s) failed. Please install or start the required tools above.$(COLOR_RESET)"; \
 		exit 1; \
+	elif [ $$WARNINGS -gt 0 ]; then \
+		echo "$(COLOR_YELLOW)⚠️  Core prerequisites satisfied, but $$WARNINGS optional/advisory check(s) raised warnings.$(COLOR_RESET)"; \
+		exit 0; \
 	else \
 		echo "$(COLOR_GREEN)✅ All prerequisites are satisfied!$(COLOR_RESET)"; \
 	fi
@@ -290,28 +346,48 @@ install-miniforge:
 		exit 1; \
 	fi
 
-# Create conda environment 'holon' from environment.yml
+# Create or update conda environment with interactive confirmation/selection
 create-conda-env: install-miniforge
-	@echo "$(COLOR_BOLD)Creating conda environment 'holon' from environment.yml...$(COLOR_RESET)"
 	@$(FIND_CONDA_BIN); \
 	if [ -z "$$CONDA_BIN" ]; then \
 		echo "$(COLOR_RED)❌ Conda not found after Miniforge installation.$(COLOR_RESET)"; \
 		exit 1; \
 	fi; \
-	if "$$CONDA_BIN" env list | grep -q -E '^[[:space:]]*holon[[:space:]]+'; then \
-		echo "$(COLOR_GREEN)✅ Environment 'holon' already exists.$(COLOR_RESET)"; \
+	CHOSEN_ENV="$(CONDA_ENV)"; \
+	if [ -t 0 ] && [ "$(CI)" != "true" ] && [ "$(NONINTERACTIVE)" != "1" ]; then \
+		echo "$(COLOR_BOLD)====================================================$(COLOR_RESET)"; \
+		echo " Holon-Coherence Conda Environment Setup"; \
+		echo "$(COLOR_BOLD)====================================================$(COLOR_RESET)"; \
+		echo "This will install Python and uv via Conda into the chosen environment."; \
+		printf "Enter target environment name [default: %s]: " "$$CHOSEN_ENV"; \
+		read -r USER_INPUT; \
+		if [ -n "$$USER_INPUT" ]; then \
+			CHOSEN_ENV="$$USER_INPUT"; \
+		fi; \
+	fi; \
+	echo "$(COLOR_BOLD)Setting up Conda environment '$$CHOSEN_ENV'...$(COLOR_RESET)"; \
+	if [ "$$CHOSEN_ENV" = "base" ]; then \
+		echo "Installing uv and python into 'base' conda environment..."; \
+		"$$CONDA_BIN" install -y -n base -c conda-forge uv python=3.13 || exit 1; \
+		echo "$(COLOR_GREEN)✅ 'base' environment updated with uv and python=3.13.$(COLOR_RESET)"; \
 	else \
-		echo "Creating new environment 'holon'..."; \
-		"$$CONDA_BIN" env create -n holon -f environment.yml; \
-		echo "$(COLOR_GREEN)✅ Environment 'holon' created successfully.$(COLOR_RESET)"; \
+		if "$$CONDA_BIN" env list 2>/dev/null | grep -q -E "^[[:space:]]*$${CHOSEN_ENV}[[:space:]]+"; then \
+			echo "Environment '$$CHOSEN_ENV' already exists. Updating environment..."; \
+			"$$CONDA_BIN" env update -n "$$CHOSEN_ENV" -f environment.yml --prune || exit 1; \
+			echo "$(COLOR_GREEN)✅ Environment '$$CHOSEN_ENV' updated successfully.$(COLOR_RESET)"; \
+		else \
+			echo "Creating new environment '$$CHOSEN_ENV' from environment.yml..."; \
+			"$$CONDA_BIN" env create -n "$$CHOSEN_ENV" -f environment.yml || exit 1; \
+			echo "$(COLOR_GREEN)✅ Environment '$$CHOSEN_ENV' created successfully.$(COLOR_RESET)"; \
+		fi; \
 	fi; \
 	echo "To activate the environment, run:"; \
-	echo "  conda activate holon"
+	echo "  conda activate $$CHOSEN_ENV"
 
 # Activate conda environment command helper
 activate-conda-env:
 	@echo "To activate the environment, run the following command:"
-	@echo "  conda activate holon"
+	@echo "  conda activate $(CONDA_ENV)"
 
 ## ==============================================================================
 ## Docker Image Build
@@ -333,14 +409,14 @@ help:
 	@echo "All targets must be executed from the root of the repository."
 	@echo ""
 	@echo "$(COLOR_BOLD)Available targets:$(COLOR_RESET)"
-	@printf $(HELP_FORMAT) "check-prerequisites" "Check Docker (CLI, buildx, daemon) and Conda dependencies."
+	@printf $(HELP_FORMAT) "check-prerequisites" "Check Docker, Conda, uv, OpenSSL, and npx prerequisites."
 	@printf $(HELP_FORMAT) "prerequisites" "Alias for check-prerequisites."
 	@printf $(HELP_FORMAT) "check-docker" "Check Docker prerequisite and install Docker if missing."
 	@printf $(HELP_FORMAT) "install-docker" "Install Docker for the detected operating system."
 	@printf $(HELP_FORMAT) "install-homebrew" "Install Homebrew (macOS only)."
 	@printf $(HELP_FORMAT) "install-miniforge" "Install Miniforge for the detected operating system."
-	@printf $(HELP_FORMAT) "create-conda-env" "Create the 'holon' Conda environment from environment.yml."
-	@printf $(HELP_FORMAT) "activate-conda-env" "Show command to activate the 'holon' Conda environment."
+	@printf $(HELP_FORMAT) "create-conda-env" "Create or update Conda environment ('holon', 'base', or custom) with uv."
+	@printf $(HELP_FORMAT) "activate-conda-env" "Show command to activate the Conda environment."
 	@printf $(HELP_FORMAT) "build-image" "Build the holon-coherence Docker container via build_image.sh."
 	@printf $(HELP_FORMAT) "help" "Show this help message."
 	@echo ""
