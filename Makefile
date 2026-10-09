@@ -67,7 +67,7 @@ install-homebrew:
 # Install Docker based on operating system
 install-docker:
 	@echo "$(COLOR_BOLD)Checking Docker installation for $(DETECTED_OS)...$(COLOR_RESET)"
-	@if [ -n "$(findstring n,$(firstword -$(MAKEFLAGS)))" ]; then exit 0; \
+	@if [ -n "$(findstring n,$(foreach w,$(MAKEFLAGS),$(if $(findstring =,$(w)),,$(filter-out --%,$(w)))))" ]; then exit 0; \
 	elif command -v docker >/dev/null 2>&1; then \
 		echo "$(COLOR_GREEN)✅ Docker is already installed: $$(docker --version)$(COLOR_RESET)"; \
 	else \
@@ -102,7 +102,7 @@ install-docker:
 
 # Check Docker prerequisite (CLI, buildx, daemon) and install Docker if missing
 check-docker:
-	@if [ -n "$(findstring n,$(firstword -$(MAKEFLAGS)))" ]; then exit 0; fi; \
+	@if [ -n "$(findstring n,$(foreach w,$(MAKEFLAGS),$(if $(findstring =,$(w)),,$(filter-out --%,$(w)))))" ]; then exit 0; fi; \
 	ERRORS=0; \
 	printf "%-32s " "Checking Docker CLI..."; \
 	if ! command -v docker >/dev/null 2>&1; then \
@@ -202,7 +202,7 @@ check-prerequisites:
 	@echo "$(COLOR_BOLD) Checking Prerequisites for holon-coherence$(COLOR_RESET)"
 	@echo "$(COLOR_BOLD) OS: $(DETECTED_OS) | Arch: $(DETECTED_ARCH)$(COLOR_RESET)"
 	@echo "$(COLOR_BOLD)=========================================$(COLOR_RESET)"
-	@if [ -n "$(findstring n,$(firstword -$(MAKEFLAGS)))" ]; then exit 0; fi; \
+	@if [ -n "$(findstring n,$(foreach w,$(MAKEFLAGS),$(if $(findstring =,$(w)),,$(filter-out --%,$(w)))))" ]; then exit 0; fi; \
 	ERRORS=0; \
 	WARNINGS=0; \
 	$(MAKE) check-docker AUTO_INSTALL=false || ERRORS=$$((ERRORS + 1)); \
@@ -279,7 +279,7 @@ prerequisites: check-prerequisites
 # Install Miniforge based on operating system
 install-miniforge:
 	@echo "$(COLOR_BOLD)Installing Miniforge for $(DETECTED_OS)...$(COLOR_RESET)"
-	@if [ -n "$(findstring n,$(firstword -$(MAKEFLAGS)))" ]; then exit 0; fi; \
+	@if [ -n "$(findstring n,$(foreach w,$(MAKEFLAGS),$(if $(findstring =,$(w)),,$(filter-out --%,$(w)))))" ]; then exit 0; fi; \
 	$(FIND_CONDA_BIN); \
 	if [ -n "$$CONDA_BIN" ]; then \
 		echo "$(COLOR_GREEN)✅ Miniforge is already installed ($$CONDA_BIN).$(COLOR_RESET)"; \
