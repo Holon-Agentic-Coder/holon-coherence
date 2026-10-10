@@ -6,11 +6,97 @@ include config/config.mk
 DETECTED_OS := $(shell uname -s)
 DETECTED_ARCH := $(shell uname -m)
 
+# Dry-run detection, consulted by install-docker, check-docker, check-prerequisites and
+# install-miniforge. GNU make compacts every single-letter option into the FIRST word of
+# MAKEFLAGS ("n", "nI", "sn") and places option arguments and VAR=value assignments after
+# it ("I incdir_n", "n -- DETECTED_OS=Linux"), so only that leading cluster may be
+# consulted. Scanning all words -- as the previous revision did -- reads an option's own
+# argument as a -n: `make -I incdir_n check-prerequisites` printed its banner, checked
+# nothing and exited 0, a prerequisite check that silently reports success. Scanning only
+# the first word was the other failure: `make DETECTED_OS=Linux` put an assignment there,
+# "Linux" contains an n, and the same silent skip happened. A first word that is an
+# assignment or a long option means no short options were given at all.
+MF_OPTION_CLUSTER := $(firstword $(MAKEFLAGS))
+MF_OPTION_CLUSTER := $(if $(findstring =,$(MF_OPTION_CLUSTER)),,$(MF_OPTION_CLUSTER))
+MF_OPTION_CLUSTER := $(if $(filter --%,$(MF_OPTION_CLUSTER)),,$(MF_OPTION_CLUSTER))
+DRY_RUN := $(if $(findstring n,$(MF_OPTION_CLUSTER)),1,)
+
 # CI Detection
 CI ?= false
 
 # Automated prerequisite installation (set to false in check-prerequisites for read-only probe)
 AUTO_INSTALL ?= true
+
+# Conda Environment Configuration.
+#
+# CONDA_ENV is the *read* default used when reporting prerequisites: reporting
+# the active environment is the most useful thing, so default it to
+# CONDA_DEFAULT_ENV when one is active, else holon.
+ifdef CONDA_DEFAULT_ENV
+CONDA_ENV ?= $(CONDA_DEFAULT_ENV)
+else
+CONDA_ENV ?= holon
+endif
+
+# CONDA_WRITE_ENV is the *write* target used by create-conda-env. It never
+# follows the active environment: an activated `base` is not consent to install
+# packages into base. It defaults to holon and tracks CONDA_ENV when that value
+# was passed on the make command line or inherited from the environment, so an
+# exported CONDA_ENV still names the environment this target works on.
+#
+# CONDA_BASE_CONSENT is the resolved answer to "may this run write into the
+# shared base environment?". Consent must be given IN THIS INVOCATION, by one of:
+#   - `make create-conda-env CONDA_ENV=base`   (typed on the command line),
+#   - `make create-conda-env CONDA_ALLOW_BASE=1` (pre-authorises a typed choice),
+#   - a typed `yes` at the interactive prompt.
+# An INHERITED variable is never consent: `export CONDA_ENV=base` or
+# `export CONDA_ALLOW_BASE=1` in the shell leaves CONDA_BASE_CONSENT=false and the
+# recipe refuses at runtime and says why. That is why CONDA_BASE_CONSENT is named
+# for the resolved decision and CONDA_ALLOW_BASE for the deliberate act.
+#
+# One qualification, so the wording is not over-broad: make carries command-line
+# assignments into sub-makes through MAKEFLAGS, and a value that arrives that way still
+# has command-line origin, so it does count as consent. `export MAKEFLAGS='CONDA_ENV=base'
+# make ...` is therefore a deliberate (if obscure) act rather than inherited state. Nothing
+# in this repository or .github/workflows sets MAKEFLAGS, and stripping it would break the
+# sanctioned recursion (create-conda-env -> install-miniforge, check-prerequisites ->
+# check-docker), so the channel stays as make defines it and the sentence is narrowed here
+# instead.
+CONDA_ENV_ORIGIN := $(origin CONDA_ENV)
+CONDA_ALLOW_BASE_ORIGIN := $(origin CONDA_ALLOW_BASE)
+CONDA_ENV_REQUESTED := $(if $(or $(findstring command line,$(CONDA_ENV_ORIGIN)),$(findstring environment,$(CONDA_ENV_ORIGIN))),true,false)
+# Command-line origin only: this is the test that separates a deliberate act from inherited state.
+CONDA_ENV_ON_COMMAND_LINE := $(if $(findstring command line,$(CONDA_ENV_ORIGIN)),true,false)
+CONDA_ALLOW_BASE_REQUESTED := $(if $(filter 1 true yes,$(CONDA_ALLOW_BASE)),$(if $(findstring command line,$(CONDA_ALLOW_BASE_ORIGIN)),true,false),false)
+ifeq ($(CONDA_ENV_REQUESTED),true)
+CONDA_WRITE_ENV := $(CONDA_ENV)
+else
+CONDA_WRITE_ENV := holon
+endif
+CONDA_BASE_CONSENT := false
+ifeq ($(CONDA_ALLOW_BASE_REQUESTED),true)
+CONDA_BASE_CONSENT := true
+endif
+ifeq ($(CONDA_WRITE_ENV),base)
+ifeq ($(CONDA_ENV_ON_COMMAND_LINE),true)
+CONDA_BASE_CONSENT := true
+endif
+endif
+
+# Upper bound, in seconds, for the interactive target prompt. `create-conda-env` offers
+# the prompt whenever stdin is a terminal, which includes pty-backed automation; a run
+# that never answers must fail fast instead of blocking forever. A timeout (or a shell
+# whose `read` cannot time out) is a REFUSAL, never an implicit yes.
+CONDA_PROMPT_TIMEOUT ?= 20
+
+# Pruning an environment this target did not create can remove packages the
+# user added by hand, so it is opt-in: pass CONDA_PRUNE=1 (or true).
+CONDA_PRUNE ?= false
+# Command-line origin only, matching CONDA_ALLOW_BASE. `--prune` removes packages that are
+# absent from environment.yml from an environment this target may not have created, so the
+# destructive choice must come from an act in this invocation: `CONDA_PRUNE=1 make ...` (the
+# idiomatic one-off) qualifies, `export CONDA_PRUNE=1` left in the shell does not.
+CONDA_PRUNE_EFFECTIVE := $(if $(findstring command line,$(origin CONDA_PRUNE)),$(CONDA_PRUNE),false)
 
 # Options passed to build_image.sh (use --output-log in CI environments)
 ifeq ($(CI),true)
@@ -60,7 +146,7 @@ install-homebrew:
 # Install Docker based on operating system
 install-docker:
 	@echo "$(COLOR_BOLD)Checking Docker installation for $(DETECTED_OS)...$(COLOR_RESET)"
-	@if [ -n "$(findstring n,$(firstword -$(MAKEFLAGS)))" ]; then exit 0; \
+	@if [ -n "$(DRY_RUN)" ]; then exit 0; \
 	elif command -v docker >/dev/null 2>&1; then \
 		echo "$(COLOR_GREEN)✅ Docker is already installed: $$(docker --version)$(COLOR_RESET)"; \
 	else \
@@ -95,7 +181,7 @@ install-docker:
 
 # Check Docker prerequisite (CLI, buildx, daemon) and install Docker if missing
 check-docker:
-	@if [ -n "$(findstring n,$(firstword -$(MAKEFLAGS)))" ]; then exit 0; fi; \
+	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
 	ERRORS=0; \
 	printf "%-32s " "Checking Docker CLI..."; \
 	if ! command -v docker >/dev/null 2>&1; then \
@@ -189,14 +275,15 @@ check-docker:
 		exit 1; \
 	fi
 
-# Check system prerequisites: Docker (CLI, buildx, daemon) and Conda
+# Check system prerequisites: Docker (CLI, buildx, daemon), Conda, uv, OpenSSL, and npx
 check-prerequisites:
 	@echo "$(COLOR_BOLD)=========================================$(COLOR_RESET)"
 	@echo "$(COLOR_BOLD) Checking Prerequisites for holon-coherence$(COLOR_RESET)"
 	@echo "$(COLOR_BOLD) OS: $(DETECTED_OS) | Arch: $(DETECTED_ARCH)$(COLOR_RESET)"
 	@echo "$(COLOR_BOLD)=========================================$(COLOR_RESET)"
-	@if [ -n "$(findstring n,$(firstword -$(MAKEFLAGS)))" ]; then exit 0; fi; \
+	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
 	ERRORS=0; \
+	WARNINGS=0; \
 	$(MAKE) check-docker AUTO_INSTALL=false || ERRORS=$$((ERRORS + 1)); \
 	printf "%-32s " "Checking Conda..."; \
 	$(FIND_CONDA_BIN); \
@@ -209,10 +296,70 @@ check-prerequisites:
 		ERRORS=$$((ERRORS + 1)); \
 	fi; \
 	\
+	printf "%-32s " "Checking uv in Conda env..."; \
+	TARGET_ENV="$(CONDA_ENV)"; \
+	ACTIVE_ENV="$$CONDA_DEFAULT_ENV"; \
+	if [ -n "$$ACTIVE_ENV" ]; then ACTIVE_DESC="active env: $$ACTIVE_ENV"; else ACTIVE_DESC="no active conda env"; fi; \
+	UV_KIND=""; UV_BIN=""; UV_WHERE=""; ENV_PREFIX=""; \
+	if [ -n "$$CONDA_PREFIX" ] && [ -x "$$CONDA_PREFIX/bin/uv" ]; then \
+		UV_KIND=env; UV_BIN="$$CONDA_PREFIX/bin/uv"; UV_WHERE="conda env $${ACTIVE_ENV:-$$CONDA_PREFIX}"; \
+	fi; \
+	if [ -z "$$UV_KIND" ] && [ -n "$$CONDA_BIN" ]; then \
+		ENV_PREFIX=$$("$$CONDA_BIN" env list 2>/dev/null | awk -v env="$$TARGET_ENV" '$$1 == env { line = $$0; sub(/^[ \t]*[^ \t]+[ \t]+/, "", line); sub(/^[*+ \t]+/, "", line); sub(/[ \t\r]*[*+][ \t\r]*$$/, "", line); sub(/[ \t\r]+$$/, "", line); print line; exit }'); \
+		if [ -n "$$ENV_PREFIX" ] && [ -x "$$ENV_PREFIX/bin/uv" ]; then \
+			UV_KIND=env; UV_BIN="$$ENV_PREFIX/bin/uv"; UV_WHERE="conda env $$TARGET_ENV ($$ENV_PREFIX)"; \
+		fi; \
+	fi; \
+	if [ -z "$$UV_KIND" ] && command -v uv >/dev/null 2>&1; then \
+		UV_KIND=path; UV_BIN=$$(command -v uv); \
+	fi; \
+	if [ "$$UV_KIND" = "env" ]; then \
+		UV_VER=$$("$$UV_BIN" --version 2>/dev/null); \
+		echo "$(COLOR_GREEN)✅ Found: $$UV_VER (uv inside $$UV_WHERE)$(COLOR_RESET)"; \
+	elif [ "$$UV_KIND" = "path" ]; then \
+		UV_VER=$$("$$UV_BIN" --version 2>/dev/null); \
+		echo "$(COLOR_YELLOW)⚠️  Found on PATH only: $$UV_VER ($$UV_BIN)$(COLOR_RESET)"; \
+		echo "   uv is NOT installed in conda env '$$TARGET_ENV' ($$ACTIVE_DESC); this resolution came from PATH."; \
+		echo "   Run $(COLOR_BOLD)make create-conda-env CONDA_ENV=$$TARGET_ENV$(COLOR_RESET) to install it into the environment."; \
+		WARNINGS=$$((WARNINGS + 1)); \
+	else \
+		echo "$(COLOR_RED)❌ Missing: uv not found on PATH or in conda env '$$TARGET_ENV' ($$ACTIVE_DESC)$(COLOR_RESET)"; \
+		echo "   Run $(COLOR_BOLD)make create-conda-env$(COLOR_RESET) or $(COLOR_BOLD)make create-conda-env CONDA_ENV=$$TARGET_ENV$(COLOR_RESET)."; \
+		ERRORS=$$((ERRORS + 1)); \
+	fi; \
+	\
+	printf "%-32s " "Checking OpenSSL..."; \
+	if command -v openssl >/dev/null 2>&1; then \
+		OPENSSL_VER=$$(openssl version 2>/dev/null || true); \
+		echo "$(COLOR_GREEN)✅ Found: $$OPENSSL_VER$(COLOR_RESET)"; \
+	else \
+		echo "$(COLOR_RED)❌ Missing: openssl not found$(COLOR_RESET)"; \
+		echo "   OpenSSL is required by ca_generator.py for Root CA generation."; \
+		if [ "$(DETECTED_OS)" = "Darwin" ]; then \
+			echo "   Install via Homebrew: brew install openssl"; \
+		else \
+			echo "   Install via package manager: sudo apt install openssl"; \
+		fi; \
+		ERRORS=$$((ERRORS + 1)); \
+	fi; \
+	\
+	printf "%-32s " "Checking npx (Prettier)..."; \
+	if command -v npx >/dev/null 2>&1; then \
+		NPX_VER=$$(npx --version 2>/dev/null || true); \
+		echo "$(COLOR_GREEN)✅ Found: npx v$$NPX_VER$(COLOR_RESET)"; \
+	else \
+		echo "$(COLOR_YELLOW)⚠️  Missing: npx not found$(COLOR_RESET)"; \
+		echo "   npx is required for Prettier markdown documentation hygiene checks."; \
+		WARNINGS=$$((WARNINGS + 1)); \
+	fi; \
+	\
 	echo "$(COLOR_BOLD)=========================================$(COLOR_RESET)"; \
 	if [ $$ERRORS -gt 0 ]; then \
 		echo "$(COLOR_RED)❌ $$ERRORS prerequisite check(s) failed. Please install or start the required tools above.$(COLOR_RESET)"; \
 		exit 1; \
+	elif [ $$WARNINGS -gt 0 ]; then \
+		echo "$(COLOR_YELLOW)⚠️  Core prerequisites satisfied, but $$WARNINGS optional/advisory check(s) raised warnings.$(COLOR_RESET)"; \
+		exit 0; \
 	else \
 		echo "$(COLOR_GREEN)✅ All prerequisites are satisfied!$(COLOR_RESET)"; \
 	fi
@@ -223,7 +370,7 @@ prerequisites: check-prerequisites
 # Install Miniforge based on operating system
 install-miniforge:
 	@echo "$(COLOR_BOLD)Installing Miniforge for $(DETECTED_OS)...$(COLOR_RESET)"
-	@if [ -n "$(findstring n,$(firstword -$(MAKEFLAGS)))" ]; then exit 0; fi; \
+	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
 	$(FIND_CONDA_BIN); \
 	if [ -n "$$CONDA_BIN" ]; then \
 		echo "$(COLOR_GREEN)✅ Miniforge is already installed ($$CONDA_BIN).$(COLOR_RESET)"; \
@@ -290,28 +437,111 @@ install-miniforge:
 		exit 1; \
 	fi
 
-# Create conda environment 'holon' from environment.yml
+# Create or update conda environment with interactive confirmation/selection
 create-conda-env: install-miniforge
-	@echo "$(COLOR_BOLD)Creating conda environment 'holon' from environment.yml...$(COLOR_RESET)"
 	@$(FIND_CONDA_BIN); \
 	if [ -z "$$CONDA_BIN" ]; then \
 		echo "$(COLOR_RED)❌ Conda not found after Miniforge installation.$(COLOR_RESET)"; \
 		exit 1; \
 	fi; \
-	if "$$CONDA_BIN" env list | grep -q -E '^[[:space:]]*holon[[:space:]]+'; then \
-		echo "$(COLOR_GREEN)✅ Environment 'holon' already exists.$(COLOR_RESET)"; \
+	CHOSEN_ENV="$(CONDA_WRITE_ENV)"; \
+	BASE_CONSENT="$(CONDA_BASE_CONSENT)"; \
+	PROMPT_TIMEOUT="$(CONDA_PROMPT_TIMEOUT)"; \
+	ACTIVE_ENV="$$CONDA_DEFAULT_ENV"; \
+	if [ -n "$$ACTIVE_ENV" ]; then ACTIVE_DESC="active env: $$ACTIVE_ENV"; else ACTIVE_DESC="no active conda env"; fi; \
+	if [ -t 0 ] && [ "$(CI)" != "true" ] && [ "$(NONINTERACTIVE)" != "1" ]; then \
+		if ! printf 'y\n' | read -r -t 1 _holon_probe >/dev/null 2>&1; then \
+			echo "$(COLOR_YELLOW)❌ This shell's read cannot time out, so the prompt cannot be offered safely.$(COLOR_RESET)"; \
+			echo "   Nothing was installed: an unanswerable prompt must not be answered on your behalf, and silently picking a default is an implicit yes."; \
+			echo "   Name the environment deliberately on the command line: make create-conda-env $(COLOR_BOLD)CONDA_ENV=<name>$(COLOR_RESET)"; \
+			exit 1; \
+		else \
+			echo "$(COLOR_BOLD)====================================================$(COLOR_RESET)"; \
+			echo " Holon-Coherence Conda Environment Setup"; \
+			echo "$(COLOR_BOLD)====================================================$(COLOR_RESET)"; \
+			echo "This will install Python and uv via Conda into the chosen environment."; \
+			echo " Currently active: $$ACTIVE_DESC (press Enter to keep '$$CHOSEN_ENV')"; \
+			printf "Enter target environment name [default: %s]: " "$$CHOSEN_ENV"; \
+			if ! read -r -t "$$PROMPT_TIMEOUT" USER_INPUT; then \
+				echo "$(COLOR_RED)❌ No answer within $$PROMPT_TIMEOUT s; nothing was installed.$(COLOR_RESET)"; \
+				echo "   It would have provisioned conda env '$$CHOSEN_ENV' from environment.yml (active: $$ACTIVE_DESC)."; \
+				echo "   Answer it deliberately, or pass the name on the command line: make create-conda-env $(COLOR_BOLD)CONDA_ENV=$$CHOSEN_ENV$(COLOR_RESET)"; \
+				exit 1; \
+			fi; \
+			if [ -n "$$USER_INPUT" ]; then \
+				CHOSEN_ENV="$$USER_INPUT"; \
+			fi; \
+			if [ "$$CHOSEN_ENV" = "base" ] && [ "$$BASE_CONSENT" != "true" ]; then \
+				printf "'base' is a shared environment. Type 'yes' to install into it [no]: "; \
+				if ! read -r -t "$$PROMPT_TIMEOUT" BASE_REPLY; then \
+					echo "$(COLOR_RED)❌ No answer within $$PROMPT_TIMEOUT s; refusing to write to 'base'.$(COLOR_RESET)"; \
+					echo "   It would have run: \"$$CONDA_BIN\" install -y -n base -c conda-forge uv python=3.13"; \
+					exit 1; \
+				fi; \
+				if [ "$$BASE_REPLY" = "yes" ]; then \
+					BASE_CONSENT=true; \
+				else \
+					echo "Aborted: 'base' was not confirmed. Pick another name or pass $(COLOR_BOLD)CONDA_ENV=base$(COLOR_RESET) deliberately."; \
+					exit 1; \
+				fi; \
+			fi; \
+		fi; \
+	fi; \
+	if [ -z "$$CHOSEN_ENV" ]; then \
+		echo "$(COLOR_RED)❌ Empty environment name. Pass $(COLOR_BOLD)CONDA_ENV=<name>$(COLOR_RESET) or use the default 'holon'.$(COLOR_RESET)"; \
+		exit 1; \
+	fi; \
+	if [ "$$CHOSEN_ENV" = "base" ] && [ "$$BASE_CONSENT" != "true" ]; then \
+		echo "$(COLOR_RED)❌ Refusing to write to 'base': this invocation did not ask for it.$(COLOR_RESET)"; \
+		echo "   An inherited environment variable (CONDA_ENV=base or CONDA_ALLOW_BASE=1 in your shell) is not consent."; \
+		echo "   Request it deliberately on the command line: make create-conda-env $(COLOR_BOLD)CONDA_ENV=base$(COLOR_RESET)"; \
+		echo "   Or use a dedicated environment: make create-conda-env $(COLOR_BOLD)CONDA_ENV=holon$(COLOR_RESET)"; \
+		exit 1; \
+	fi; \
+	echo "$(COLOR_BOLD)Setting up Conda environment '$$CHOSEN_ENV' ($$ACTIVE_DESC)...$(COLOR_RESET)"; \
+	if [ "$$CHOSEN_ENV" = "base" ]; then \
+		echo "Installing uv and python into 'base' conda environment..."; \
+		echo "$(COLOR_YELLOW)⚠️  The 'base' route installs a narrower package set (uv, python=3.13) than environment.yml.$(COLOR_RESET)"; \
+		"$$CONDA_BIN" install -y -n base -c conda-forge uv python=3.13 || exit 1; \
+		echo "$(COLOR_GREEN)✅ 'base' environment updated with uv and python=3.13.$(COLOR_RESET)"; \
 	else \
-		echo "Creating new environment 'holon'..."; \
-		"$$CONDA_BIN" env create -n holon -f environment.yml; \
-		echo "$(COLOR_GREEN)✅ Environment 'holon' created successfully.$(COLOR_RESET)"; \
+		if "$$CONDA_BIN" env list 2>/dev/null | awk -v env="$$CHOSEN_ENV" '$$1 == env { found = 1; exit } END { exit !found }'; then \
+			echo "Environment '$$CHOSEN_ENV' already exists. Updating environment..."; \
+			CONDA_PRUNE_FLAG=""; \
+			if [ "$(CONDA_PRUNE_EFFECTIVE)" = "1" ] || [ "$(CONDA_PRUNE_EFFECTIVE)" = "true" ]; then \
+				CONDA_PRUNE_FLAG="--prune"; \
+				echo "CONDA_PRUNE=$(CONDA_PRUNE_EFFECTIVE): pruning packages that are absent from environment.yml."; \
+			fi; \
+			"$$CONDA_BIN" env update -n "$$CHOSEN_ENV" -f environment.yml $$CONDA_PRUNE_FLAG || exit 1; \
+			echo "$(COLOR_GREEN)✅ Environment '$$CHOSEN_ENV' updated successfully.$(COLOR_RESET)"; \
+		else \
+			echo "Creating new environment '$$CHOSEN_ENV' from environment.yml..."; \
+			"$$CONDA_BIN" env create -n "$$CHOSEN_ENV" -f environment.yml || exit 1; \
+			echo "$(COLOR_GREEN)✅ Environment '$$CHOSEN_ENV' created successfully.$(COLOR_RESET)"; \
+		fi; \
 	fi; \
 	echo "To activate the environment, run:"; \
-	echo "  conda activate holon"
+	if [ "$$CHOSEN_ENV" = "$$ACTIVE_ENV" ]; then \
+		echo "  conda activate $$CHOSEN_ENV  (already active: $$ACTIVE_ENV)"; \
+	else \
+		echo "  conda activate $$CHOSEN_ENV"; \
+	fi
 
 # Activate conda environment command helper
 activate-conda-env:
-	@echo "To activate the environment, run the following command:"
-	@echo "  conda activate holon"
+	@echo "Target conda environment: $(CONDA_WRITE_ENV)"
+	@if [ -n "$$CONDA_DEFAULT_ENV" ]; then \
+		echo "Currently active conda environment: $$CONDA_DEFAULT_ENV"; \
+		if [ "$$CONDA_DEFAULT_ENV" = "$(CONDA_WRITE_ENV)" ]; then \
+			echo "'$(CONDA_WRITE_ENV)' is already active; nothing to activate."; \
+		else \
+			echo "To switch to the target environment, run the following command:"; \
+			echo "  conda activate $(CONDA_WRITE_ENV)"; \
+		fi; \
+	else \
+		echo "No conda environment is currently active. To activate the target environment, run:"; \
+		echo "  conda activate $(CONDA_WRITE_ENV)"; \
+	fi
 
 ## ==============================================================================
 ## Docker Image Build
@@ -333,14 +563,22 @@ help:
 	@echo "All targets must be executed from the root of the repository."
 	@echo ""
 	@echo "$(COLOR_BOLD)Available targets:$(COLOR_RESET)"
-	@printf $(HELP_FORMAT) "check-prerequisites" "Check Docker (CLI, buildx, daemon) and Conda dependencies."
+	@printf $(HELP_FORMAT) "check-prerequisites" "Check Docker, Conda, uv, OpenSSL, and npx prerequisites."
 	@printf $(HELP_FORMAT) "prerequisites" "Alias for check-prerequisites."
 	@printf $(HELP_FORMAT) "check-docker" "Check Docker prerequisite and install Docker if missing."
 	@printf $(HELP_FORMAT) "install-docker" "Install Docker for the detected operating system."
 	@printf $(HELP_FORMAT) "install-homebrew" "Install Homebrew (macOS only)."
 	@printf $(HELP_FORMAT) "install-miniforge" "Install Miniforge for the detected operating system."
-	@printf $(HELP_FORMAT) "create-conda-env" "Create the 'holon' Conda environment from environment.yml."
-	@printf $(HELP_FORMAT) "activate-conda-env" "Show command to activate the 'holon' Conda environment."
+	@printf $(HELP_FORMAT) "create-conda-env" "Create or update Conda environment (CONDA_WRITE_ENV, default 'holon'; 'base' only on deliberate consent; CONDA_PRUNE=1 to prune)."
+	@printf $(HELP_FORMAT) "activate-conda-env" "Show command to activate the Conda environment."
 	@printf $(HELP_FORMAT) "build-image" "Build the holon-coherence Docker container via build_image.sh."
 	@printf $(HELP_FORMAT) "help" "Show this help message."
+	@echo ""
+	@echo "$(COLOR_BOLD)Variables:$(COLOR_RESET)"
+	@printf $(HELP_FORMAT) "CONDA_ENV" "Environment to report in check-prerequisites (default: active CONDA_DEFAULT_ENV, else 'holon')."
+	@printf $(HELP_FORMAT) "CONDA_WRITE_ENV" "Environment create-conda-env writes to (default: 'holon'; follows CONDA_ENV when passed, never an activated 'base')."
+	@printf $(HELP_FORMAT) "CONDA_ALLOW_BASE" "Set to 1/true/yes ON THE MAKE COMMAND LINE to consent to writing into 'base'; an inherited value never grants consent."
+	@printf $(HELP_FORMAT) "CONDA_PRUNE" "Set to 1 or true on the make command line to add --prune to 'conda env update' for an existing environment (default: false; a shell-exported value is ignored)."
+	@printf $(HELP_FORMAT) "CONDA_PROMPT_TIMEOUT" "Seconds the interactive target prompt waits for an answer before refusing (default: 20)."
+	@printf $(HELP_FORMAT) "NONINTERACTIVE" "Set to 1 to skip the interactive target prompt (also implied by CI=true or a non-terminal stdin)."
 	@echo ""
