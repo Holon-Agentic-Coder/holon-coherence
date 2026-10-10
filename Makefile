@@ -437,8 +437,10 @@ create-conda-env: install-miniforge
 	if [ -n "$$ACTIVE_ENV" ]; then ACTIVE_DESC="active env: $$ACTIVE_ENV"; else ACTIVE_DESC="no active conda env"; fi; \
 	if [ -t 0 ] && [ "$(CI)" != "true" ] && [ "$(NONINTERACTIVE)" != "1" ]; then \
 		if ! printf 'y\n' | read -r -t 1 _holon_probe >/dev/null 2>&1; then \
-			echo "$(COLOR_YELLOW)⚠️  This shell's read cannot time out: skipping the interactive prompt so this run cannot hang.$(COLOR_RESET)"; \
-			echo "   Choose the environment on the command line instead: make create-conda-env $(COLOR_BOLD)CONDA_ENV=<name>$(COLOR_RESET)"; \
+			echo "$(COLOR_YELLOW)❌ This shell's read cannot time out, so the prompt cannot be offered safely.$(COLOR_RESET)"; \
+			echo "   Nothing was installed: an unanswerable prompt must not be answered on your behalf, and silently picking a default is an implicit yes."; \
+			echo "   Name the environment deliberately on the command line: make create-conda-env $(COLOR_BOLD)CONDA_ENV=<name>$(COLOR_RESET)"; \
+			exit 1; \
 		else \
 			echo "$(COLOR_BOLD)====================================================$(COLOR_RESET)"; \
 			echo " Holon-Coherence Conda Environment Setup"; \

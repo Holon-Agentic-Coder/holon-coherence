@@ -185,13 +185,17 @@ def _run_recipe_against_stub_conda(tmp_path, recipe, existing_envs=(), env_extra
     return result, _recorded_calls(call_log)
 
 
-def _run_recipe_on_tty(tmp_path, recipe, keystrokes=None, existing_envs=(), env_extra=None, timeout=30):
+def _run_recipe_on_tty(
+    tmp_path, recipe, keystrokes=None, existing_envs=(), env_extra=None, timeout=30, shell="/bin/sh"
+):
     """Execute an emitted recipe with stdin on a real pty, so the recipe's `[ -t 0 ]` is true.
 
     `keystrokes` are written to the pty master before the recipe runs; passing None leaves
     the terminal silent, which is how the prompt-timeout refusal is exercised. The
     subprocess timeout is the hang detector: an unbounded `read` fails this test rather
-    than blocking forever, which is the I-C regression this guards against.
+    than blocking forever, which is the I-C regression this guards against. `shell` selects
+    the interpreter, which is how the dash path (a `read` that cannot time out) is reached
+    from a host whose own /bin/sh is bash.
     """
     run_env, call_log = _stub_conda_run_env(tmp_path, existing_envs, env_extra)
     master, slave = pty.openpty()
@@ -199,7 +203,7 @@ def _run_recipe_on_tty(tmp_path, recipe, keystrokes=None, existing_envs=(), env_
         if keystrokes:
             os.write(master, keystrokes)
         result = subprocess.run(
-            ["/bin/sh", "-c", recipe],
+            [shell, "-c", recipe],
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
@@ -211,6 +215,31 @@ def _run_recipe_on_tty(tmp_path, recipe, keystrokes=None, existing_envs=(), env_
         os.close(master)
         os.close(slave)
     return result, _recorded_calls(call_log)
+
+
+@pytest.mark.skipif(shutil.which("/bin/dash") is None, reason="dash is not available on this host")
+def test_create_conda_env_refuses_on_a_shell_whose_read_cannot_time_out(tmp_path):
+    """Under dash - Ubuntu's /bin/sh - the prompt cannot be bounded, so the target must refuse.
+
+    dash's `read` has no -t, so the recipe's timed-read probe fails there. Answering that
+    by quietly provisioning the default environment is an implicit yes, and both the README
+    and the Makefile comment promise that a prompt which goes unanswered is a refusal. On a
+    macOS host /bin/sh is bash, so dash is invoked explicitly to reach the same branch a
+    Debian runner would take.
+    """
+    stdout, recipe = _create_conda_env_recipe(
+        make_vars={"CONDA_PROMPT_TIMEOUT": "1"},
+        env_vars={"CI": None, "NONINTERACTIVE": None},
+    )
+    assert 'CHOSEN_ENV="holon"' in stdout
+
+    result, calls = _run_recipe_on_tty(tmp_path, recipe, existing_envs=("base", "holon"), shell="/bin/dash")
+
+    assert result.returncode != 0, f"dash answered the unanswerable prompt:\n{result.stdout}"
+    assert "cannot time out" in result.stdout
+    assert "Nothing was installed" in result.stdout
+    assert "CONDA_ENV=<name>" in result.stdout
+    assert calls == []
 
 
 def _emitted_prune_guard_is_enabled(stdout):
