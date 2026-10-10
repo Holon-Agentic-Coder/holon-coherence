@@ -6,6 +6,21 @@ include config/config.mk
 DETECTED_OS := $(shell uname -s)
 DETECTED_ARCH := $(shell uname -m)
 
+# Dry-run detection, consulted by install-docker, check-docker, check-prerequisites and
+# install-miniforge. GNU make compacts every single-letter option into the FIRST word of
+# MAKEFLAGS ("n", "nI", "sn") and places option arguments and VAR=value assignments after
+# it ("I incdir_n", "n -- DETECTED_OS=Linux"), so only that leading cluster may be
+# consulted. Scanning all words -- as the previous revision did -- reads an option's own
+# argument as a -n: `make -I incdir_n check-prerequisites` printed its banner, checked
+# nothing and exited 0, a prerequisite check that silently reports success. Scanning only
+# the first word was the other failure: `make DETECTED_OS=Linux` put an assignment there,
+# "Linux" contains an n, and the same silent skip happened. A first word that is an
+# assignment or a long option means no short options were given at all.
+MF_OPTION_CLUSTER := $(firstword $(MAKEFLAGS))
+MF_OPTION_CLUSTER := $(if $(findstring =,$(MF_OPTION_CLUSTER)),,$(MF_OPTION_CLUSTER))
+MF_OPTION_CLUSTER := $(if $(filter --%,$(MF_OPTION_CLUSTER)),,$(MF_OPTION_CLUSTER))
+DRY_RUN := $(if $(findstring n,$(MF_OPTION_CLUSTER)),1,)
+
 # CI Detection
 CI ?= false
 
@@ -117,7 +132,7 @@ install-homebrew:
 # Install Docker based on operating system
 install-docker:
 	@echo "$(COLOR_BOLD)Checking Docker installation for $(DETECTED_OS)...$(COLOR_RESET)"
-	@if [ -n "$(findstring n,$(foreach w,$(MAKEFLAGS),$(if $(findstring =,$(w)),,$(filter-out --%,$(w)))))" ]; then exit 0; \
+	@if [ -n "$(DRY_RUN)" ]; then exit 0; \
 	elif command -v docker >/dev/null 2>&1; then \
 		echo "$(COLOR_GREEN)✅ Docker is already installed: $$(docker --version)$(COLOR_RESET)"; \
 	else \
@@ -152,7 +167,7 @@ install-docker:
 
 # Check Docker prerequisite (CLI, buildx, daemon) and install Docker if missing
 check-docker:
-	@if [ -n "$(findstring n,$(foreach w,$(MAKEFLAGS),$(if $(findstring =,$(w)),,$(filter-out --%,$(w)))))" ]; then exit 0; fi; \
+	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
 	ERRORS=0; \
 	printf "%-32s " "Checking Docker CLI..."; \
 	if ! command -v docker >/dev/null 2>&1; then \
@@ -252,7 +267,7 @@ check-prerequisites:
 	@echo "$(COLOR_BOLD) Checking Prerequisites for holon-coherence$(COLOR_RESET)"
 	@echo "$(COLOR_BOLD) OS: $(DETECTED_OS) | Arch: $(DETECTED_ARCH)$(COLOR_RESET)"
 	@echo "$(COLOR_BOLD)=========================================$(COLOR_RESET)"
-	@if [ -n "$(findstring n,$(foreach w,$(MAKEFLAGS),$(if $(findstring =,$(w)),,$(filter-out --%,$(w)))))" ]; then exit 0; fi; \
+	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
 	ERRORS=0; \
 	WARNINGS=0; \
 	$(MAKE) check-docker AUTO_INSTALL=false || ERRORS=$$((ERRORS + 1)); \
@@ -341,7 +356,7 @@ prerequisites: check-prerequisites
 # Install Miniforge based on operating system
 install-miniforge:
 	@echo "$(COLOR_BOLD)Installing Miniforge for $(DETECTED_OS)...$(COLOR_RESET)"
-	@if [ -n "$(findstring n,$(foreach w,$(MAKEFLAGS),$(if $(findstring =,$(w)),,$(filter-out --%,$(w)))))" ]; then exit 0; fi; \
+	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
 	$(FIND_CONDA_BIN); \
 	if [ -n "$$CONDA_BIN" ]; then \
 		echo "$(COLOR_GREEN)✅ Miniforge is already installed ($$CONDA_BIN).$(COLOR_RESET)"; \

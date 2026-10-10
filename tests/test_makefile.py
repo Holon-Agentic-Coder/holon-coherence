@@ -705,15 +705,16 @@ def _prerequisites_run_env(tmp_path, *, path_tools=(), uv_prefix="default", env_
     return run_env
 
 
-def _run_check_prerequisites(tmp_path, **kwargs):
+def _run_check_prerequisites(tmp_path, extra_args=(), **kwargs):
     """Execute the real `make check-prerequisites` target (a read-only probe) with stubs.
 
     The target runs with AUTO_INSTALL=false, so it only probes: nothing here installs
-    software or touches the host's conda environments.
+    software or touches the host's conda environments. `extra_args` carries make flags or
+    command-line assignments, which is how the dry-run detector is exercised.
     """
     run_env = _prerequisites_run_env(tmp_path, **kwargs)
     return subprocess.run(
-        ["make", "check-prerequisites"],
+        ["make", *extra_args, "check-prerequisites"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
@@ -795,3 +796,63 @@ def test_install_miniforge_checksum_dry_run():
     assert result.returncode == 0
     assert "EXPECTED_SHA=" in result.stdout
     assert "sha256sum" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Dry-run detector (Bean 0079 review)
+#
+# The long recipes are guarded so `make -n` cannot execute a line that embeds $(MAKE).
+# That guard produced two different silent skips in two revisions and no test caught
+# either one, because nothing pinned it: scanning every MAKEFLAGS word read the option
+# argument in `make -I incdir_n` as a -n, and reading only the first word read
+# `DETECTED_OS=Linux` as a -n ("Linux" contains an n). Both made check-prerequisites
+# print its banner, probe nothing and exit 0 - a green prerequisite check that verified
+# nothing. Asserted on executed output only, never on Makefile text, so rewording the
+# guard cannot make these vacuous.
+# ---------------------------------------------------------------------------
+
+
+def _probe_lines(stdout):
+    """The probe lines the target prints only when it actually runs its checks."""
+    return [line for line in stdout.splitlines() if line.startswith("Checking ")]
+
+
+@pytest.mark.parametrize("flags", [["-n"], ["-s", "-n"], ["--dry-run"], ["-Bn"]], ids=["n", "s-n", "long", "bundled"])
+def test_check_prerequisites_stays_inert_under_every_dry_run_spelling(tmp_path, flags):
+    result = _run_check_prerequisites(
+        tmp_path,
+        extra_args=flags,
+        path_tools=("docker", "openssl", "npx"),
+        uv_prefix=tmp_path / "envs" / "holon",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _probe_lines(result.stdout) == [], f"{flags} executed the checks:\n{result.stdout}"
+
+
+def test_check_prerequisites_runs_when_an_option_argument_spells_n(tmp_path):
+    """`make -I incdir_n ...` must probe for real; the -n lives in the argument, not a flag."""
+    include_dir = tmp_path / "incdir_n"
+    include_dir.mkdir()
+    result = _run_check_prerequisites(
+        tmp_path,
+        extra_args=["-I", str(include_dir)],
+        path_tools=("docker", "openssl", "npx"),
+        uv_prefix=tmp_path / "envs" / "holon",
+    )
+    probes = _probe_lines(result.stdout)
+    assert probes, f"the guard misread the -I argument as a dry run:\n{result.stdout}"
+    assert any(line.startswith("Checking OpenSSL") for line in probes)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_check_prerequisites_runs_when_a_command_line_assignment_spells_n(tmp_path):
+    """`make DETECTED_OS=Linux ...` must probe too; the pre-rewrite guard skipped this one."""
+    result = _run_check_prerequisites(
+        tmp_path,
+        extra_args=["DETECTED_OS=Linux"],
+        path_tools=("docker", "openssl", "npx"),
+        uv_prefix=tmp_path / "envs" / "holon",
+    )
+    probes = _probe_lines(result.stdout)
+    assert probes, f"the guard misread an assignment as a dry run:\n{result.stdout}"
+    assert any(line.startswith("Checking Docker CLI") for line in probes)
