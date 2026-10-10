@@ -25,25 +25,45 @@ endif
 
 # CONDA_WRITE_ENV is the *write* target used by create-conda-env. It never
 # follows the active environment: an activated `base` is not consent to install
-# packages into base. It defaults to holon and tracks CONDA_ENV only when that
-# value was requested explicitly (command line or exported environment).
+# packages into base. It defaults to holon and tracks CONDA_ENV when that value
+# was passed on the make command line or inherited from the environment, so an
+# exported CONDA_ENV still names the environment this target works on.
 #
-# CONDA_BASE_CONSENT is true only when `base` was requested up front; otherwise
-# create-conda-env asks for a typed `yes` interactively and refuses in
-# non-interactive runs.
+# CONDA_BASE_CONSENT is the resolved answer to "may this run write into the
+# shared base environment?". Consent must be given IN THIS INVOCATION, by one of:
+#   - `make create-conda-env CONDA_ENV=base`   (typed on the command line),
+#   - `make create-conda-env CONDA_ALLOW_BASE=1` (pre-authorises a typed choice),
+#   - a typed `yes` at the interactive prompt.
+# An INHERITED variable is never consent: `export CONDA_ENV=base` or
+# `export CONDA_ALLOW_BASE=1` in the shell leaves CONDA_BASE_CONSENT=false and the
+# recipe refuses at runtime and says why. That is why CONDA_BASE_CONSENT is named
+# for the resolved decision and CONDA_ALLOW_BASE for the deliberate act.
 CONDA_ENV_ORIGIN := $(origin CONDA_ENV)
+CONDA_ALLOW_BASE_ORIGIN := $(origin CONDA_ALLOW_BASE)
 CONDA_ENV_REQUESTED := $(if $(or $(findstring command line,$(CONDA_ENV_ORIGIN)),$(findstring environment,$(CONDA_ENV_ORIGIN))),true,false)
+# Command-line origin only: this is the test that separates a deliberate act from inherited state.
+CONDA_ENV_ON_COMMAND_LINE := $(if $(findstring command line,$(CONDA_ENV_ORIGIN)),true,false)
+CONDA_ALLOW_BASE_REQUESTED := $(if $(filter 1 true yes,$(CONDA_ALLOW_BASE)),$(if $(findstring command line,$(CONDA_ALLOW_BASE_ORIGIN)),true,false),false)
 ifeq ($(CONDA_ENV_REQUESTED),true)
 CONDA_WRITE_ENV := $(CONDA_ENV)
 else
 CONDA_WRITE_ENV := holon
 endif
 CONDA_BASE_CONSENT := false
+ifeq ($(CONDA_ALLOW_BASE_REQUESTED),true)
+CONDA_BASE_CONSENT := true
+endif
 ifeq ($(CONDA_WRITE_ENV),base)
-ifeq ($(CONDA_ENV_REQUESTED),true)
+ifeq ($(CONDA_ENV_ON_COMMAND_LINE),true)
 CONDA_BASE_CONSENT := true
 endif
 endif
+
+# Upper bound, in seconds, for the interactive target prompt. `create-conda-env` offers
+# the prompt whenever stdin is a terminal, which includes pty-backed automation; a run
+# that never answers must fail fast instead of blocking forever. A timeout (or a shell
+# whose `read` cannot time out) is a REFUSAL, never an implicit yes.
+CONDA_PROMPT_TIMEOUT ?= 20
 
 # Pruning an environment this target did not create can remove packages the
 # user added by hand, so it is opt-in: pass CONDA_PRUNE=1 (or true).
@@ -397,27 +417,42 @@ create-conda-env: install-miniforge
 	fi; \
 	CHOSEN_ENV="$(CONDA_WRITE_ENV)"; \
 	BASE_CONSENT="$(CONDA_BASE_CONSENT)"; \
+	PROMPT_TIMEOUT="$(CONDA_PROMPT_TIMEOUT)"; \
 	ACTIVE_ENV="$$CONDA_DEFAULT_ENV"; \
 	if [ -n "$$ACTIVE_ENV" ]; then ACTIVE_DESC="active env: $$ACTIVE_ENV"; else ACTIVE_DESC="no active conda env"; fi; \
 	if [ -t 0 ] && [ "$(CI)" != "true" ] && [ "$(NONINTERACTIVE)" != "1" ]; then \
-		echo "$(COLOR_BOLD)====================================================$(COLOR_RESET)"; \
-		echo " Holon-Coherence Conda Environment Setup"; \
-		echo "$(COLOR_BOLD)====================================================$(COLOR_RESET)"; \
-		echo "This will install Python and uv via Conda into the chosen environment."; \
-		echo " Currently active: $$ACTIVE_DESC (press Enter to keep '$$CHOSEN_ENV')"; \
-		printf "Enter target environment name [default: %s]: " "$$CHOSEN_ENV"; \
-		read -r USER_INPUT; \
-		if [ -n "$$USER_INPUT" ]; then \
-			CHOSEN_ENV="$$USER_INPUT"; \
-		fi; \
-		if [ "$$CHOSEN_ENV" = "base" ] && [ "$$BASE_CONSENT" != "true" ]; then \
-			printf "'base' is a shared environment. Type 'yes' to install into it [no]: "; \
-			read -r BASE_REPLY; \
-			if [ "$$BASE_REPLY" = "yes" ]; then \
-				BASE_CONSENT=true; \
-			else \
-				echo "Aborted: 'base' was not confirmed. Pick another name or pass $(COLOR_BOLD)CONDA_ENV=base$(COLOR_RESET) deliberately."; \
+		if ! printf 'y\n' | read -r -t 1 _holon_probe >/dev/null 2>&1; then \
+			echo "$(COLOR_YELLOW)⚠️  This shell's read cannot time out: skipping the interactive prompt so this run cannot hang.$(COLOR_RESET)"; \
+			echo "   Choose the environment on the command line instead: make create-conda-env $(COLOR_BOLD)CONDA_ENV=<name>$(COLOR_RESET)"; \
+		else \
+			echo "$(COLOR_BOLD)====================================================$(COLOR_RESET)"; \
+			echo " Holon-Coherence Conda Environment Setup"; \
+			echo "$(COLOR_BOLD)====================================================$(COLOR_RESET)"; \
+			echo "This will install Python and uv via Conda into the chosen environment."; \
+			echo " Currently active: $$ACTIVE_DESC (press Enter to keep '$$CHOSEN_ENV')"; \
+			printf "Enter target environment name [default: %s]: " "$$CHOSEN_ENV"; \
+			if ! read -r -t "$$PROMPT_TIMEOUT" USER_INPUT; then \
+				echo "$(COLOR_RED)❌ No answer within $$PROMPT_TIMEOUT s; nothing was installed.$(COLOR_RESET)"; \
+				echo "   It would have provisioned conda env '$$CHOSEN_ENV' from environment.yml (active: $$ACTIVE_DESC)."; \
+				echo "   Answer it deliberately, or pass the name on the command line: make create-conda-env $(COLOR_BOLD)CONDA_ENV=$$CHOSEN_ENV$(COLOR_RESET)"; \
 				exit 1; \
+			fi; \
+			if [ -n "$$USER_INPUT" ]; then \
+				CHOSEN_ENV="$$USER_INPUT"; \
+			fi; \
+			if [ "$$CHOSEN_ENV" = "base" ] && [ "$$BASE_CONSENT" != "true" ]; then \
+				printf "'base' is a shared environment. Type 'yes' to install into it [no]: "; \
+				if ! read -r -t "$$PROMPT_TIMEOUT" BASE_REPLY; then \
+					echo "$(COLOR_RED)❌ No answer within $$PROMPT_TIMEOUT s; refusing to write to 'base'.$(COLOR_RESET)"; \
+					echo "   It would have run: \"$$CONDA_BIN\" install -y -n base -c conda-forge uv python=3.13"; \
+					exit 1; \
+				fi; \
+				if [ "$$BASE_REPLY" = "yes" ]; then \
+					BASE_CONSENT=true; \
+				else \
+					echo "Aborted: 'base' was not confirmed. Pick another name or pass $(COLOR_BOLD)CONDA_ENV=base$(COLOR_RESET) deliberately."; \
+					exit 1; \
+				fi; \
 			fi; \
 		fi; \
 	fi; \
@@ -426,8 +461,9 @@ create-conda-env: install-miniforge
 		exit 1; \
 	fi; \
 	if [ "$$CHOSEN_ENV" = "base" ] && [ "$$BASE_CONSENT" != "true" ]; then \
-		echo "$(COLOR_RED)❌ Refusing to write to 'base': it was not explicitly requested.$(COLOR_RESET)"; \
-		echo "   Request it deliberately: make create-conda-env $(COLOR_BOLD)CONDA_ENV=base$(COLOR_RESET)"; \
+		echo "$(COLOR_RED)❌ Refusing to write to 'base': this invocation did not ask for it.$(COLOR_RESET)"; \
+		echo "   An inherited environment variable (CONDA_ENV=base or CONDA_ALLOW_BASE=1 in your shell) is not consent."; \
+		echo "   Request it deliberately on the command line: make create-conda-env $(COLOR_BOLD)CONDA_ENV=base$(COLOR_RESET)"; \
 		echo "   Or use a dedicated environment: make create-conda-env $(COLOR_BOLD)CONDA_ENV=holon$(COLOR_RESET)"; \
 		exit 1; \
 	fi; \
@@ -502,14 +538,16 @@ help:
 	@printf $(HELP_FORMAT) "install-docker" "Install Docker for the detected operating system."
 	@printf $(HELP_FORMAT) "install-homebrew" "Install Homebrew (macOS only)."
 	@printf $(HELP_FORMAT) "install-miniforge" "Install Miniforge for the detected operating system."
-	@printf $(HELP_FORMAT) "create-conda-env" "Create or update Conda environment (CONDA_WRITE_ENV, default 'holon'; 'base' only when explicitly requested; CONDA_PRUNE=1 to prune)."
+	@printf $(HELP_FORMAT) "create-conda-env" "Create or update Conda environment (CONDA_WRITE_ENV, default 'holon'; 'base' only on deliberate consent; CONDA_PRUNE=1 to prune)."
 	@printf $(HELP_FORMAT) "activate-conda-env" "Show command to activate the Conda environment."
 	@printf $(HELP_FORMAT) "build-image" "Build the holon-coherence Docker container via build_image.sh."
 	@printf $(HELP_FORMAT) "help" "Show this help message."
 	@echo ""
 	@echo "$(COLOR_BOLD)Variables:$(COLOR_RESET)"
 	@printf $(HELP_FORMAT) "CONDA_ENV" "Environment to report in check-prerequisites (default: active CONDA_DEFAULT_ENV, else 'holon')."
-	@printf $(HELP_FORMAT) "CONDA_WRITE_ENV" "Environment create-conda-env writes to (default: 'holon'; follows CONDA_ENV only when passed explicitly, never an activated 'base')."
+	@printf $(HELP_FORMAT) "CONDA_WRITE_ENV" "Environment create-conda-env writes to (default: 'holon'; follows CONDA_ENV when passed, never an activated 'base')."
+	@printf $(HELP_FORMAT) "CONDA_ALLOW_BASE" "Set to 1/true/yes ON THE MAKE COMMAND LINE to consent to writing into 'base'; an inherited value never grants consent."
 	@printf $(HELP_FORMAT) "CONDA_PRUNE" "Set to 1 or true to add --prune to 'conda env update' for an existing environment (default: false)."
+	@printf $(HELP_FORMAT) "CONDA_PROMPT_TIMEOUT" "Seconds the interactive target prompt waits for an answer before refusing (default: 20)."
 	@printf $(HELP_FORMAT) "NONINTERACTIVE" "Set to 1 to skip the interactive target prompt (also implied by CI=true or a non-terminal stdin)."
 	@echo ""

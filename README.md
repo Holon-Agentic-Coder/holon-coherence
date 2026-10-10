@@ -79,17 +79,21 @@ If any prerequisite is missing, install and configure it directly using the Make
 
   The conda targets read the following variables (also listed by `make help`):
 
-  | Variable          | Effect                                                                                                                                                                                                             |
-  | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-  | `CONDA_ENV`       | Environment to **read** / report in `make check-prerequisites`. Defaults to the active `$CONDA_DEFAULT_ENV`, or to `holon` when no environment is active.                                                          |
-  | `CONDA_WRITE_ENV` | Environment `make create-conda-env` **writes** to. Defaults to `holon`, and follows `CONDA_ENV` only when you pass it explicitly (`make create-conda-env CONDA_ENV=<name>`); it never follows an activated `base`. |
-  | `CONDA_PRUNE`     | `CONDA_PRUNE=1` (or `true`) adds `--prune` to `conda env update` when the target environment already exists. Off by default, because pruning can remove packages you installed by hand.                            |
-  | `NONINTERACTIVE`  | `NONINTERACTIVE=1` skips the interactive target-environment prompt and uses the requested `CONDA_ENV` (or the `holon` default). `CI=true` and a non-terminal stdin skip the prompt too.                            |
+  | Variable               | Effect                                                                                                                                                                                                                           |
+  | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `CONDA_ENV`            | Environment to **read** / report in `make check-prerequisites`. Defaults to the active `$CONDA_DEFAULT_ENV`, or to `holon` when no environment is active.                                                                        |
+  | `CONDA_WRITE_ENV`      | Environment `make create-conda-env` **writes** to. Defaults to `holon`, and follows `CONDA_ENV` when you pass it (`make create-conda-env CONDA_ENV=<name>`); it never follows an activated `base`.                               |
+  | `CONDA_ALLOW_BASE`     | Deliberate consent to write into `base`. Only counts when typed on the make command line (`make create-conda-env CONDA_ALLOW_BASE=1`); an inherited `CONDA_ALLOW_BASE=1` is ignored, exactly like an inherited `CONDA_ENV=base`. |
+  | `CONDA_PRUNE`          | `CONDA_PRUNE=1` (or `true`) adds `--prune` to `conda env update` when the target environment already exists. Off by default, because pruning can remove packages you installed by hand.                                          |
+  | `CONDA_PROMPT_TIMEOUT` | Seconds the interactive prompt waits for an answer (default `20`). No answer is a refusal: the target prints what it would have run and exits non-zero.                                                                          |
+  | `NONINTERACTIVE`       | `NONINTERACTIVE=1` skips the interactive target-environment prompt and uses the requested `CONDA_ENV` (or the `holon` default). `CI=true` and a non-terminal stdin skip the prompt too.                                          |
 
   An existing environment is updated with `conda env update -n <env> -f environment.yml`, a new one is created with
-  `conda env create -n <env> -f environment.yml`. Writing to the shared `base` environment stays opt-in: it happens only
-  when requested deliberately with `make create-conda-env CONDA_ENV=base`, and that route installs `uv` and
-  `python=3.13` with `conda install -y -n base -c conda-forge` instead of the full `environment.yml`.
+  `conda env create -n <env> -f environment.yml`. Writing to the shared `base` environment stays opt-in and must be
+  asked for **in that same invocation**: either `make create-conda-env CONDA_ENV=base` / `CONDA_ALLOW_BASE=1` on the
+  command line, or a typed `yes` at the prompt. A variable inherited from the shell (`export CONDA_ENV=base`) is not
+  consent — the target refuses and says why. The `base` route installs `uv` and `python=3.13` with
+  `conda install -y -n base -c conda-forge` instead of the full `environment.yml`.
 
 - **Build Docker Container**:
   ```bash
