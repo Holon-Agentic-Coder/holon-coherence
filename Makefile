@@ -53,6 +53,15 @@ endif
 # `export CONDA_ALLOW_BASE=1` in the shell leaves CONDA_BASE_CONSENT=false and the
 # recipe refuses at runtime and says why. That is why CONDA_BASE_CONSENT is named
 # for the resolved decision and CONDA_ALLOW_BASE for the deliberate act.
+#
+# One qualification, so the wording is not over-broad: make carries command-line
+# assignments into sub-makes through MAKEFLAGS, and a value that arrives that way still
+# has command-line origin, so it does count as consent. `export MAKEFLAGS='CONDA_ENV=base'
+# make ...` is therefore a deliberate (if obscure) act rather than inherited state. Nothing
+# in this repository or .github/workflows sets MAKEFLAGS, and stripping it would break the
+# sanctioned recursion (create-conda-env -> install-miniforge, check-prerequisites ->
+# check-docker), so the channel stays as make defines it and the sentence is narrowed here
+# instead.
 CONDA_ENV_ORIGIN := $(origin CONDA_ENV)
 CONDA_ALLOW_BASE_ORIGIN := $(origin CONDA_ALLOW_BASE)
 CONDA_ENV_REQUESTED := $(if $(or $(findstring command line,$(CONDA_ENV_ORIGIN)),$(findstring environment,$(CONDA_ENV_ORIGIN))),true,false)
@@ -83,6 +92,11 @@ CONDA_PROMPT_TIMEOUT ?= 20
 # Pruning an environment this target did not create can remove packages the
 # user added by hand, so it is opt-in: pass CONDA_PRUNE=1 (or true).
 CONDA_PRUNE ?= false
+# Command-line origin only, matching CONDA_ALLOW_BASE. `--prune` removes packages that are
+# absent from environment.yml from an environment this target may not have created, so the
+# destructive choice must come from an act in this invocation: `CONDA_PRUNE=1 make ...` (the
+# idiomatic one-off) qualifies, `export CONDA_PRUNE=1` left in the shell does not.
+CONDA_PRUNE_EFFECTIVE := $(if $(findstring command line,$(origin CONDA_PRUNE)),$(CONDA_PRUNE),false)
 
 # Options passed to build_image.sh (use --output-log in CI environments)
 ifeq ($(CI),true)
@@ -494,9 +508,9 @@ create-conda-env: install-miniforge
 		if "$$CONDA_BIN" env list 2>/dev/null | awk -v env="$$CHOSEN_ENV" '$$1 == env { found = 1; exit } END { exit !found }'; then \
 			echo "Environment '$$CHOSEN_ENV' already exists. Updating environment..."; \
 			CONDA_PRUNE_FLAG=""; \
-			if [ "$(CONDA_PRUNE)" = "1" ] || [ "$(CONDA_PRUNE)" = "true" ]; then \
+			if [ "$(CONDA_PRUNE_EFFECTIVE)" = "1" ] || [ "$(CONDA_PRUNE_EFFECTIVE)" = "true" ]; then \
 				CONDA_PRUNE_FLAG="--prune"; \
-				echo "CONDA_PRUNE=$(CONDA_PRUNE): pruning packages that are absent from environment.yml."; \
+				echo "CONDA_PRUNE=$(CONDA_PRUNE_EFFECTIVE): pruning packages that are absent from environment.yml."; \
 			fi; \
 			"$$CONDA_BIN" env update -n "$$CHOSEN_ENV" -f environment.yml $$CONDA_PRUNE_FLAG || exit 1; \
 			echo "$(COLOR_GREEN)✅ Environment '$$CHOSEN_ENV' updated successfully.$(COLOR_RESET)"; \
@@ -564,7 +578,7 @@ help:
 	@printf $(HELP_FORMAT) "CONDA_ENV" "Environment to report in check-prerequisites (default: active CONDA_DEFAULT_ENV, else 'holon')."
 	@printf $(HELP_FORMAT) "CONDA_WRITE_ENV" "Environment create-conda-env writes to (default: 'holon'; follows CONDA_ENV when passed, never an activated 'base')."
 	@printf $(HELP_FORMAT) "CONDA_ALLOW_BASE" "Set to 1/true/yes ON THE MAKE COMMAND LINE to consent to writing into 'base'; an inherited value never grants consent."
-	@printf $(HELP_FORMAT) "CONDA_PRUNE" "Set to 1 or true to add --prune to 'conda env update' for an existing environment (default: false)."
+	@printf $(HELP_FORMAT) "CONDA_PRUNE" "Set to 1 or true on the make command line to add --prune to 'conda env update' for an existing environment (default: false; a shell-exported value is ignored)."
 	@printf $(HELP_FORMAT) "CONDA_PROMPT_TIMEOUT" "Seconds the interactive target prompt waits for an answer before refusing (default: 20)."
 	@printf $(HELP_FORMAT) "NONINTERACTIVE" "Set to 1 to skip the interactive target prompt (also implied by CI=true or a non-terminal stdin)."
 	@echo ""

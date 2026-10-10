@@ -35,6 +35,12 @@ printf '%s-stub\\n' "$*"
 exit 0
 """
 
+# The tools `check-prerequisites` probes through PATH. The fixture's isolation assertions
+# iterate this same tuple, so widening the probe without widening this list leaves the
+# "nothing leaked" claim quietly unchecked for the new tool -- the exact host-leak class
+# that turned `unit (ubuntu-latest)` red at 86a960b.
+PROBE_PATH_TOOLS = ("docker", "openssl", "npx", "uv")
+
 # The `CONDA_PRUNE` guard as make expands it; the compared literal is what make-time
 # variable substitution produces, so it differs per CONDA_PRUNE value.
 PRUNE_GUARD_RE = re.compile(r'CONDA_PRUNE_FLAG="";\s*if \[ "([^"]*)" = "1" \] \|\| \[ "([^"]*)" = "true" \]')
@@ -719,7 +725,7 @@ def _prerequisites_run_env(tmp_path, *, path_tools=(), uv_prefix="default", env_
     # inside tmp_path. A future PATH widening fails here instead of in CI on one OS.
     probe_path = run_env["PATH"]
     sandbox = os.path.realpath(tmp_path)
-    for tool in ("docker", "openssl", "npx", "uv"):
+    for tool in PROBE_PATH_TOOLS:
         resolved = shutil.which(tool, path=probe_path)
         if tool in path_tools:
             assert resolved is not None and os.path.realpath(resolved).startswith(sandbox + os.sep), (
@@ -872,6 +878,38 @@ def test_check_prerequisites_runs_when_an_option_argument_spells_n(tmp_path):
     assert probes, f"the guard misread the -I argument as a dry run:\n{result.stdout}"
     assert any(line.startswith("Checking OpenSSL") for line in probes)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_create_conda_env_prune_ignores_a_shell_exported_value(tmp_path):
+    """`--prune` needs an act in this invocation, like base consent does.
+
+    `CONDA_PRUNE=1 make create-conda-env` is that act; an `export CONDA_PRUNE=1` left in the
+    shell is inherited state, and it would strip packages from an environment this target
+    did not create. The origin asymmetry between CONDA_ENV (environment counts, it only names
+    a target) and the two destructive switches (command line only) is deliberate.
+    """
+    exported = _create_conda_env_dry_run(make_vars={"CONDA_ENV": "holon"}, env_vars={"CONDA_PRUNE": "1"}).stdout
+    assert _emitted_prune_guard_is_enabled(exported) is False
+
+    command_line = _create_conda_env_dry_run(make_vars={"CONDA_ENV": "holon", "CONDA_PRUNE": "1"}).stdout
+    assert _emitted_prune_guard_is_enabled(command_line) is True
+
+
+def test_check_prerequisites_openssl_hint_names_the_host_package_manager(tmp_path):
+    """The per-OS install hint is asserted on whichever branch the host actually takes.
+
+    Before this, neither OS branch was asserted at all and the CI matrix gated the linux hint
+    to one job, so a garbled Darwin hint would have shipped silently.
+    """
+    result = _run_check_prerequisites(tmp_path, path_tools=("docker", "npx"), uv_prefix=tmp_path / "envs" / "holon")
+    assert "openssl not found" in result.stdout
+    assert "ca_generator.py" in result.stdout
+    if os.uname().sysname == "Darwin":
+        assert "brew install openssl" in result.stdout
+        assert "sudo apt install openssl" not in result.stdout
+    else:
+        assert "sudo apt install openssl" in result.stdout
+        assert "brew install openssl" not in result.stdout
 
 
 def test_check_prerequisites_runs_when_a_command_line_assignment_spells_n(tmp_path):

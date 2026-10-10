@@ -84,7 +84,7 @@ If any prerequisite is missing, install and configure it directly using the Make
   | `CONDA_ENV`            | Environment to **read** / report in `make check-prerequisites`. Defaults to the active `$CONDA_DEFAULT_ENV`, or to `holon` when no environment is active.                                                                                                                                                                                            |
   | `CONDA_WRITE_ENV`      | Environment `make create-conda-env` **writes** to. Defaults to `holon`, and follows `CONDA_ENV` when you pass it (`make create-conda-env CONDA_ENV=<name>`); it never follows an activated `base`.                                                                                                                                                   |
   | `CONDA_ALLOW_BASE`     | Deliberate consent to write into `base`. Only counts when typed on the make command line (`make create-conda-env CONDA_ALLOW_BASE=1`); an inherited `CONDA_ALLOW_BASE=1` is ignored, exactly like an inherited `CONDA_ENV=base`.                                                                                                                     |
-  | `CONDA_PRUNE`          | `CONDA_PRUNE=1` (or `true`) adds `--prune` to `conda env update` when the target environment already exists. Off by default, because pruning can remove packages you installed by hand.                                                                                                                                                              |
+  | `CONDA_PRUNE`          | `CONDA_PRUNE=1` (or `true`) **on the make command line** adds `--prune` to `conda env update` when the target environment already exists. Off by default, because pruning can remove packages you installed by hand; a `CONDA_PRUNE=1` exported in your shell is ignored, since it would strip an environment this target may never have created.    |
   | `CONDA_PROMPT_TIMEOUT` | Seconds the interactive prompt waits for an answer (default `20`). No answer is a refusal: the target prints what it would have run and exits non-zero. A shell whose `read` cannot time out (`dash`, the Debian/Ubuntu `/bin/sh`) is refused the same way rather than answered on your behalf — run `make create-conda-env CONDA_ENV=<name>` there. |
   | `NONINTERACTIVE`       | `NONINTERACTIVE=1` skips the interactive target-environment prompt and uses the requested `CONDA_ENV` (or the `holon` default). `CI=true` and a non-terminal stdin skip the prompt too.                                                                                                                                                              |
 
@@ -92,8 +92,12 @@ If any prerequisite is missing, install and configure it directly using the Make
   `conda env create -n <env> -f environment.yml`. Writing to the shared `base` environment stays opt-in and must be
   asked for **in that same invocation**: either `make create-conda-env CONDA_ENV=base` / `CONDA_ALLOW_BASE=1` on the
   command line, or a typed `yes` at the prompt. A variable inherited from the shell (`export CONDA_ENV=base`) is not
-  consent — the target refuses and says why. The `base` route installs `uv` and `python=3.13` with
-  `conda install -y -n base -c conda-forge` instead of the full `environment.yml`.
+  consent — the target refuses and says why. The three knobs differ on purpose: `CONDA_ENV` also honours an exported
+  value, because naming the environment you work on is not consent to write to `base`, while `CONDA_ALLOW_BASE` and
+  `CONDA_PRUNE` require command-line origin. One qualification to "inherited is never consent": make carries
+  command-line assignments into sub-makes through `MAKEFLAGS`, so a value arriving that way still counts as command-line
+  origin — `export MAKEFLAGS='CONDA_ENV=base'` is a deliberate act, not inherited state. The `base` route installs `uv`
+  and `python=3.13` with `conda install -y -n base -c conda-forge` instead of the full `environment.yml`.
 
 - **Build Docker Container**:
   ```bash
