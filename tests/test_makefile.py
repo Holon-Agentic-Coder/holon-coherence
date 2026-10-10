@@ -631,7 +631,11 @@ def test_check_prerequisites_dry_run():
 
 # Tools the prerequisite probe needs from the system, exposed through a private dir so the
 # executed probe sees a PATH without openssl/npx/uv unless the test stubs them explicitly.
-PREREQUISITES_SYSTEM_TOOLS = ("awk", "grep", "make", "printf", "sed", "sleep", "tr", "uname")
+# Explicit allowlist of host tools the stubbed probe is allowed to see. `cat` belongs here
+# because the conda stub reads its env list with it; it used to be satisfied implicitly by
+# `/bin` sitting on PATH, which is also how the host's openssl leaked into the "missing
+# openssl" assertions on ubuntu-latest.
+PREREQUISITES_SYSTEM_TOOLS = ("awk", "cat", "grep", "make", "printf", "sed", "sleep", "tr", "uname")
 
 
 def _link_prerequisite_system_tools(bin_dir):
@@ -659,7 +663,12 @@ def _prerequisites_run_env(tmp_path, *, path_tools=(), uv_prefix="default", env_
     run_env, _ = _stub_conda_run_env(tmp_path, existing_envs=("holon",))
     bin_dir = tmp_path / "bin"
     system_dir = _link_prerequisite_system_tools(bin_dir)
-    run_env["PATH"] = os.pathsep.join([str(bin_dir), str(system_dir), "/bin"])
+    # Only the stub dir and the explicit allowlist belong on PATH. Adding /bin (or
+    # /usr/bin) silently defeats the whole point: on Debian and Ubuntu /bin is a
+    # symlink to /usr/bin, so the host's real openssl, npx and uv become resolvable
+    # and a "missing tool" assertion passes on the runner for the wrong reason. It
+    # passed on macOS and failed on unit (ubuntu-latest) exactly that way.
+    run_env["PATH"] = os.pathsep.join([str(bin_dir), str(system_dir)])
     run_env.pop("CI", None)
     run_env.pop("NONINTERACTIVE", None)
     run_env["NO_COLOR"] = "1"
@@ -676,6 +685,23 @@ def _prerequisites_run_env(tmp_path, *, path_tools=(), uv_prefix="default", env_
         uv.chmod(0o755)
     if env_list_line is not None:
         pathlib.Path(run_env["CONDA_STUB_ENV_LIST"]).write_text(env_list_line)
+    # Make the isolation claim checkable rather than aspirational: any probe tool the
+    # test did not stub must be unresolvable, and any tool it did stub must resolve
+    # inside tmp_path. A future PATH widening fails here instead of in CI on one OS.
+    probe_path = run_env["PATH"]
+    sandbox = os.path.realpath(tmp_path)
+    for tool in ("docker", "openssl", "npx", "uv"):
+        resolved = shutil.which(tool, path=probe_path)
+        if tool in path_tools:
+            assert resolved is not None and os.path.realpath(resolved).startswith(sandbox + os.sep), (
+                f"{tool} resolved outside the sandbox: {resolved}"
+            )
+        else:
+            assert resolved is None, f"{tool} leaked into the stub PATH: {resolved}"
+    conda_resolved = shutil.which("conda", path=probe_path)
+    assert conda_resolved is not None and os.path.realpath(conda_resolved).startswith(sandbox + os.sep), (
+        f"conda resolved outside the sandbox: {conda_resolved}"
+    )
     return run_env
 
 
