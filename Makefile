@@ -12,12 +12,42 @@ CI ?= false
 # Automated prerequisite installation (set to false in check-prerequisites for read-only probe)
 AUTO_INSTALL ?= true
 
-# Conda Environment Configuration (defaults to active CONDA_DEFAULT_ENV if set, else holon)
+# Conda Environment Configuration.
+#
+# CONDA_ENV is the *read* default used when reporting prerequisites: reporting
+# the active environment is the most useful thing, so default it to
+# CONDA_DEFAULT_ENV when one is active, else holon.
 ifdef CONDA_DEFAULT_ENV
 CONDA_ENV ?= $(CONDA_DEFAULT_ENV)
 else
 CONDA_ENV ?= holon
 endif
+
+# CONDA_WRITE_ENV is the *write* target used by create-conda-env. It never
+# follows the active environment: an activated `base` is not consent to install
+# packages into base. It defaults to holon and tracks CONDA_ENV only when that
+# value was requested explicitly (command line or exported environment).
+#
+# CONDA_BASE_CONSENT is true only when `base` was requested up front; otherwise
+# create-conda-env asks for a typed `yes` interactively and refuses in
+# non-interactive runs.
+CONDA_ENV_ORIGIN := $(origin CONDA_ENV)
+CONDA_ENV_REQUESTED := $(if $(or $(findstring command line,$(CONDA_ENV_ORIGIN)),$(findstring environment,$(CONDA_ENV_ORIGIN))),true,false)
+ifeq ($(CONDA_ENV_REQUESTED),true)
+CONDA_WRITE_ENV := $(CONDA_ENV)
+else
+CONDA_WRITE_ENV := holon
+endif
+CONDA_BASE_CONSENT := false
+ifeq ($(CONDA_WRITE_ENV),base)
+ifeq ($(CONDA_ENV_REQUESTED),true)
+CONDA_BASE_CONSENT := true
+endif
+endif
+
+# Pruning an environment this target did not create can remove packages the
+# user added by hand, so it is opt-in: pass CONDA_PRUNE=1 (or true).
+CONDA_PRUNE ?= false
 
 # Options passed to build_image.sh (use --output-log in CI environments)
 ifeq ($(CI),true)
@@ -219,21 +249,33 @@ check-prerequisites:
 	\
 	printf "%-32s " "Checking uv in Conda env..."; \
 	TARGET_ENV="$(CONDA_ENV)"; \
-	if [ -n "$$CONDA_DEFAULT_ENV" ] && command -v uv >/dev/null 2>&1; then \
-		UV_VER=$$(uv --version 2>/dev/null); \
-		echo "$(COLOR_GREEN)✅ Found: $$UV_VER (active env: $$CONDA_DEFAULT_ENV)$(COLOR_RESET)"; \
-	elif [ -n "$$CONDA_BIN" ]; then \
-		ENV_PREFIX=$$("$$CONDA_BIN" env list 2>/dev/null | awk -v env="$$TARGET_ENV" '$$1 == env {print $$NF}'); \
+	ACTIVE_ENV="$$CONDA_DEFAULT_ENV"; \
+	if [ -n "$$ACTIVE_ENV" ]; then ACTIVE_DESC="active env: $$ACTIVE_ENV"; else ACTIVE_DESC="no active conda env"; fi; \
+	UV_KIND=""; UV_BIN=""; UV_WHERE=""; ENV_PREFIX=""; \
+	if [ -n "$$CONDA_PREFIX" ] && [ -x "$$CONDA_PREFIX/bin/uv" ]; then \
+		UV_KIND=env; UV_BIN="$$CONDA_PREFIX/bin/uv"; UV_WHERE="conda env $${ACTIVE_ENV:-$$CONDA_PREFIX}"; \
+	fi; \
+	if [ -z "$$UV_KIND" ] && [ -n "$$CONDA_BIN" ]; then \
+		ENV_PREFIX=$$("$$CONDA_BIN" env list 2>/dev/null | awk -v env="$$TARGET_ENV" '$$1 == env { line = $$0; sub(/^[ \t]*[^ \t]+[ \t]+/, "", line); sub(/^[*+ \t]+/, "", line); sub(/[ \t\r]*[*+][ \t\r]*$$/, "", line); sub(/[ \t\r]+$$/, "", line); print line; exit }'); \
 		if [ -n "$$ENV_PREFIX" ] && [ -x "$$ENV_PREFIX/bin/uv" ]; then \
-			UV_VER=$$("$$ENV_PREFIX/bin/uv" --version 2>/dev/null); \
-			echo "$(COLOR_GREEN)✅ Found: $$UV_VER (in conda env: $$TARGET_ENV)$(COLOR_RESET)"; \
-		else \
-			echo "$(COLOR_RED)❌ Missing: uv not found in active env ($$CONDA_DEFAULT_ENV) or target env ($$TARGET_ENV)$(COLOR_RESET)"; \
-			echo "   Run $(COLOR_BOLD)make create-conda-env$(COLOR_RESET) or $(COLOR_BOLD)make create-conda-env CONDA_ENV=$$TARGET_ENV$(COLOR_RESET)."; \
-			ERRORS=$$((ERRORS + 1)); \
+			UV_KIND=env; UV_BIN="$$ENV_PREFIX/bin/uv"; UV_WHERE="conda env $$TARGET_ENV ($$ENV_PREFIX)"; \
 		fi; \
+	fi; \
+	if [ -z "$$UV_KIND" ] && command -v uv >/dev/null 2>&1; then \
+		UV_KIND=path; UV_BIN=$$(command -v uv); \
+	fi; \
+	if [ "$$UV_KIND" = "env" ]; then \
+		UV_VER=$$("$$UV_BIN" --version 2>/dev/null); \
+		echo "$(COLOR_GREEN)✅ Found: $$UV_VER (uv inside $$UV_WHERE)$(COLOR_RESET)"; \
+	elif [ "$$UV_KIND" = "path" ]; then \
+		UV_VER=$$("$$UV_BIN" --version 2>/dev/null); \
+		echo "$(COLOR_YELLOW)⚠️  Found on PATH only: $$UV_VER ($$UV_BIN)$(COLOR_RESET)"; \
+		echo "   uv is NOT installed in conda env '$$TARGET_ENV' ($$ACTIVE_DESC); this resolution came from PATH."; \
+		echo "   Run $(COLOR_BOLD)make create-conda-env CONDA_ENV=$$TARGET_ENV$(COLOR_RESET) to install it into the environment."; \
+		WARNINGS=$$((WARNINGS + 1)); \
 	else \
-		echo "$(COLOR_RED)❌ Missing: uv (Conda not available)$(COLOR_RESET)"; \
+		echo "$(COLOR_RED)❌ Missing: uv not found on PATH or in conda env '$$TARGET_ENV' ($$ACTIVE_DESC)$(COLOR_RESET)"; \
+		echo "   Run $(COLOR_BOLD)make create-conda-env$(COLOR_RESET) or $(COLOR_BOLD)make create-conda-env CONDA_ENV=$$TARGET_ENV$(COLOR_RESET)."; \
 		ERRORS=$$((ERRORS + 1)); \
 	fi; \
 	\
@@ -353,27 +395,57 @@ create-conda-env: install-miniforge
 		echo "$(COLOR_RED)❌ Conda not found after Miniforge installation.$(COLOR_RESET)"; \
 		exit 1; \
 	fi; \
-	CHOSEN_ENV="$(CONDA_ENV)"; \
+	CHOSEN_ENV="$(CONDA_WRITE_ENV)"; \
+	BASE_CONSENT="$(CONDA_BASE_CONSENT)"; \
+	ACTIVE_ENV="$$CONDA_DEFAULT_ENV"; \
+	if [ -n "$$ACTIVE_ENV" ]; then ACTIVE_DESC="active env: $$ACTIVE_ENV"; else ACTIVE_DESC="no active conda env"; fi; \
 	if [ -t 0 ] && [ "$(CI)" != "true" ] && [ "$(NONINTERACTIVE)" != "1" ]; then \
 		echo "$(COLOR_BOLD)====================================================$(COLOR_RESET)"; \
 		echo " Holon-Coherence Conda Environment Setup"; \
 		echo "$(COLOR_BOLD)====================================================$(COLOR_RESET)"; \
 		echo "This will install Python and uv via Conda into the chosen environment."; \
+		echo " Currently active: $$ACTIVE_DESC (press Enter to keep '$$CHOSEN_ENV')"; \
 		printf "Enter target environment name [default: %s]: " "$$CHOSEN_ENV"; \
 		read -r USER_INPUT; \
 		if [ -n "$$USER_INPUT" ]; then \
 			CHOSEN_ENV="$$USER_INPUT"; \
 		fi; \
+		if [ "$$CHOSEN_ENV" = "base" ] && [ "$$BASE_CONSENT" != "true" ]; then \
+			printf "'base' is a shared environment. Type 'yes' to install into it [no]: "; \
+			read -r BASE_REPLY; \
+			if [ "$$BASE_REPLY" = "yes" ]; then \
+				BASE_CONSENT=true; \
+			else \
+				echo "Aborted: 'base' was not confirmed. Pick another name or pass $(COLOR_BOLD)CONDA_ENV=base$(COLOR_RESET) deliberately."; \
+				exit 1; \
+			fi; \
+		fi; \
 	fi; \
-	echo "$(COLOR_BOLD)Setting up Conda environment '$$CHOSEN_ENV'...$(COLOR_RESET)"; \
+	if [ -z "$$CHOSEN_ENV" ]; then \
+		echo "$(COLOR_RED)❌ Empty environment name. Pass $(COLOR_BOLD)CONDA_ENV=<name>$(COLOR_RESET) or use the default 'holon'.$(COLOR_RESET)"; \
+		exit 1; \
+	fi; \
+	if [ "$$CHOSEN_ENV" = "base" ] && [ "$$BASE_CONSENT" != "true" ]; then \
+		echo "$(COLOR_RED)❌ Refusing to write to 'base': it was not explicitly requested.$(COLOR_RESET)"; \
+		echo "   Request it deliberately: make create-conda-env $(COLOR_BOLD)CONDA_ENV=base$(COLOR_RESET)"; \
+		echo "   Or use a dedicated environment: make create-conda-env $(COLOR_BOLD)CONDA_ENV=holon$(COLOR_RESET)"; \
+		exit 1; \
+	fi; \
+	echo "$(COLOR_BOLD)Setting up Conda environment '$$CHOSEN_ENV' ($$ACTIVE_DESC)...$(COLOR_RESET)"; \
 	if [ "$$CHOSEN_ENV" = "base" ]; then \
 		echo "Installing uv and python into 'base' conda environment..."; \
+		echo "$(COLOR_YELLOW)⚠️  The 'base' route installs a narrower package set (uv, python=3.13) than environment.yml.$(COLOR_RESET)"; \
 		"$$CONDA_BIN" install -y -n base -c conda-forge uv python=3.13 || exit 1; \
 		echo "$(COLOR_GREEN)✅ 'base' environment updated with uv and python=3.13.$(COLOR_RESET)"; \
 	else \
-		if "$$CONDA_BIN" env list 2>/dev/null | grep -q -E "^[[:space:]]*$${CHOSEN_ENV}[[:space:]]+"; then \
+		if "$$CONDA_BIN" env list 2>/dev/null | awk -v env="$$CHOSEN_ENV" '$$1 == env { found = 1; exit } END { exit !found }'; then \
 			echo "Environment '$$CHOSEN_ENV' already exists. Updating environment..."; \
-			"$$CONDA_BIN" env update -n "$$CHOSEN_ENV" -f environment.yml --prune || exit 1; \
+			CONDA_PRUNE_FLAG=""; \
+			if [ "$(CONDA_PRUNE)" = "1" ] || [ "$(CONDA_PRUNE)" = "true" ]; then \
+				CONDA_PRUNE_FLAG="--prune"; \
+				echo "CONDA_PRUNE=$(CONDA_PRUNE): pruning packages that are absent from environment.yml."; \
+			fi; \
+			"$$CONDA_BIN" env update -n "$$CHOSEN_ENV" -f environment.yml $$CONDA_PRUNE_FLAG || exit 1; \
 			echo "$(COLOR_GREEN)✅ Environment '$$CHOSEN_ENV' updated successfully.$(COLOR_RESET)"; \
 		else \
 			echo "Creating new environment '$$CHOSEN_ENV' from environment.yml..."; \
@@ -382,12 +454,27 @@ create-conda-env: install-miniforge
 		fi; \
 	fi; \
 	echo "To activate the environment, run:"; \
-	echo "  conda activate $$CHOSEN_ENV"
+	if [ "$$CHOSEN_ENV" = "$$ACTIVE_ENV" ]; then \
+		echo "  conda activate $$CHOSEN_ENV  (already active: $$ACTIVE_ENV)"; \
+	else \
+		echo "  conda activate $$CHOSEN_ENV"; \
+	fi
 
 # Activate conda environment command helper
 activate-conda-env:
-	@echo "To activate the environment, run the following command:"
-	@echo "  conda activate $(CONDA_ENV)"
+	@echo "Target conda environment: $(CONDA_WRITE_ENV)"
+	@if [ -n "$$CONDA_DEFAULT_ENV" ]; then \
+		echo "Currently active conda environment: $$CONDA_DEFAULT_ENV"; \
+		if [ "$$CONDA_DEFAULT_ENV" = "$(CONDA_WRITE_ENV)" ]; then \
+			echo "'$(CONDA_WRITE_ENV)' is already active; nothing to activate."; \
+		else \
+			echo "To switch to the target environment, run the following command:"; \
+			echo "  conda activate $(CONDA_WRITE_ENV)"; \
+		fi; \
+	else \
+		echo "No conda environment is currently active. To activate the target environment, run:"; \
+		echo "  conda activate $(CONDA_WRITE_ENV)"; \
+	fi
 
 ## ==============================================================================
 ## Docker Image Build
@@ -415,7 +502,7 @@ help:
 	@printf $(HELP_FORMAT) "install-docker" "Install Docker for the detected operating system."
 	@printf $(HELP_FORMAT) "install-homebrew" "Install Homebrew (macOS only)."
 	@printf $(HELP_FORMAT) "install-miniforge" "Install Miniforge for the detected operating system."
-	@printf $(HELP_FORMAT) "create-conda-env" "Create or update Conda environment ('holon', 'base', or custom) with uv."
+	@printf $(HELP_FORMAT) "create-conda-env" "Create or update Conda environment (CONDA_WRITE_ENV, default 'holon'; 'base' only when explicitly requested; CONDA_PRUNE=1 to prune)."
 	@printf $(HELP_FORMAT) "activate-conda-env" "Show command to activate the Conda environment."
 	@printf $(HELP_FORMAT) "build-image" "Build the holon-coherence Docker container via build_image.sh."
 	@printf $(HELP_FORMAT) "help" "Show this help message."
