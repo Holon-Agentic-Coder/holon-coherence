@@ -9,21 +9,39 @@ test is exactly how byte lines are turned back into content.
 from __future__ import annotations
 
 import json
+import sqlite3
+import time
 
 import pytest
 
 from holon_coherence.mitm_addon import (
+    _MAX_SSE_BUFFER_BYTES,
+    MitmproxyAddon,
+    MITMProxyInterceptor,
     TokenCounts,
+    _get_wire_log_executor,
+    _write_transaction_sync,
+    derive_turn_id,
+    dump_wire_transaction,
     estimate_chars,
     extract_detailed_token_counts,
     extract_sse_cache_read_tokens,
     extract_sse_content,
     extract_sse_token_counts,
     extract_token_counts,
+    find_nested_key,
+    flush_wire_logs,
+    get_header_case_insensitive,
+    is_passive_monitoring,
+    is_wire_logging_enabled,
+    log_telemetry,
     safe_int,
     scrub_headers,
+    scrub_payload,
     scrub_string,
+    shutdown_wire_logs,
 )
+from holon_coherence.payload_cleaner import CleaningResult
 
 
 def _sse(*payloads: dict | str, prefix: str = "data: ") -> str:
@@ -545,3 +563,779 @@ class TestNonStreamingTokenCounts:
         assert tuple(extract_token_counts(req, json_resp, "openai")) == tuple(
             extract_token_counts(req, stream, "openai")
         )
+
+
+class _FakeServer:
+    def __init__(self, address: tuple[str, int] | None) -> None:
+        self.address = address
+        self.error: str | None = None
+
+
+class _FakeHookData:
+    def __init__(self, address: tuple[str, int] | None) -> None:
+        self.server = _FakeServer(address)
+
+
+class MockRequest:
+    def __init__(
+        self,
+        url: str = "https://api.openai.com/v1/chat/completions",
+        headers: dict[str, str] | None = None,
+        text: str = "",
+    ) -> None:
+        self.pretty_url = url
+        self.headers = headers if headers is not None else {"Content-Type": "application/json"}
+        self._text = text
+
+    def get_text(self) -> str:
+        return self._text
+
+    def set_text(self, text: str) -> None:
+        self._text = text
+
+
+class MockResponse:
+    def __init__(
+        self,
+        status_code: int = 200,
+        headers: dict[str, str] | None = None,
+        text: str = "",
+        stream: object = None,
+    ) -> None:
+        self.status_code = status_code
+        self.headers = headers if headers is not None else {"Content-Type": "application/json"}
+        self._text = text
+        self.stream = stream
+
+    def get_text(self) -> str:
+        return self._text
+
+    def set_text(self, text: str) -> None:
+        self._text = text
+
+    @classmethod
+    def make(cls, status_code: int = 200, content: bytes = b"", headers: dict[str, str] | None = None) -> MockResponse:
+        return cls(status_code=status_code, headers=headers or {}, text=content.decode("utf-8"))
+
+
+class MockFlow:
+    def __init__(
+        self,
+        request: MockRequest | None = None,
+        response: MockResponse | None = None,
+    ) -> None:
+        self.id = "mock-flow-1"
+        self.request = request or MockRequest()
+        self.response = response or MockResponse()
+        self.Response = MockResponse
+        self.provider = "unknown"
+        self.raw_request_data = None
+        self.req_data = None
+        self.cleaner_result = None
+        self.request_start_time = None
+        self.response_headers_time = None
+        self.first_chunk_time = None
+        self.sse_chunks = None
+        self.sse_bytes = 0
+        self.is_cached = False
+
+
+class TestMitmAddonLifecycle:
+    def test_addon_done_shuts_down_wire_logs(self) -> None:
+        addon = MitmproxyAddon()
+        addon.done()
+
+    def test_proxy_own_ports(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        addon = MitmproxyAddon()
+
+        # In container mode without HOLON_PROXY_PORT
+        monkeypatch.setattr("holon_coherence.mitm_addon.in_container", lambda: True)
+        monkeypatch.delenv("HOLON_PROXY_PORT", raising=False)
+        assert addon._proxy_own_ports() == (8080,)
+
+        # In container mode with HOLON_PROXY_PORT
+        monkeypatch.setenv("HOLON_PROXY_PORT", "8085")
+        assert addon._proxy_own_ports() == (8085,)
+
+        # In container mode with invalid port
+        monkeypatch.setenv("HOLON_PROXY_PORT", "invalid")
+        assert addon._proxy_own_ports() == (8080,)
+
+        # Non-container mode with ctx options
+        monkeypatch.setattr("holon_coherence.mitm_addon.in_container", lambda: False)
+        monkeypatch.delenv("HOLON_PROXY_PORT", raising=False)
+
+        class FakeOptions:
+            listen_port = 9090
+            web_port = 9091
+
+        class FakeCtx:
+            options = FakeOptions()
+
+        monkeypatch.setattr("holon_coherence.mitm_addon.ctx", FakeCtx())
+        assert addon._proxy_own_ports() == (9090, 9091)
+
+    def test_resolve_gateway(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        addon = MitmproxyAddon()
+        addon._gateway_ip = "192.168.65.254"
+        assert addon._resolve_gateway() == "192.168.65.254"
+
+        addon._gateway_ip = None
+        monkeypatch.setattr("holon_coherence.mitm_addon.resolve_gateway_address", lambda: "10.0.0.1")
+        assert addon._resolve_gateway() == "10.0.0.1"
+        assert addon._gateway_ip == "10.0.0.1"
+
+    def test_server_connect_not_in_container(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        addon = MitmproxyAddon()
+        monkeypatch.setattr("holon_coherence.mitm_addon.in_container", lambda: False)
+        data = _FakeHookData(("localhost", 11434))
+        addon.server_connect(data)
+        assert data.server.address == ("localhost", 11434)
+
+    def test_server_connect_no_targets(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        addon = MitmproxyAddon()
+        monkeypatch.setattr("holon_coherence.mitm_addon.in_container", lambda: True)
+        monkeypatch.delenv("HOLON_HOST_LOCAL_HOSTS", raising=False)
+        data = _FakeHookData(("localhost", 11434))
+        addon.server_connect(data)
+        assert data.server.address == ("localhost", 11434)
+
+    def test_server_connect_in_container_rewrites(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        addon = MitmproxyAddon()
+        monkeypatch.setattr("holon_coherence.mitm_addon.in_container", lambda: True)
+        monkeypatch.setenv("HOLON_HOST_LOCAL_HOSTS", "localhost:11434")
+        monkeypatch.setattr(addon, "_resolve_gateway", lambda: "192.168.65.254")
+
+        data = _FakeHookData(("localhost", 11434))
+        addon.server_connect(data)
+        assert data.server.address == ("192.168.65.254", 11434)
+
+    def test_server_connect_proxy_own_port_blocked(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        addon = MitmproxyAddon()
+        monkeypatch.setattr("holon_coherence.mitm_addon.in_container", lambda: True)
+        monkeypatch.setenv("HOLON_HOST_LOCAL_HOSTS", "localhost:8080")
+        monkeypatch.setenv("HOLON_PROXY_PORT", "8080")
+        monkeypatch.setattr(addon, "_resolve_gateway", lambda: "192.168.65.254")
+
+        data = _FakeHookData(("127.0.0.1", 8080))
+        addon.server_connect(data)
+        assert data.server.error == "Connection to proxy's own port blocked"
+
+    def test_server_connect_gateway_unresolved_warns_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        addon = MitmproxyAddon()
+        monkeypatch.setattr("holon_coherence.mitm_addon.in_container", lambda: True)
+        monkeypatch.setenv("HOLON_HOST_LOCAL_HOSTS", "localhost:11434")
+        monkeypatch.setattr(addon, "_resolve_gateway", lambda: None)
+
+        data = _FakeHookData(("localhost", 11434))
+        addon.server_connect(data)
+        assert addon._warned_gateway is True
+
+    def test_request_missing_request(self) -> None:
+        addon = MitmproxyAddon()
+        flow = MockFlow()
+        flow.request = None
+        addon.request(flow)
+        assert addon.total_requests == 0
+
+    def test_request_unknown_provider(self) -> None:
+        addon = MitmproxyAddon()
+        flow = MockFlow(request=MockRequest(url="https://api.github.com/repos", text="{}"))
+        addon.request(flow)
+        assert flow.provider == "unknown"
+        assert addon.total_requests == 0
+
+    def test_request_non_json_body(self) -> None:
+        addon = MitmproxyAddon()
+        flow = MockFlow(request=MockRequest(url="https://api.openai.com/v1/chat/completions", text="not a json body"))
+        addon.request(flow)
+        assert flow.provider == "openai"
+        assert addon.total_requests == 1
+
+    def test_request_passive_monitoring(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HOLON_PASSIVE_MONITORING", "1")
+        addon = MitmproxyAddon()
+        req_payload = {"messages": [{"role": "user", "content": "hi"}]}
+        flow = MockFlow(
+            request=MockRequest(url="https://api.openai.com/v1/chat/completions", text=json.dumps(req_payload))
+        )
+        addon.request(flow)
+        assert flow.provider == "openai"
+        assert flow.cleaner_result is None
+        assert flow.req_data == req_payload
+        assert not flow.is_cached
+
+    def test_request_cache_miss_cleans_and_forwards(self, tmp_path) -> None:
+        addon = MitmproxyAddon(cache_dir=str(tmp_path), wire_log_dir=str(tmp_path / "logs"))
+        req_payload = {
+            "model": "gpt-4",
+            "messages": [
+                {"role": "user", "content": "hello world"},
+                {"role": "assistant", "content": "hi", "tool_calls": [{"id": "1", "function": {"name": "test"}}]},
+                {"role": "tool", "tool_call_id": "1", "content": "tool output result"},
+            ],
+        }
+        flow = MockFlow(
+            request=MockRequest(url="https://api.openai.com/v1/chat/completions", text=json.dumps(req_payload))
+        )
+        addon.request(flow)
+        assert flow.provider == "openai"
+        assert flow.req_data is not None
+        assert flow.is_cached is False
+        assert flow.cleaner_result is not None
+
+    def test_request_cache_hit_synthesizes_response(self, tmp_path) -> None:
+        addon = MitmproxyAddon(cache_dir=str(tmp_path), wire_log_dir=str(tmp_path / "logs"))
+        req_payload = {"model": "gpt-4", "messages": [{"role": "user", "content": "hello cached"}]}
+        addon.interceptor.cache_store.put(
+            req_payload, {"choices": [{"message": {"content": "I am cached"}}]}, provider="openai"
+        )
+
+        flow = MockFlow(
+            request=MockRequest(url="https://api.openai.com/v1/chat/completions", text=json.dumps(req_payload))
+        )
+        addon.request(flow)
+        assert flow.is_cached is True
+        assert addon.cache_hits == 1
+        assert flow.response is not None
+        assert flow.response.status_code == 200
+        assert flow.response.headers["X-Holon-Cache-Hit-Rate"] == "1.0000"
+        assert flow.response.headers["X-Holon-TTFT-Ms"] == "0.00"
+        flush_wire_logs()
+
+    def test_request_custom_intercept_request_fallback(self) -> None:
+        addon = MitmproxyAddon()
+
+        def custom_intercept(endpoint, request_json):
+            return {"custom": True}, None
+
+        addon.interceptor.intercept_request = custom_intercept
+        req_payload = {"messages": [{"role": "user", "content": "hi"}]}
+        flow = MockFlow(
+            request=MockRequest(url="https://api.openai.com/v1/chat/completions", text=json.dumps(req_payload))
+        )
+        addon.request(flow)
+        assert flow.req_data == {"custom": True}
+
+    def test_responseheaders_unknown_provider(self) -> None:
+        addon = MitmproxyAddon()
+        flow = MockFlow()
+        flow.provider = "unknown"
+        addon.responseheaders(flow)
+        assert flow.response_headers_time is None
+
+    def test_responseheaders_non_sse(self) -> None:
+        addon = MitmproxyAddon()
+        flow = MockFlow(response=MockResponse(headers={"Content-Type": "application/json"}))
+        flow.provider = "openai"
+        addon.responseheaders(flow)
+        assert flow.response_headers_time is not None
+        assert flow.sse_chunks is None
+
+    def test_responseheaders_sse_stream_wrapper_and_limit(self) -> None:
+        addon = MitmproxyAddon()
+        existing_calls = []
+
+        def existing_stream(chunk: bytes) -> bytes:
+            existing_calls.append(chunk)
+            return chunk
+
+        flow = MockFlow(
+            response=MockResponse(headers={"Content-Type": "text/event-stream; charset=utf-8"}, stream=existing_stream)
+        )
+        flow.provider = "openai"
+        addon.responseheaders(flow)
+        assert flow.sse_chunks == []
+        assert callable(flow.response.stream)
+
+        c1 = b"data: 1\n\n"
+        out1 = flow.response.stream(c1)
+        assert out1 == c1
+        assert flow.first_chunk_time is not None
+        assert flow.sse_chunks == [c1]
+        assert existing_calls == [c1]
+
+        # Call with chunk exceeding _MAX_SSE_BUFFER_BYTES
+        flow.sse_bytes = _MAX_SSE_BUFFER_BYTES + 1
+        flow.response.stream(b"overflow")
+        assert len(flow.sse_chunks) == 1
+
+    def test_responseheaders_with_dict_headers(self) -> None:
+        addon = MitmproxyAddon()
+        flow = MockFlow()
+        flow.provider = "gemini"
+        flow.response = MockResponse()
+        flow.response.headers = {"content-type": "text/event-stream"}
+        addon.responseheaders(flow)
+        assert flow.sse_chunks == []
+
+    def test_response_early_return_conditions(self) -> None:
+        addon = MitmproxyAddon()
+        flow1 = MockFlow()
+        flow1.request = None
+        addon.response(flow1)
+
+        flow2 = MockFlow()
+        flow2.response = None
+        addon.response(flow2)
+
+        flow3 = MockFlow()
+        flow3.provider = "unknown"
+        addon.response(flow3)
+
+        flow4 = MockFlow()
+        flow4.provider = "openai"
+        flow4.is_cached = True
+        addon.response(flow4)
+
+    def test_response_200_json(self, tmp_path) -> None:
+        addon = MitmproxyAddon(cache_dir=str(tmp_path), wire_log_dir=str(tmp_path / "logs"))
+        req_payload = {"messages": [{"role": "user", "content": "testing 200"}]}
+        resp_payload = {
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        }
+        flow = MockFlow(
+            request=MockRequest(url="https://api.openai.com/v1/chat/completions", text=json.dumps(req_payload)),
+            response=MockResponse(status_code=200, text=json.dumps(resp_payload)),
+        )
+        flow.provider = "openai"
+        flow.request_start_time = time.perf_counter() - 0.1
+        flow.response_headers_time = time.perf_counter() - 0.05
+        addon.response(flow)
+
+        assert flow.response.headers["X-Holon-Cache-Hit-Rate"] == "0.0000"
+        assert "X-Holon-TTFT-Ms" in flow.response.headers
+        flush_wire_logs()
+
+    def test_response_200_sse(self, tmp_path) -> None:
+        addon = MitmproxyAddon(cache_dir=str(tmp_path), wire_log_dir=str(tmp_path / "logs"))
+        req_payload = {"messages": [{"role": "user", "content": "stream test"}]}
+        sse_text = _sse(
+            {"choices": [{"delta": {"content": "hello "}}]},
+            {"choices": [{"delta": {"content": "stream"}}], "usage": {"prompt_tokens": 8, "completion_tokens": 4}},
+        )
+        flow = MockFlow(
+            request=MockRequest(url="https://api.openai.com/v1/chat/completions", text=json.dumps(req_payload)),
+            response=MockResponse(status_code=200, headers={"Content-Type": "text/event-stream"}),
+        )
+        flow.provider = "openai"
+        flow.sse_chunks = [sse_text.encode("utf-8")]
+        flow.request_start_time = time.perf_counter() - 0.2
+        flow.response_headers_time = time.perf_counter() - 0.15
+        flow.first_chunk_time = time.perf_counter() - 0.1
+        addon.response(flow)
+
+        assert "X-Holon-Prefill-TPS" in flow.response.headers
+        assert "X-Holon-Output-TPS" in flow.response.headers
+        flush_wire_logs()
+
+    def test_response_non_200(self, tmp_path) -> None:
+        addon = MitmproxyAddon(cache_dir=str(tmp_path), wire_log_dir=str(tmp_path / "logs"))
+        flow = MockFlow(
+            request=MockRequest(url="https://api.openai.com/v1/chat/completions", text='{"prompt":"fail"}'),
+            response=MockResponse(status_code=429, text='{"error":"rate_limited"}'),
+        )
+        flow.provider = "openai"
+        flow.request_start_time = time.perf_counter() - 0.05
+        addon.response(flow)
+        flush_wire_logs()
+
+    def test_dump_flow_transaction_disabled(self, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+        monkeypatch.setenv("ENABLE_WIRE_LOGGING", "0")
+        addon = MitmproxyAddon(wire_log_dir=str(tmp_path / "logs"))
+        flow = MockFlow()
+        addon._dump_flow_transaction(flow, resp_data={"test": 1})
+        assert not (tmp_path / "logs").exists()
+
+    def test_dump_flow_transaction_structure(self, tmp_path) -> None:
+        log_dir = str(tmp_path / "wire_logs")
+        addon = MitmproxyAddon(wire_log_dir=log_dir)
+        flow = MockFlow(
+            request=MockRequest(
+                url="https://api.anthropic.com/v1/messages?api_key=SECRET123",
+                headers={"x-holon-agent-id": "agent-007", "x-holon-turn-id": "42", "authorization": "Bearer sk-1234"},
+                text=json.dumps({"messages": [{"role": "user", "content": "test"}]}),
+            ),
+            response=MockResponse(status_code=200, text=json.dumps({"content": [{"type": "text", "text": "resp"}]})),
+        )
+        flow.provider = "anthropic"
+        flow.cleaner_result = CleaningResult(
+            payload={}, chars_saved=100, tool_outputs_omitted=2, turns_summarized=1, cache_control_injected=1
+        )
+        addon._dump_flow_transaction(
+            flow, resp_data={"content": "test"}, status_code=200, is_hit=False, ttft=0.05, total_time=0.2
+        )
+        flush_wire_logs()
+
+        jsonl_file = tmp_path / "wire_logs" / "transactions.jsonl"
+        assert jsonl_file.exists()
+        line = json.loads(jsonl_file.read_text().strip())
+        assert line["agent_id"] == "agent-007"
+        assert line["turn_id"] == 42
+        assert line["provider"] == "anthropic"
+        assert line["delta"]["chars_saved"] == 100
+        assert line["headers"]["authorization"] == "[REDACTED]"
+        assert "SECRET123" not in line["endpoint"]
+
+
+class TestInterceptorCore:
+    def test_cache_store_property(self, tmp_path) -> None:
+        interceptor = MITMProxyInterceptor(cache_dir=str(tmp_path))
+        assert interceptor.cache_store is not None
+        assert interceptor.cache_store is interceptor.cache_store
+
+    def test_detect_provider_all_variants(self) -> None:
+        interceptor = MITMProxyInterceptor()
+        assert interceptor.detect_provider("https://api.anthropic.com/v1/messages") == "anthropic"
+        assert interceptor.detect_provider("https://proxy/v1/messages") == "anthropic"
+        assert interceptor.detect_provider("https://proxy", {"anthropic-version": "2023-06-01"}) == "anthropic"
+        assert interceptor.detect_provider("https://proxy", {"anthropic_version": "2023-06-01"}) == "anthropic"
+        assert interceptor.detect_provider("https://proxy", {"system": "you are helpful"}) == "anthropic"
+
+        assert interceptor.detect_provider("https://generativelanguage.googleapis.com/v1/models") == "gemini"
+        assert interceptor.detect_provider("https://test.generativelanguage.googleapis.com") == "gemini"
+        assert interceptor.detect_provider("https://proxy/v1/gemini-pro") == "gemini"
+        assert interceptor.detect_provider("https://proxy/v1/models/gemini:generateContent") == "gemini"
+        assert interceptor.detect_provider("https://proxy/v1/models/gemini:streamGenerateContent") == "gemini"
+        assert interceptor.detect_provider("https://proxy", {"contents": []}) == "gemini"
+
+        for prov in [
+            "openai",
+            "openrouter",
+            "deepseek",
+            "groq",
+            "together",
+            "mistral",
+            "fireworks",
+            "ollama",
+            "vllm",
+            "lmstudio",
+            "chat/completions",
+            "v1/completions",
+        ]:
+            assert interceptor.detect_provider(f"https://api.{prov}.com") == "openai"
+        assert interceptor.detect_provider("https://proxy", {"messages": []}) == "openai"
+        assert interceptor.detect_provider("https://proxy", {"prompt": "test"}) == "openai"
+
+        assert interceptor.detect_provider("https://custom.api/run", {}) == "unknown"
+
+    def test_intercept_request_with_stats_streaming_bypasses(self, tmp_path) -> None:
+        interceptor = MITMProxyInterceptor(cache_dir=str(tmp_path))
+        req = {"messages": [{"role": "user", "content": "hi"}], "stream": True}
+        _cleaned, cached, stats = interceptor.intercept_request_with_stats(
+            "https://api.openai.com/v1/chat/completions", req
+        )
+        assert cached is None
+        assert stats is not None
+
+    def test_intercept_request_with_stats_cache_exception_bypasses(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        interceptor = MITMProxyInterceptor(cache_dir=str(tmp_path))
+        req = {"messages": [{"role": "user", "content": "hi"}]}
+        monkeypatch.setattr(
+            interceptor.cache_store,
+            "get",
+            lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError("db locked")),
+        )
+        _cleaned, cached, stats = interceptor.intercept_request_with_stats(
+            "https://api.openai.com/v1/chat/completions", req
+        )
+        assert cached is None
+        assert stats is not None
+
+    def test_intercept_response_conditions(self, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+        interceptor = MITMProxyInterceptor(cache_dir=str(tmp_path))
+        req = {"messages": [{"role": "user", "content": "hi"}]}
+        resp = {"choices": [{"message": {"content": "ok"}}]}
+
+        interceptor.enable_caching = False
+        interceptor.intercept_response("https://api.openai.com/v1/chat/completions", req, resp, 200)
+
+        interceptor.enable_caching = True
+        interceptor.intercept_response("https://api.openai.com/v1/chat/completions", {"stream": True}, resp, 200)
+        interceptor.intercept_response("https://api.openai.com/v1/chat/completions", req, resp, 500)
+        interceptor.intercept_response("https://api.openai.com/v1/chat/completions", req, {"error": "bad"}, 200)
+        interceptor.intercept_response("https://api.openai.com/v1/chat/completions", req, {"type": "error"}, 200)
+
+        monkeypatch.setattr(
+            interceptor.cache_store,
+            "put",
+            lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError("db locked")),
+        )
+        interceptor.intercept_response("https://api.openai.com/v1/chat/completions", req, resp, 200)
+
+
+class TestScrubPayload:
+    def test_nested_structures_and_secret_keys(self) -> None:
+        payload = {
+            "api_key": "sk-real12345678901234567890",
+            "password": "mypassword",
+            "nested": {
+                "token": "tok123",
+                "normal": "hello",
+                "items": [
+                    {"client_secret": "secretvalue", "data": "clean"},
+                    ("refresh_token", "refreshtok"),
+                ],
+            },
+        }
+        scrubbed = scrub_payload(payload)
+        assert scrubbed["api_key"] == "[REDACTED]"
+        assert scrubbed["password"] == "[REDACTED]"
+        assert scrubbed["nested"]["token"] == "[REDACTED]"
+        assert scrubbed["nested"]["normal"] == "hello"
+        assert scrubbed["nested"]["items"][0]["client_secret"] == "[REDACTED]"
+        assert scrubbed["nested"]["items"][0]["data"] == "clean"
+
+    def test_secret_string_values_in_payload(self) -> None:
+        jwt_part = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.doNotLeakThisSignature"
+        payload = {
+            "prompt": f"Here is key sk-ant-api03-abcdef12345678901234567890 and Bearer {jwt_part}",
+        }
+        scrubbed = scrub_payload(payload)
+        assert "sk-ant-" not in scrubbed["prompt"]
+        assert "[REDACTED_SECRET]" in scrubbed["prompt"]
+
+    def test_max_depth_guard(self) -> None:
+        deep = {"a": {"b": {"c": 1}}}
+        assert scrub_payload(deep, max_depth=0) == deep
+
+    def test_primitive_and_empty_types(self) -> None:
+        assert scrub_payload(123) == 123
+        assert scrub_payload(None) is None
+        assert scrub_payload(True) is True
+
+
+class TestWireLoggingAndUtilities:
+    @pytest.mark.parametrize(
+        ("val", "expected"),
+        [("0", False), ("false", False), ("no", False), ("off", False), ("1", True), ("true", True), ("yes", True)],
+    )
+    def test_is_wire_logging_enabled(self, monkeypatch: pytest.MonkeyPatch, val: str, expected: bool) -> None:
+        monkeypatch.setenv("ENABLE_WIRE_LOGGING", val)
+        assert is_wire_logging_enabled() == expected
+
+    @pytest.mark.parametrize(
+        ("val", "expected"),
+        [("1", True), ("true", True), ("yes", True), ("on", True), ("0", False), ("false", False)],
+    )
+    def test_is_passive_monitoring(self, monkeypatch: pytest.MonkeyPatch, val: str, expected: bool) -> None:
+        monkeypatch.setenv("HOLON_PASSIVE_MONITORING", val)
+        assert is_passive_monitoring() == expected
+
+    def test_get_wire_log_executor_and_shutdown(self) -> None:
+        shutdown_wire_logs()
+        exec1 = _get_wire_log_executor()
+        assert exec1 is not None
+        exec2 = _get_wire_log_executor()
+        assert exec1 is exec2
+        shutdown_wire_logs()
+
+    def test_write_transaction_sync_and_atomic_replace(self, tmp_path) -> None:
+        log_dir = str(tmp_path / "sync_logs")
+        record = {"turn_id": "test_turn", "flow_id": "flow1", "status": 200}
+        _write_transaction_sync(record, log_dir)
+        assert (tmp_path / "sync_logs" / "turn_test_turn_flow1.json").exists()
+        assert (tmp_path / "sync_logs" / "transactions.jsonl").exists()
+
+    def test_dump_wire_transaction_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ENABLE_WIRE_LOGGING", "0")
+        fut = dump_wire_transaction({"test": 1})
+        assert fut.done()
+        assert fut.result() is None
+
+    def test_get_header_case_insensitive(self) -> None:
+        assert get_header_case_insensitive(None, "X-Test") is None
+        assert get_header_case_insensitive({"x-test": "found"}, "X-Test") == "found"
+        assert get_header_case_insensitive({"Other": "val"}, "X-Test") is None
+
+        class FakeHeaders:
+            def items(self):
+                return [("X-Special", "special_value")]
+
+        assert get_header_case_insensitive(FakeHeaders(), "x-special") == "special_value"
+
+    def test_derive_turn_id_precedence(self) -> None:
+        assert derive_turn_id({"x-holon-turn-id": "5"}, None) == 5
+        assert derive_turn_id({"x-holon-turn-id": "five"}, None) == "five"
+
+        payload_messages = {
+            "messages": [
+                {"role": "user", "content": "1"},
+                {"role": "assistant", "content": "2"},
+                {"role": "user", "content": "3"},
+                {"role": "assistant", "content": "4"},
+            ]
+        }
+        assert derive_turn_id({}, payload_messages) == 3
+
+        payload_contents = {
+            "contents": [
+                {"role": "user", "parts": []},
+                {"role": "model", "parts": []},
+            ]
+        }
+        assert derive_turn_id({}, payload_contents) == 2
+
+        assert derive_turn_id({}, {}, fallback_id=99) == 99
+
+    def test_find_nested_key_edge_cases(self) -> None:
+        assert find_nested_key("string", "key") is None
+        assert find_nested_key({}, "key") is None
+        assert find_nested_key({"a": 1}, "key", max_depth=0) is None
+        assert find_nested_key({"a": {"b": {"target": "hit"}}}, "target") == "hit"
+        assert find_nested_key([{"target": "list_hit"}], "target") == "list_hit"
+        assert find_nested_key({"a": [{"b": 1}]}, "b") == 1
+
+    def test_log_telemetry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        log_telemetry("testing info log")
+
+        class FakeLog:
+            def __init__(self):
+                self.messages = []
+
+            def info(self, msg):
+                self.messages.append(msg)
+
+        class FakeCtx:
+            log = FakeLog()
+
+        monkeypatch.setattr("holon_coherence.mitm_addon.ctx", FakeCtx())
+        log_telemetry("ctx log test")
+        assert "ctx log test" in FakeCtx.log.messages
+
+    def test_estimate_chars_deep(self) -> None:
+        assert estimate_chars(None, max_depth=0) == 0
+        assert estimate_chars(42) == 0
+        assert estimate_chars("hello") == 5
+        assert estimate_chars(["a", "bc"]) == 3
+        assert estimate_chars({"system": "sys", "messages": ["m1", "m2"]}) == 3 + 2 + 2
+
+
+class TestSSEReassemblyEdgeCases:
+    def test_gemini_candidate_string_and_parts(self) -> None:
+        stream = _sse(
+            {"candidates": ["string_candidate"]},
+            {"candidates": [{"content": "string_content"}]},
+            {"candidates": [{"content": {"parts": ["string_part"]}}]},
+        )
+        counts = extract_sse_token_counts(stream, {}, "gemini")
+        assert counts.output_tokens > 0
+
+    def test_token_counts_exception_fallback(self) -> None:
+        counts = extract_token_counts({"prompt": "req"}, {"usage": 12345}, "anthropic")
+        assert counts.input_tokens > 0
+
+    def test_openai_tool_calls_consecutive_and_unclosed(self) -> None:
+        stream = _sse(
+            {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"name": "f1", "arguments": "1"}}]}}]},
+            {"choices": [{"delta": {"tool_calls": [{"index": 1, "function": {"name": "f2", "arguments": "2"}}]}}]},
+        )
+        content = extract_sse_content(stream, "openai")
+        assert "f1(1)" in content
+        assert "f2(2)" in content
+
+    def test_gemini_function_call_str_args(self) -> None:
+        stream = _sse({"candidates": [{"content": {"parts": [{"functionCall": {"name": "run", "args": "raw_str"}}]}}]})
+        counts = extract_sse_token_counts(stream, {}, "gemini")
+        assert counts.output_tokens > 0
+
+    def test_sse_token_counts_malformed_lines_and_non_dicts(self) -> None:
+        stream = "\n".join(["data: 123", "data: not_json", "not_data_line", ""])
+        counts = extract_sse_token_counts(stream, {}, "openai")
+        assert counts.output_tokens == 0
+
+    def test_intercept_request_stats_unknown_provider_warning(self) -> None:
+        interceptor = MITMProxyInterceptor()
+        res = interceptor.intercept_request_with_stats("https://unknown.host/api", {"data": 1})
+        assert res == ({"data": 1}, None, None)
+
+    def test_intercept_request_backward_compatible_2tuple(self) -> None:
+        interceptor = MITMProxyInterceptor()
+        res = interceptor.intercept_request("https://api.openai.com/v1/chat/completions", {"messages": []})
+        assert isinstance(res, tuple)
+        assert len(res) == 2
+
+    def test_get_header_case_insensitive_get_only(self) -> None:
+        class OnlyGet:
+            def get(self, key: str) -> str | None:
+                return "get_val" if key == "X-Target" else None
+
+        assert get_header_case_insensitive(OnlyGet(), "X-Target") == "get_val"
+
+    def test_log_telemetry_ctx_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        class ThrowingLog:
+            def info(self, msg: str) -> None:
+                raise RuntimeError("ctx error")
+
+        class FakeCtx:
+            log = ThrowingLog()
+
+        monkeypatch.setattr("holon_coherence.mitm_addon.ctx", FakeCtx())
+        log_telemetry("should fall back")
+
+    def test_shutdown_wire_logs_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        executor = _get_wire_log_executor()
+        monkeypatch.setattr(executor, "shutdown", lambda **kw: (_ for _ in ()).throw(RuntimeError("shutdown error")))
+        shutdown_wire_logs()
+
+    def test_write_transaction_sync_failure(self) -> None:
+        _write_transaction_sync({"turn_id": 1}, "/nonexistent/directory/that/cannot/be/created/root")
+
+    def test_dump_flow_transaction_exception_logged(self, tmp_path) -> None:
+        addon = MitmproxyAddon(wire_log_dir=str(tmp_path / "logs"))
+        flow = MockFlow()
+        flow.request = None
+        addon._dump_flow_transaction(flow, resp_data={})
+
+    def test_request_cleaner_log_branch(self, tmp_path) -> None:
+        addon = MitmproxyAddon(cache_dir=str(tmp_path), wire_log_dir=str(tmp_path / "logs"))
+        req = {
+            "messages": [
+                {"role": "user", "content": "run task"},
+                {"role": "assistant", "content": "ok", "tool_calls": [{"id": "c1", "function": {"name": "f"}}]},
+                {"role": "tool", "tool_call_id": "c1", "content": "output"},
+                {"role": "assistant", "content": "ok2", "tool_calls": [{"id": "c2", "function": {"name": "f"}}]},
+                {"role": "tool", "tool_call_id": "c2", "content": "output"},
+            ]
+        }
+        flow = MockFlow(request=MockRequest(url="https://api.openai.com/v1/chat/completions", text=json.dumps(req)))
+        addon.request(flow)
+        assert flow.cleaner_result is not None
+
+    def test_request_exception_handling(self, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+        addon = MitmproxyAddon(cache_dir=str(tmp_path), wire_log_dir=str(tmp_path / "logs"))
+        flow = MockFlow(request=MockRequest(url="https://api.openai.com/v1/chat/completions", text='{"test": 1}'))
+        monkeypatch.setattr(
+            addon.interceptor,
+            "intercept_request_with_stats",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        addon.request(flow)
+
+    def test_responseheaders_no_callable_existing_stream(self) -> None:
+        addon = MitmproxyAddon()
+        flow = MockFlow(response=MockResponse(headers={"Content-Type": "text/event-stream"}, stream="not_callable"))
+        flow.provider = "openai"
+        addon.responseheaders(flow)
+        out = flow.response.stream(b"chunk")
+        assert out == b"chunk"
+
+    def test_response_exception_handling(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        addon = MitmproxyAddon()
+        flow = MockFlow(request=MockRequest(), response=MockResponse())
+        flow.provider = "openai"
+        monkeypatch.setattr(flow.response, "get_text", lambda: (_ for _ in ()).throw(RuntimeError("response error")))
+        addon.response(flow)
+
+    def test_response_non_200_unparseable(self, tmp_path) -> None:
+        addon = MitmproxyAddon(cache_dir=str(tmp_path), wire_log_dir=str(tmp_path / "logs"))
+        flow = MockFlow(
+            request=MockRequest(url="https://api.openai.com/v1/chat/completions", text="raw text not json"),
+            response=MockResponse(status_code=500, text="raw error text"),
+        )
+        flow.provider = "openai"
+        addon.response(flow)
+        flush_wire_logs()

@@ -120,28 +120,110 @@ def test_concurrent_writers_and_readers_do_not_error(tmp_path) -> None:
     """WAL plus an explicit busy_timeout must absorb parallel agent workloads without OperationalError."""
     store = HybridCacheStore(cache_dir=str(tmp_path))
     errors: list[BaseException] = []
+    providers = ["openai", "anthropic", "gemini"]
 
     def worker(worker_id: int) -> None:
         try:
+            prov = providers[worker_id % len(providers)]
             for i in range(10):
-                store.put(
-                    _payload(f"worker {worker_id} request {i} shared token pool"),
-                    {"content": str(i)},
-                    provider="openai",
-                )
-                store.get(_payload(f"worker {worker_id} request {i} shared token pool"), provider="openai")
+                payload = _payload(f"worker {worker_id} request {i} shared token pool")
+                store.put(payload, {"content": str(i)}, provider=prov)
+                hit = store.get(payload, provider=prov)
+                assert hit == {"content": str(i)}
+                if i % 3 == 0:
+                    store._prune_expired()
         except BaseException as exc:
             errors.append(exc)
 
-    threads = [threading.Thread(target=worker, args=(n,)) for n in range(8)]
+    threads = [threading.Thread(target=worker, args=(n,)) for n in range(12)]
     for thread in threads:
         thread.start()
     for thread in threads:
-        thread.join()
+        thread.join(timeout=5.0)
+        assert not thread.is_alive(), f"thread timed out: {thread}"
 
     assert not errors, f"concurrent cache access raised: {errors[:3]}"
     with sqlite3.connect(store.db_path) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM prompt_cache").fetchone()[0] == 80
+        assert conn.execute("SELECT COUNT(*) FROM prompt_cache").fetchone()[0] == 120
+
+
+def test_sqlite_pragmas_applied_on_every_connection(tmp_path) -> None:
+    """Verify busy_timeout=5000, journal_mode=WAL, and synchronous=NORMAL on opened connections."""
+    store = HybridCacheStore(cache_dir=str(tmp_path))
+    with store._connect() as conn:
+        busy_timeout = conn.execute("PRAGMA busy_timeout;").fetchone()[0]
+        journal_mode = conn.execute("PRAGMA journal_mode;").fetchone()[0].lower()
+        synchronous = conn.execute("PRAGMA synchronous;").fetchone()[0]
+
+    assert busy_timeout == 5000
+    assert journal_mode == "wal"
+    assert synchronous == 1
+
+
+def test_concurrent_prune_and_read_write_interleaving(tmp_path) -> None:
+    """Background pruning threads concurrently with active readers and writers."""
+    store = HybridCacheStore(cache_dir=str(tmp_path), ttl_seconds=1.0, prune_interval_seconds=0.01, prune_batch_size=5)
+    for i in range(20):
+        store.put(_payload(f"initial item {i}"), {"val": i}, provider="openai")
+    _age_entries(store, 10.0)
+
+    errors: list[BaseException] = []
+    stop_event = threading.Event()
+
+    def pruner() -> None:
+        try:
+            while not stop_event.is_set():
+                store._prune_expired(force=True)
+                time.sleep(0.005)
+        except BaseException as exc:
+            errors.append(exc)
+
+    def writer_reader(worker_id: int) -> None:
+        try:
+            for i in range(15):
+                p = _payload(f"worker_{worker_id}_dynamic_{i}")
+                store.put(p, {"result": i}, provider="anthropic" if worker_id % 2 == 0 else "gemini")
+                store.get(p, provider="anthropic" if worker_id % 2 == 0 else "gemini")
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=pruner) for _ in range(2)]
+    threads += [threading.Thread(target=writer_reader, args=(i,)) for i in range(6)]
+
+    for t in threads:
+        t.start()
+    for t in threads[2:]:
+        t.join(timeout=5.0)
+        assert not t.is_alive()
+
+    stop_event.set()
+    for t in threads[:2]:
+        t.join(timeout=5.0)
+        assert not t.is_alive()
+
+    assert not errors, f"Errors during concurrent prune/read/write: {errors}"
+
+
+def test_malformed_payload_normalization_does_not_corrupt_cache(tmp_path) -> None:
+    """Test unparseable strings, missing messages/system prompts, and non-dict payload elements."""
+    store = HybridCacheStore(cache_dir=str(tmp_path))
+    malformed_payloads = [
+        {"messages": "not-a-list", "system": 12345},
+        {"messages": [None, 42, "string-not-dict", {"role": "invalid"}]},
+        {"contents": "not-a-list"},
+        {"prompt": None},
+        {},
+    ]
+    for i, p in enumerate(malformed_payloads):
+        store.put(p, {"ans": i}, provider="openai")
+        res = store.get(p, provider="openai")
+        assert res == {"ans": i}
+
+    norm = store.normalize_payload("bare string payload")
+    assert isinstance(norm, str)
+    assert store._extract_user_content("string") == "string"
+    assert store._extract_system_prompt("string") == ""
+    assert store.get({"messages": [{"role": "user", "content": "completely different"}]}, provider="openai") is None
 
 
 def test_connections_are_closed_after_each_operation(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:

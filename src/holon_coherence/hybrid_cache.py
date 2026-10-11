@@ -192,7 +192,10 @@ class HybridCacheStore:
 
     def normalize_payload(self, payload: dict[str, Any], provider: str = "anthropic") -> str:
         """Normalizes payload by stripping transient variables like timestamps, run IDs, and temporary tokens."""
-        raw_json = json.dumps(payload, sort_keys=True)
+        try:
+            raw_json = json.dumps(payload, sort_keys=True, default=str)
+        except Exception:
+            raw_json = str(payload)
         # Strip ISO timestamps
         norm = re.sub(
             r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?",
@@ -213,6 +216,8 @@ class HybridCacheStore:
         """Extracts user message content specifically to avoid system prompt and JSON key token pollution.
         Prioritizes the most recent user turns to prevent long conversation history token dilution.
         """
+        if not isinstance(payload, dict):
+            return str(payload) if payload else ""
 
         def _extract_item_text(item: Any) -> list[str]:
             texts: list[str] = []
@@ -253,7 +258,7 @@ class HybridCacheStore:
                     if extracted:
                         user_texts.extend(extracted)
                 elif content is not None:
-                    user_texts.append(json.dumps(content))
+                    user_texts.append(json.dumps(content, default=str))
         contents = payload.get("contents")
         if isinstance(contents, list):
             user_turns = [
@@ -275,6 +280,8 @@ class HybridCacheStore:
 
     def _extract_system_prompt(self, payload: dict[str, Any]) -> str:
         """Extracts normalized system instructions from Anthropic/Gemini/OpenAI payload schemas."""
+        if not isinstance(payload, dict):
+            return ""
         system_texts: list[str] = []
 
         # 1. Top-level 'system' or 'system_instruction' field (Anthropic/Gemini)
@@ -406,7 +413,7 @@ class HybridCacheStore:
         normalized = self._normalized_payload(payload, provider)
         user_tokens = " ".join(sorted(self._tokenize(self._extract_user_content(normalized))))
         system_hash = self._system_hash(self._extract_system_prompt(normalized))
-        resp_json = json.dumps(response)
+        resp_json = json.dumps(response, default=str)
         now = time.time()
         self._prune_expired()
 
