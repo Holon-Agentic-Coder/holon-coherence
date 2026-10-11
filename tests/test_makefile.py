@@ -1028,9 +1028,7 @@ def test_create_conda_env_allow_base_does_not_bless_an_inherited_base_name(tmp_p
     The flag pre-authorises a name typed in this invocation; here the name is inherited, so
     base would be selected by shell state alone (no prompt at all in CI).
     """
-    stdout, recipe = _create_conda_env_recipe(
-        make_vars={"CONDA_ALLOW_BASE": "1"}, env_vars={"CONDA_ENV": "base"}
-    )
+    stdout, recipe = _create_conda_env_recipe(make_vars={"CONDA_ALLOW_BASE": "1"}, env_vars={"CONDA_ENV": "base"})
     assert "CHOSEN_ENV='base'" in stdout
     assert 'BASE_CONSENT="false"' in stdout
 
@@ -1059,7 +1057,7 @@ def test_create_conda_env_explicit_name_is_honoured_under_dash(tmp_path):
 
 @pytest.mark.parametrize("bad_name", ["-evil", "has space", "a;b"], ids=["leading-dash", "space", "semicolon"])
 def test_create_conda_env_rejects_malformed_environment_names(tmp_path, bad_name):
-    stdout, recipe = _create_conda_env_recipe(make_vars={"CONDA_ENV": bad_name})
+    _stdout, recipe = _create_conda_env_recipe(make_vars={"CONDA_ENV": bad_name})
 
     result, calls = _run_recipe_against_stub_conda(
         tmp_path, recipe, existing_envs=("base", "holon"), expect_success=False
@@ -1072,7 +1070,7 @@ def test_create_conda_env_rejects_malformed_environment_names(tmp_path, bad_name
 def test_create_conda_env_exported_name_is_data_not_shell_code(tmp_path):
     """A backtick in an exported CONDA_ENV must not run, and the name must then be rejected."""
     marker = tmp_path / "pwned"
-    stdout, recipe = _create_conda_env_recipe(env_vars={"CONDA_ENV": f"`touch {marker}`"})
+    _stdout, recipe = _create_conda_env_recipe(env_vars={"CONDA_ENV": f"`touch {marker}`"})
 
     result, calls = _run_recipe_against_stub_conda(
         tmp_path, recipe, existing_envs=("base", "holon"), expect_success=False
@@ -1084,7 +1082,7 @@ def test_create_conda_env_exported_name_is_data_not_shell_code(tmp_path):
 
 
 def test_create_conda_env_rejects_a_non_numeric_prompt_timeout(tmp_path):
-    stdout, recipe = _create_conda_env_recipe(make_vars={"CONDA_PROMPT_TIMEOUT": "abc"})
+    _stdout, recipe = _create_conda_env_recipe(make_vars={"CONDA_PROMPT_TIMEOUT": "abc"})
 
     result, calls = _run_recipe_against_stub_conda(tmp_path, recipe, existing_envs=("holon",), expect_success=False)
 
