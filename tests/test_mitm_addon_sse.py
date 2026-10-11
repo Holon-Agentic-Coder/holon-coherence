@@ -20,6 +20,8 @@ from holon_coherence.mitm_addon import (
     extract_sse_content,
     extract_sse_token_counts,
     safe_int,
+    scrub_headers,
+    scrub_string,
 )
 
 
@@ -345,3 +347,88 @@ class TestDetailedCounts:
         )
         detailed = extract_detailed_token_counts({}, stream, "anthropic")
         assert detailed["cache_creation_input_tokens"] == 9
+
+
+class TestScrubbing:
+    """Credential redaction for wire logs, using real key shapes rather than the word 'secret'."""
+
+    @pytest.mark.parametrize(
+        "secret",
+        [
+            "sk-ant-" + "A" * 30,  # Anthropic
+            "sk-" + "a" * 24,  # OpenAI
+            "sk-proj-" + "a" * 24,  # OpenAI project key
+            "AIza" + "a" * 35,  # Google API key
+            "ghp_" + "a" * 36,  # GitHub PAT
+            "github_pat_" + "a" * 24,  # GitHub fine-grained PAT
+            "AKIA" + "ABCDEFGHIJKLMNOP",  # AWS access key id
+            "ASIA" + "ABCDEFGHIJKLMNOP",  # AWS temporary access key id
+            "hf_" + "a" * 34,  # Hugging Face
+            "eyJ" + "a" * 22 + "." + "b" * 22 + "." + "c" * 22,  # JWT
+            "-----BEGIN PRIVATE KEY-----\nMIIBVw\n-----END PRIVATE KEY-----",  # PEM
+        ],
+    )
+    def test_recognised_credential_shapes_are_redacted(self, secret: str) -> None:
+        assert secret not in scrub_string(f"authorization: Bearer {secret}")
+        assert "[REDACTED_SECRET]" in scrub_string(f"authorization: Bearer {secret}")
+
+    def test_url_query_credentials_are_scrubbed_but_other_parameters_survive(self) -> None:
+        out = scrub_string("https://example.com/v1?api_key=SUPERSECRETVALUE&model=gemini-3")
+        assert "SUPERSECRETVALUE" not in out
+        assert "[REDACTED]" in out
+        assert "model=gemini-3" in out
+
+    @pytest.mark.parametrize(
+        "param", ["key", "api_key", "apiKey", "api-key", "apikey", "token", "access_token", "secret"]
+    )
+    def test_every_documented_query_parameter_name_is_covered(self, param: str) -> None:
+        assert "TOPSECRET" not in scrub_string(f"https://host/x?{param}=TOPSECRET")
+
+    def test_aws_secret_assignment_form_is_scrubbed(self) -> None:
+        line = 'aws_secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"'
+        assert "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" not in scrub_string(line)
+
+    def test_ordinary_text_is_left_alone(self) -> None:
+        text = "refactor the parser in src/app.py; 4 items remaining"
+        assert scrub_string(text) == text
+
+    @pytest.mark.parametrize("value", ["", None, 42])
+    def test_non_string_and_empty_pass_through(self, value: object) -> None:
+        assert scrub_string(value) == value
+
+
+class TestScrubHeaders:
+    @pytest.mark.parametrize(
+        "name",
+        ["authorization", "Authorization", "x-api-key", "api-key", "x-auth-token", "set-cookie", "proxy-authorization"],
+    )
+    def test_sensitive_header_names_are_fully_replaced(self, name: str) -> None:
+        cleaned = scrub_headers({name: "Bearer sk-" + "a" * 24})
+        assert cleaned[name.lower()] == "[REDACTED]"
+
+    def test_unknown_header_name_still_scrubs_a_secret_value(self) -> None:
+        """The closed name list is not the only defence: values are scanned regardless of key."""
+        cleaned = scrub_headers({"x-upstream-assertion": "Bearer sk-" + "b" * 24})
+        assert "bbbbb" not in cleaned["x-upstream-assertion"]
+
+    def test_header_names_are_normalised_to_lowercase(self) -> None:
+        cleaned = scrub_headers({"Content-Type": "application/json"})
+        assert list(cleaned) == ["content-type"]
+
+    def test_list_and_tuple_header_forms_are_accepted(self) -> None:
+        pairs = [("Authorization", "Bearer zzz"), ("accept", "application/json")]
+        assert scrub_headers(pairs)["authorization"] == "[REDACTED]"
+        assert scrub_headers(tuple(pairs))["accept"] == "application/json"
+
+    def test_header_objects_with_items_are_accepted(self) -> None:
+        class FakeHeaders:
+            def items(self):
+                return [("X-Session-Token", "abc"), ("accept", "text/plain")]
+
+        cleaned = scrub_headers(FakeHeaders())
+        assert cleaned["x-session-token"] == "[REDACTED]"
+        assert cleaned["accept"] == "text/plain"
+
+    def test_unrecognised_shape_yields_empty_dict(self) -> None:
+        assert scrub_headers(None) == {}
+        assert scrub_headers(42) == {}
