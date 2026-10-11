@@ -12,7 +12,15 @@ import json
 
 import pytest
 
-from holon_coherence.mitm_addon import TokenCounts, extract_sse_content, safe_int
+from holon_coherence.mitm_addon import (
+    TokenCounts,
+    estimate_chars,
+    extract_detailed_token_counts,
+    extract_sse_cache_read_tokens,
+    extract_sse_content,
+    extract_sse_token_counts,
+    safe_int,
+)
 
 
 def _sse(*payloads: dict | str, prefix: str = "data: ") -> str:
@@ -169,3 +177,171 @@ class TestTokenCountsAndHelpers:
     )
     def test_safe_int_never_raises(self, value: object, expected: int) -> None:
         assert safe_int(value, 0) == expected
+
+
+class TestSSETokenCountsAnthropic:
+    def test_usage_from_message_start_and_delta_is_reported_exactly(self) -> None:
+        stream = _sse(
+            {
+                "type": "message_start",
+                "message": {
+                    "usage": {
+                        "input_tokens": 100,
+                        "cache_read_input_tokens": 40,
+                        "cache_creation_input_tokens": 10,
+                    }
+                },
+            },
+            {"type": "content_block_delta", "delta": {"text": "abcd" * 10}},
+            {"type": "message_delta", "usage": {"output_tokens": 7, "thinking_tokens": 3}},
+        )
+
+        counts = extract_sse_token_counts(stream, {}, "anthropic")
+
+        # input_tokens is the documented sum of fresh + cache-read + cache-creation tokens
+        assert tuple(counts) == (150, 7, 40)
+        assert counts.cache_creation_tokens == 10
+        assert counts.reasoning_tokens == 3
+
+    def test_missing_usage_falls_back_to_the_chars_over_four_heuristic(self) -> None:
+        """No usage frame must still produce a number, and it must be the documented heuristic."""
+        req = {"messages": [{"role": "user", "content": "hello there"}]}
+        stream = _sse(
+            {"type": "content_block_delta", "delta": {"text": "abcd" * 10}},
+            {"type": "content_block_delta", "delta": {"thinking": "thi" * 40}},
+        )
+
+        counts = extract_sse_token_counts(stream, req, "anthropic")
+
+        # thinking is added to the output estimate as well as being reported as reasoning tokens, so
+        # the output heuristic covers text + thinking rather than text alone.
+        assert counts.output_tokens == (len("abcd" * 10) + len("thi" * 40)) // 4
+        assert counts.input_tokens == max(1, estimate_chars(req) // 4)
+        assert counts.reasoning_tokens == len("thi" * 40) // 4
+
+    def test_partial_json_counts_as_output_content(self) -> None:
+        stream = _sse({"type": "content_block_delta", "delta": {"partial_json": '{"a": 1}'}})
+        counts = extract_sse_token_counts(stream, {}, "anthropic")
+        assert counts.output_tokens == len('{"a": 1}') // 4
+
+    def test_extract_sse_cache_read_tokens_delegates(self) -> None:
+        stream = _sse(
+            {"type": "message_start", "message": {"usage": {"input_tokens": 1, "cache_read_input_tokens": 40}}},
+        )
+        assert extract_sse_cache_read_tokens(stream) == 40
+        assert extract_sse_cache_read_tokens("") == 0
+
+
+class TestSSETokenCountsOpenAI:
+    def test_usage_frame_reports_input_output_cache_and_reasoning(self) -> None:
+        stream = _sse(
+            {"choices": [{"delta": {"content": "Hel"}}]},
+            {
+                "choices": [{"delta": {"content": "lo"}}],
+                "usage": {
+                    "prompt_tokens": 120,
+                    "completion_tokens": 30,
+                    "prompt_tokens_details": {"cached_tokens": 15},
+                    "completion_tokens_details": {"reasoning_tokens": 9},
+                },
+            },
+            "[DONE]",
+        )
+
+        counts = extract_sse_token_counts(stream, {}, "openai")
+
+        assert tuple(counts) == (120, 30, 15)
+        assert counts.reasoning_tokens == 9
+
+    def test_usage_arriving_only_in_the_final_frame_is_still_counted(self) -> None:
+        """Streaming puts usage last; a parser that stops at the first frame reports zero."""
+        frames = [{"choices": [{"delta": {"content": f"tok{i} "}}]} for i in range(5)]
+        frames.append(
+            {
+                "choices": [],
+                "usage": {"prompt_tokens": 77, "completion_tokens": 21, "prompt_tokens_details": {"cached_tokens": 7}},
+            }
+        )
+
+        counts = extract_sse_token_counts(_sse(*frames), {}, "openai")
+
+        assert tuple(counts) == (77, 21, 7)
+
+    def test_flat_cached_tokens_is_used_when_there_are_no_details(self) -> None:
+        stream = _sse({"usage": {"prompt_tokens": 50, "completion_tokens": 5, "cached_tokens": 12}})
+        assert extract_sse_token_counts(stream, {}, "openai") == (50, 5, 12)
+
+    def test_missing_usage_estimates_from_content_and_request(self) -> None:
+        req = {"messages": [{"role": "user", "content": "x" * 40}]}
+        stream = _sse({"choices": [{"delta": {"content": "abcd" * 8}}]})
+
+        counts = extract_sse_token_counts(stream, req, "openai")
+
+        assert counts.output_tokens == len("abcd" * 8) // 4
+        assert counts.input_tokens == max(1, estimate_chars(req) // 4)
+
+    def test_tool_call_name_and_arguments_count_as_output(self) -> None:
+        stream = _sse(
+            {
+                "choices": [
+                    {"delta": {"tool_calls": [{"index": 0, "function": {"name": "shell", "arguments": "ls -al"}}]}}
+                ]
+            }
+        )
+        counts = extract_sse_token_counts(stream, {}, "openai")
+        assert counts.output_tokens == (len("shell") + len("ls -al")) // 4
+
+
+class TestSSETokenCountsGemini:
+    def test_usage_metadata_reports_all_four_counters(self) -> None:
+        stream = _sse(
+            {
+                "candidates": [{"content": {"parts": [{"text": "hi"}]}}],
+                "usageMetadata": {
+                    "promptTokenCount": 500,
+                    "candidatesTokenCount": 120,
+                    "cachedContentTokenCount": 88,
+                    "reasoningTokenCount": 33,
+                },
+            }
+        )
+
+        counts = extract_sse_token_counts(stream, {}, "gemini")
+
+        assert tuple(counts) == (500, 120, 88)
+        assert counts.reasoning_tokens == 33
+
+    def test_usage_key_alias_is_accepted(self) -> None:
+        stream = _sse({"usage": {"promptTokenCount": 11, "candidatesTokenCount": 2}})
+        assert tuple(extract_sse_token_counts(stream, {}, "gemini")) == (11, 2, 0)
+
+    def test_function_call_arguments_count_toward_output_estimate(self) -> None:
+        stream = _sse(
+            {"candidates": [{"content": {"parts": [{"functionCall": {"name": "fetch", "args": {"u": "x"}}}]}}]}
+        )
+        counts = extract_sse_token_counts(stream, {}, "gemini")
+        assert counts.output_tokens == (len("fetch") + len(json.dumps({"u": "x"}))) // 4
+
+
+class TestDetailedCounts:
+    def test_string_response_routes_through_the_sse_parser(self) -> None:
+        stream = _sse(
+            {"usage": {"prompt_tokens": 3, "completion_tokens": 4, "prompt_tokens_details": {"cached_tokens": 2}}}
+        )
+
+        detailed = extract_detailed_token_counts({}, stream, "openai")
+
+        assert detailed == {
+            "input_tokens": 3,
+            "output_tokens": 4,
+            "cache_read_input_tokens": 2,
+            "cache_creation_input_tokens": 0,
+            "reasoning_tokens": 0,
+        }
+
+    def test_anthropic_stream_carries_cache_creation_through_the_mapping(self) -> None:
+        stream = _sse(
+            {"type": "message_start", "message": {"usage": {"input_tokens": 1, "cache_creation_input_tokens": 9}}},
+        )
+        detailed = extract_detailed_token_counts({}, stream, "anthropic")
+        assert detailed["cache_creation_input_tokens"] == 9
