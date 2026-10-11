@@ -3,6 +3,7 @@
 import json
 import sqlite3
 import threading
+import time
 
 import pytest
 
@@ -81,8 +82,8 @@ def _write_legacy_database(cache_dir, rows: list[tuple[str, str, str]]) -> None:
         conn.execute(LEGACY_SCHEMA)
         conn.executemany(
             "INSERT INTO prompt_cache (key, provider, prompt_normalized, response_json, created_at, hit_count)"
-            " VALUES (?, ?, ?, ?, 1.0, 0)",
-            rows,
+            " VALUES (?, ?, ?, ?, ?, 0)",
+            [(key, provider, norm, resp, time.time()) for key, provider, norm, resp in rows],
         )
         conn.commit()
 
@@ -162,3 +163,64 @@ def test_connections_are_closed_after_each_operation(tmp_path, monkeypatch: pyte
     for conn in opened:
         with pytest.raises(sqlite3.ProgrammingError):
             conn.execute("SELECT 1")
+
+
+def _age_entries(store: HybridCacheStore, seconds: float) -> None:
+    """Backdate every row, so TTL behaviour is tested without sleeping."""
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute("UPDATE prompt_cache SET created_at = created_at - ?", (seconds,))
+        conn.commit()
+
+
+def test_expired_entry_is_not_served_even_before_a_sweep(tmp_path) -> None:
+    """A TTL that only the sweeper honours is a suggestion, not a bound."""
+    store = HybridCacheStore(cache_dir=str(tmp_path), ttl_seconds=60, prune_interval_seconds=10_000)
+    store.put(_payload("refactor the parser"), {"content": "stale"}, provider="openai")
+    _age_entries(store, 120)
+
+    assert store.get(_payload("refactor the parser"), provider="openai") is None
+
+
+def test_sweep_removes_expired_rows_and_keeps_fresh_ones(tmp_path) -> None:
+    store = HybridCacheStore(cache_dir=str(tmp_path), ttl_seconds=60)
+    store.put(_payload("old entry alpha"), {"content": "old"}, provider="openai")
+    _age_entries(store, 120)
+    store.put(_payload("fresh entry beta"), {"content": "new"}, provider="openai")
+
+    assert store._prune_expired(force=True) == 1
+
+    with sqlite3.connect(store.db_path) as conn:
+        remaining = [row[0] for row in conn.execute("SELECT response_json FROM prompt_cache")]
+    assert remaining == [json.dumps({"content": "new"})]
+
+
+def test_sweep_is_time_gated_rather_than_per_write(tmp_path) -> None:
+    """Ten writes must not cost ten table scans."""
+    store = HybridCacheStore(cache_dir=str(tmp_path), ttl_seconds=60, prune_interval_seconds=600)
+
+    for i in range(10):
+        store.put(_payload(f"prompt {i} shared words"), {"content": str(i)}, provider="openai")
+
+    assert store._sweep_count == 1, f"expected one gated sweep across 10 writes, saw {store._sweep_count}"
+
+
+def test_sweep_deletes_in_batches_larger_than_the_batch_size(tmp_path) -> None:
+    """The loop must keep going until the table is clean, not stop at the first batch."""
+    store = HybridCacheStore(cache_dir=str(tmp_path), ttl_seconds=60, prune_batch_size=3)
+    for i in range(10):
+        store.put(_payload(f"bulk entry {i} token set"), {"content": str(i)}, provider="openai")
+    _age_entries(store, 120)
+
+    assert store._prune_expired(force=True) == 10
+    with sqlite3.connect(store.db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM prompt_cache").fetchone()[0] == 0
+
+
+def test_ttl_zero_disables_expiry_entirely(tmp_path) -> None:
+    """`ttl_seconds=0` must serve rows of any age and delete none."""
+    store = HybridCacheStore(cache_dir=str(tmp_path), ttl_seconds=0)
+    store.put(_payload("refactor the parser"), {"content": "kept"}, provider="openai")
+    _age_entries(store, 10**9)
+
+    assert store.get(_payload("refactor the parser"), provider="openai") == {"content": "kept"}
+    assert store._prune_expired(force=True) == 0

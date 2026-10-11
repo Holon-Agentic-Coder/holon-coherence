@@ -22,6 +22,9 @@ class HybridCacheStore:
         cache_dir: str | None = None,
         similarity_threshold: float = 0.85,
         candidate_limit: int = 100,
+        ttl_seconds: float = 604_800.0,
+        prune_interval_seconds: float = 300.0,
+        prune_batch_size: int = 5_000,
     ) -> None:
         """Initialize HybridCacheStore.
 
@@ -29,6 +32,10 @@ class HybridCacheStore:
             cache_dir: Directory path for SQLite storage. Defaults to ~/.holon/cache.
             similarity_threshold: Jaccard similarity score threshold (0.0 to 1.0) required for a semantic match hit.
             candidate_limit: Maximum number of recent candidate cache entries to consider for semantic search.
+            ttl_seconds: Age after which an entry is expired and swept. ``0`` disables expiry.
+            prune_interval_seconds: Minimum interval between TTL sweeps, so writes do not each pay
+                for a scan of the table.
+            prune_batch_size: Rows deleted per DELETE, bounding the length of a write lock.
         """
         if cache_dir is None:
             cache_dir = os.path.expanduser("~/.holon/cache")
@@ -39,6 +46,11 @@ class HybridCacheStore:
         self.cache_dir = cache_dir
         self.similarity_threshold = similarity_threshold
         self.candidate_limit = candidate_limit
+        self.ttl_seconds = float(ttl_seconds)
+        self.prune_interval_seconds = float(prune_interval_seconds)
+        self.prune_batch_size = int(prune_batch_size)
+        self._next_prune_at = 0.0
+        self._sweep_count = 0
         self.db_path = os.path.join(cache_dir, "llm_cache.db")
         self._init_db()
 
@@ -119,6 +131,59 @@ class HybridCacheStore:
             "UPDATE prompt_cache SET user_tokens = ?, system_hash = ? WHERE key = ?",
             (tokens, system_hash, key),
         )
+
+    def _freshness_clause(self) -> tuple[str, list[float]]:
+        """SQL fragment and argument excluding entries past their TTL.
+
+        Reading through the sweep matters as much as running it: between sweeps an expired entry is
+        still physically present, and serving it would make the TTL advisory rather than a bound.
+        """
+        if self.ttl_seconds > 0:
+            return " AND created_at >= ?", [time.time() - self.ttl_seconds]
+        return "", []
+
+    def _prune_expired(self, *, force: bool = False) -> int:
+        """Delete expired entries in bounded batches, at most once per ``prune_interval_seconds``.
+
+        The sweep is time-gated rather than per-write: a proxy run performs many writes, and a full
+        scan on each one is the write amplification this cache should not have. Batching selects the
+        keys first and deletes by id, because ``DELETE ... WHERE key IN (SELECT ... LIMIT n)`` needs
+        a SQLite build with update/delete limits enabled.
+
+        Returns:
+            int: Rows removed; ``0`` when expiry is disabled or no sweep was due.
+        """
+        if self.ttl_seconds <= 0:
+            return 0
+        now = time.time()
+        if not force and now < self._next_prune_at:
+            return 0
+        self._next_prune_at = now + self.prune_interval_seconds
+        self._sweep_count += 1
+        cutoff = now - self.ttl_seconds
+        removed = 0
+
+        with self._connect() as conn:
+            while True:
+                keys = [
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT key FROM prompt_cache WHERE created_at < ? LIMIT ?",
+                        (cutoff, self.prune_batch_size),
+                    )
+                ]
+                if not keys:
+                    break
+                placeholders = ",".join("?" * len(keys))
+                cursor = conn.execute(f"DELETE FROM prompt_cache WHERE key IN ({placeholders})", keys)
+                removed += cursor.rowcount
+                conn.commit()
+                if len(keys) < self.prune_batch_size:
+                    break
+
+        if removed:
+            logger.info("Cache TTL sweep removed %d expired entries from %s", removed, self.db_path)
+        return removed
 
     def generate_prefix_key(self, payload: dict[str, Any], provider: str = "anthropic") -> str:
         """Generates a stable prefix-tree hash key from the payload system and message turns."""
@@ -257,11 +322,12 @@ class HybridCacheStore:
         prefix_key = self.generate_prefix_key(payload, provider)
 
         # 1. Exact Prefix Matching
+        fresh_sql, fresh_args = self._freshness_clause()
         with self._connect() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT response_json FROM prompt_cache WHERE key = ? AND provider = ?",
-                (prefix_key, provider),
+                f"SELECT response_json FROM prompt_cache WHERE key = ? AND provider = ?{fresh_sql}",
+                (prefix_key, provider, *fresh_args),
             )
             row = cursor.fetchone()
             if row:
@@ -286,14 +352,14 @@ class HybridCacheStore:
         with self._connect() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                """
+                f"""
                 SELECT key, prompt_normalized, response_json, user_tokens, system_hash
                 FROM prompt_cache
-                WHERE provider = ?
+                WHERE provider = ?{fresh_sql}
                 ORDER BY created_at DESC
                 LIMIT ?
                 """,
-                (provider, self.candidate_limit),
+                (provider, *fresh_args, self.candidate_limit),
             )
             rows = cursor.fetchall()
 
@@ -342,6 +408,7 @@ class HybridCacheStore:
         system_hash = self._system_hash(self._extract_system_prompt(normalized))
         resp_json = json.dumps(response)
         now = time.time()
+        self._prune_expired()
 
         with self._connect() as conn:
             cursor = conn.cursor()
