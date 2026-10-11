@@ -40,7 +40,8 @@ client agent.
 ### 1. Automated Prerequisite Verification
 
 Run the automated check to verify all dependencies (Docker CLI, Docker Buildx, Docker daemon, Conda, `uv` inside a Conda
-environment, OpenSSL, and `npx` for Prettier):
+environment, OpenSSL, and `npx` for Prettier). A missing Docker, Conda, `uv` or OpenSSL is a failure (exit 1); a missing
+`npx`, or `uv` found on `PATH` only, is an advisory warning (exit 0):
 
 ```bash
 make check-prerequisites
@@ -82,7 +83,7 @@ If any prerequisite is missing, install and configure it directly using the Make
   | Variable               | Effect                                                                                                                                                                                                                                                                                                                                               |
   | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
   | `CONDA_ENV`            | Environment to **read** / report in `make check-prerequisites`. Defaults to the active `$CONDA_DEFAULT_ENV`, or to `holon` when no environment is active.                                                                                                                                                                                            |
-  | `CONDA_WRITE_ENV`      | Environment `make create-conda-env` **writes** to. Defaults to `holon`, and follows `CONDA_ENV` when you pass it (`make create-conda-env CONDA_ENV=<name>`); it never follows an activated `base`.                                                                                                                                                   |
+  | `CONDA_WRITE_ENV`      | **Derived, not a knob** - set `CONDA_ENV` instead. Environment `make create-conda-env` **writes** to. Defaults to `holon`, and follows `CONDA_ENV` when you pass it (`make create-conda-env CONDA_ENV=<name>`); it never follows an activated `base`.                                                                                                |
   | `CONDA_ALLOW_BASE`     | Deliberate consent to write into `base`. Only counts when typed on the make command line (`make create-conda-env CONDA_ALLOW_BASE=1`); an inherited `CONDA_ALLOW_BASE=1` is ignored, exactly like an inherited `CONDA_ENV=base`.                                                                                                                     |
   | `CONDA_PRUNE`          | `CONDA_PRUNE=1` (or `true`) **on the make command line** adds `--prune` to `conda env update` when the target environment already exists. Off by default, because pruning can remove packages you installed by hand; a `CONDA_PRUNE=1` exported in your shell is ignored, since it would strip an environment this target may never have created.    |
   | `CONDA_PROMPT_TIMEOUT` | Seconds the interactive prompt waits for an answer (default `20`). No answer is a refusal: the target prints what it would have run and exits non-zero. A shell whose `read` cannot time out (`dash`, the Debian/Ubuntu `/bin/sh`) is refused the same way rather than answered on your behalf — run `make create-conda-env CONDA_ENV=<name>` there. |

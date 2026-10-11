@@ -7,19 +7,74 @@ DETECTED_OS := $(shell uname -s)
 DETECTED_ARCH := $(shell uname -m)
 
 # Dry-run detection, consulted by install-docker, check-docker, check-prerequisites and
-# install-miniforge. GNU make compacts every single-letter option into the FIRST word of
-# MAKEFLAGS ("n", "nI", "sn") and places option arguments and VAR=value assignments after
-# it ("I incdir_n", "n -- DETECTED_OS=Linux"), so only that leading cluster may be
-# consulted. Scanning all words -- as the previous revision did -- reads an option's own
-# argument as a -n: `make -I incdir_n check-prerequisites` printed its banner, checked
-# nothing and exited 0, a prerequisite check that silently reports success. Scanning only
-# the first word was the other failure: `make DETECTED_OS=Linux` put an assignment there,
-# "Linux" contains an n, and the same silent skip happened. A first word that is an
-# assignment or a long option means no short options were given at all.
-MF_OPTION_CLUSTER := $(firstword $(MAKEFLAGS))
-MF_OPTION_CLUSTER := $(if $(findstring =,$(MF_OPTION_CLUSTER)),,$(MF_OPTION_CLUSTER))
-MF_OPTION_CLUSTER := $(if $(filter --%,$(MF_OPTION_CLUSTER)),,$(MF_OPTION_CLUSTER))
-DRY_RUN := $(if $(findstring n,$(MF_OPTION_CLUSTER)),1,)
+# install-miniforge.
+#
+# Why a guard is needed at all: GNU make EXECUTES every recipe line that references $(MAKE)
+# even under -n (measured on 3.81 and 4.4.1 - the whole shell command runs, so everything
+# sharing that line with the recursion runs with it). These recipes probe and install, so
+# they cannot leave the decision to make's own -n handling.
+#
+# Why the two earlier detectors were wrong: they read MAKEFLAGS, which no two makes write
+# alike. Measured with `make -f probe.mk <flags> print-mf`, which echoes $(MAKEFLAGS):
+#
+#   flags                       GNU make 3.81                 GNU make 4.4.1
+#   -n                          n                             n
+#   -Bn                         nB                            Bn
+#   --no-print-directory -n     " --no-print-directory -n"    "n --no-print-directory"
+#   -I incdir_n                 "I incdir_n"                  " -Iincdir_n"
+#   DETECTED_OS=Linux           "DETECTED_OS=Linux"           " -- DETECTED_OS=Linux"
+#
+# 3.81 writes long options that have no short equivalent BEFORE the compacted single-letter
+# cluster, and writes that cluster with a leading dash (`-nB`); 4.x writes the cluster first
+# and glues an option's value onto its flag (`-Iincdir_n`). Reading only the first word - the
+# previous revision - misses 3.81's dry run completely: the long option is dropped, the
+# cluster is never read, DRY_RUN stays empty and `make --no-print-directory -n check-prerequisites`
+# executes every probe for real. Reading every word - the revision before that - reads an
+# option's own argument as a -n, and arguments are paths: `make -I incdir_n` then reported a
+# green prerequisite check that had checked nothing.
+#
+# The rule below drops leading long options and leading VAR=value assignments (make never
+# puts a flag cluster or an option argument in front of those), consults the ONE word left at
+# the front, and counts it as the cluster only when every character in it is a single-letter
+# option make really accepts. So `I incdir_n`, `-Iincdir_n`, `-In` and `-j4` cannot read as a
+# -n, while `n`, `nB`, `sn` and 3.81's dashed `-nI` do. A dashed word is believed only when a
+# long option led, because that is the only situation any measured make writes a dashed
+# cluster, and 4.x spells an include directory `-In`.
+#
+# These are recursive (=) on purpose: the value must be read when the recipe is expanded, not
+# when this makefile is parsed. GNU make 3.81 reports a half-built MAKEFLAGS during parsing
+# (`-I incdir_n` is not in it yet), which is a different string from the one the recipe's own
+# sub-makes are given.
+#
+# What is not covered, and which way it fails: a make that spells dry run only inside a word
+# this rule rejects reads as NOT a dry run, so the probes run and print during `make -n`.
+# That is the harmless direction - nothing is installed, because no recipe line that installs
+# references $(MAKE) any more (see the install-homebrew / install-docker prerequisites below).
+# No spelling measured on 3.81 or 4.4.1 fails in that direction, and none was found that fails
+# the other way; the detector is not claimed to be complete for makes that were not measured.
+MF_SINGLE_LETTER_OPTIONS := b B c C d D e E f F g G h i I j k l L m n N o p q r R s S t v w W
+MF_ALPHANUMERIC := a b c d e f g h i j k l m n o p q r s t u v w x y z A B C D E F G H I J K L M N O P Q R S T U V W X Y Z 0 1 2 3 4 5 6 7 8 9
+
+# The characters in $1 that no single-letter make option uses: non-empty means $1 is an
+# option argument or an assignment, never make's compacted flag cluster.
+mf_non_option_characters = $(strip $(foreach character,$(MF_ALPHANUMERIC),$(if $(findstring $(character),$(1)),$(if $(filter $(character),$(MF_SINGLE_LETTER_OPTIONS)),,$(character)))))
+mf_drop_leading_long_options = $(if $(filter --%,$(firstword $(1))),$(call mf_drop_leading_long_options,$(wordlist 2,$(words $(1)),$(1))),$(1))
+mf_drop_leading_assignments = $(if $(findstring =,$(firstword $(1))),$(call mf_drop_leading_assignments,$(wordlist 2,$(words $(1)),$(1))),$(1))
+
+MF_ASSIGNMENT_REGION = $(call mf_drop_leading_assignments,$(MAKEFLAGS))
+MF_LONG_OPTION_REGION = $(call mf_drop_leading_long_options,$(MF_ASSIGNMENT_REGION))
+# Non-empty when long options were dropped from the front, which is when 3.81 dashes the cluster.
+MF_LONG_OPTION_LEADS = $(if $(filter $(words $(MF_ASSIGNMENT_REGION)),$(words $(MF_LONG_OPTION_REGION))),,1)
+MF_FLAG_WORD = $(firstword $(MF_LONG_OPTION_REGION))
+MF_FLAG_LETTERS = $(if $(filter -%,$(MF_FLAG_WORD)),$(if $(MF_LONG_OPTION_LEADS),$(subst -,,$(MF_FLAG_WORD))),$(MF_FLAG_WORD))
+MF_OPTION_CLUSTER = $(if $(MF_FLAG_LETTERS),$(if $(call mf_non_option_characters,$(MF_FLAG_LETTERS)),,$(MF_FLAG_LETTERS)))
+DRY_RUN = $(if $(findstring n,$(MF_OPTION_CLUSTER)),1,)
+
+# Whether the host still needs Homebrew, and whether it already has a Docker CLI. Decided
+# while the makefile is read so that the installs below can express their recursion as a
+# prerequisite instead of as a $(MAKE) reference inside a recipe line.
+NEEDS_HOMEBREW := $(if $(filter Darwin,$(DETECTED_OS)),$(if $(shell command -v brew 2>/dev/null),,yes),)
+HAVE_DOCKER_CLI := $(shell command -v docker 2>/dev/null)
 
 # CI Detection
 CI ?= false
@@ -74,8 +129,14 @@ else
 CONDA_WRITE_ENV := holon
 endif
 CONDA_BASE_CONSENT := false
+# CONDA_ALLOW_BASE pre-authorises a choice typed in THIS invocation. It must not turn an
+# inherited `export CONDA_ENV=base` into consent: there the name was not typed, so base
+# would be selected by inherited state alone (one Enter at the prompt, or no prompt at all
+# in CI). The name has to be on the command line, or not base, for the flag to count.
 ifeq ($(CONDA_ALLOW_BASE_REQUESTED),true)
+ifeq ($(and $(filter base,$(CONDA_WRITE_ENV)),$(filter environment,$(CONDA_ENV_ORIGIN))),)
 CONDA_BASE_CONSENT := true
+endif
 endif
 ifeq ($(CONDA_WRITE_ENV),base)
 ifeq ($(CONDA_ENV_ON_COMMAND_LINE),true)
@@ -132,7 +193,14 @@ endif
 ## Docker & Prerequisite Installation & Checks
 ## ==============================================================================
 
-# Install Homebrew if not installed (macOS)
+# Install Homebrew if not installed (macOS).
+#
+# Leaf installer: its recipe references no $(MAKE), which is what makes it safe to reach
+# under -n. GNU make executes any recipe line that references $(MAKE) even in a dry run, so
+# an installer reached that way would run for real; an installer on a line without that
+# reference is only printed. The two targets that used to bootstrap Homebrew from inside
+# their own installing shell command now take it as a prerequisite instead, decided when the
+# makefile is read, so that their install lines contain no recursion at all.
 install-homebrew:
 	@if [ "$(DETECTED_OS)" = "Darwin" ]; then \
 		if ! command -v brew >/dev/null 2>&1; then \
@@ -142,6 +210,11 @@ install-homebrew:
 			echo "Homebrew is already installed."; \
 		fi; \
 	fi
+
+ifeq ($(NEEDS_HOMEBREW),yes)
+install-docker: install-homebrew
+install-miniforge: install-homebrew
+endif
 
 # Install Docker based on operating system
 install-docker:
@@ -153,7 +226,9 @@ install-docker:
 		echo "$(COLOR_YELLOW)⚠️  Docker not found. Installing Docker for $(DETECTED_OS)...$(COLOR_RESET)"; \
 		if [ "$(DETECTED_OS)" = "Darwin" ]; then \
 			if ! command -v brew >/dev/null 2>&1; then \
-				$(MAKE) install-homebrew || exit 1; \
+				echo "$(COLOR_RED)❌ Homebrew is not on PATH, so Docker Desktop cannot be installed.$(COLOR_RESET)"; \
+				echo "   Run $(COLOR_BOLD)make install-homebrew$(COLOR_RESET) first; it also runs automatically as a prerequisite of this target."; \
+				exit 1; \
 			fi; \
 			echo "Detected macOS - installing Docker Desktop via Homebrew..."; \
 			brew install --cask docker || exit 1; \
@@ -179,17 +254,16 @@ install-docker:
 		fi; \
 	fi
 
-# Check Docker prerequisite (CLI, buildx, daemon) and install Docker if missing
+# Check Docker prerequisite (CLI, buildx, daemon). Docker itself is installed by the
+# install-docker prerequisite below, not from inside this recipe: the probe below shares one
+# shell command with the buildx install further down, and a line that references $(MAKE) is
+# executed even under -n, which would have run both of them during a dry run. AUTO_INSTALL
+# now selects the prerequisite while the makefile is read, which is the same decision this
+# target made at runtime before.
 check-docker:
 	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
 	ERRORS=0; \
 	printf "%-32s " "Checking Docker CLI..."; \
-	if ! command -v docker >/dev/null 2>&1; then \
-		if [ "$(AUTO_INSTALL)" = "true" ]; then \
-			echo "$(COLOR_YELLOW)⚠️  Docker CLI not found. Installing Docker...$(COLOR_RESET)"; \
-			$(MAKE) install-docker || { echo "$(COLOR_RED)❌ Docker installation failed$(COLOR_RESET)"; ERRORS=$$((ERRORS + 1)); }; \
-		fi; \
-	fi; \
 	if command -v docker >/dev/null 2>&1; then \
 		DOCKER_VER=$$(docker --version 2>/dev/null); \
 		echo "$(COLOR_GREEN)✅ Found: $$DOCKER_VER$(COLOR_RESET)"; \
@@ -275,6 +349,12 @@ check-docker:
 		exit 1; \
 	fi
 
+ifeq ($(AUTO_INSTALL),true)
+ifeq ($(HAVE_DOCKER_CLI),)
+check-docker: install-docker
+endif
+endif
+
 # Check system prerequisites: Docker (CLI, buildx, daemon), Conda, uv, OpenSSL, and npx
 check-prerequisites:
 	@echo "$(COLOR_BOLD)=========================================$(COLOR_RESET)"
@@ -301,7 +381,7 @@ check-prerequisites:
 	ACTIVE_ENV="$$CONDA_DEFAULT_ENV"; \
 	if [ -n "$$ACTIVE_ENV" ]; then ACTIVE_DESC="active env: $$ACTIVE_ENV"; else ACTIVE_DESC="no active conda env"; fi; \
 	UV_KIND=""; UV_BIN=""; UV_WHERE=""; ENV_PREFIX=""; \
-	if [ -n "$$CONDA_PREFIX" ] && [ -x "$$CONDA_PREFIX/bin/uv" ]; then \
+	if [ -n "$$CONDA_PREFIX" ] && [ -x "$$CONDA_PREFIX/bin/uv" ] && { [ -z "$$ACTIVE_ENV" ] || [ "$$ACTIVE_ENV" = "$$TARGET_ENV" ]; }; then \
 		UV_KIND=env; UV_BIN="$$CONDA_PREFIX/bin/uv"; UV_WHERE="conda env $${ACTIVE_ENV:-$$CONDA_PREFIX}"; \
 	fi; \
 	if [ -z "$$UV_KIND" ] && [ -n "$$CONDA_BIN" ]; then \
@@ -349,7 +429,7 @@ check-prerequisites:
 		echo "$(COLOR_GREEN)✅ Found: npx v$$NPX_VER$(COLOR_RESET)"; \
 	else \
 		echo "$(COLOR_YELLOW)⚠️  Missing: npx not found$(COLOR_RESET)"; \
-		echo "   npx is required for Prettier markdown documentation hygiene checks."; \
+		echo "   npx is needed only for Prettier markdown documentation hygiene checks (advisory: this is a warning, not a failure)."; \
 		WARNINGS=$$((WARNINGS + 1)); \
 	fi; \
 	\
@@ -376,7 +456,9 @@ install-miniforge:
 		echo "$(COLOR_GREEN)✅ Miniforge is already installed ($$CONDA_BIN).$(COLOR_RESET)"; \
 	elif [ "$(DETECTED_OS)" = "Darwin" ]; then \
 		if ! command -v brew >/dev/null 2>&1; then \
-			$(MAKE) install-homebrew || exit 1; \
+			echo "$(COLOR_RED)❌ Homebrew is not on PATH, so Miniforge cannot be installed.$(COLOR_RESET)"; \
+			echo "   Run $(COLOR_BOLD)make install-homebrew$(COLOR_RESET) first; it also runs automatically as a prerequisite of this target."; \
+			exit 1; \
 		fi; \
 		if brew list --cask miniforge >/dev/null 2>&1; then \
 			echo "$(COLOR_GREEN)✅ Miniforge is already installed.$(COLOR_RESET)"; \
@@ -437,23 +519,40 @@ install-miniforge:
 		exit 1; \
 	fi
 
+# Single-quote a make value for the recipe's shell. CONDA_ENV and CONDA_PROMPT_TIMEOUT
+# can come from the caller's environment, and a backtick or $( ) inside the
+# double quotes the recipe used to wrap them in ran as shell code before any validation saw it.
+# Inside single quotes only a single quote is special, and it is closed, escaped and reopened.
+shq = '$(subst ','\'',$(1))'
+
 # Create or update conda environment with interactive confirmation/selection
+#
+# The prompt is offered only when this invocation has to INVENT a name. A name typed on the
+# command line is already the answer the prompt asks for, so the prompt - and with it the
+# `read -t` capability probe - is skipped for it. That ordering matters twice over: the
+# probe runs first in a shell, and `read` has no -t on dash (Debian/Ubuntu /bin/sh), so a
+# probe placed ahead of the explicit name refused `make create-conda-env CONDA_ENV=mydev`
+# on dash, which is the exact command this target's own abort text and README.md both tell
+# dash users to run. Refusing is reserved for the case it belongs in: no name typed, so the
+# default would be picked on the user's behalf by an unbounded read.
 create-conda-env: install-miniforge
 	@$(FIND_CONDA_BIN); \
 	if [ -z "$$CONDA_BIN" ]; then \
 		echo "$(COLOR_RED)❌ Conda not found after Miniforge installation.$(COLOR_RESET)"; \
 		exit 1; \
 	fi; \
-	CHOSEN_ENV="$(CONDA_WRITE_ENV)"; \
+	CHOSEN_ENV=$(call shq,$(CONDA_WRITE_ENV)); \
 	BASE_CONSENT="$(CONDA_BASE_CONSENT)"; \
-	PROMPT_TIMEOUT="$(CONDA_PROMPT_TIMEOUT)"; \
+	PROMPT_TIMEOUT=$(call shq,$(CONDA_PROMPT_TIMEOUT)); \
+	case "$$PROMPT_TIMEOUT" in ''|*[!0-9]*) echo "$(COLOR_RED)❌ CONDA_PROMPT_TIMEOUT must be a whole number of seconds.$(COLOR_RESET)"; exit 1;; esac; \
 	ACTIVE_ENV="$$CONDA_DEFAULT_ENV"; \
 	if [ -n "$$ACTIVE_ENV" ]; then ACTIVE_DESC="active env: $$ACTIVE_ENV"; else ACTIVE_DESC="no active conda env"; fi; \
-	if [ -t 0 ] && [ "$(CI)" != "true" ] && [ "$(NONINTERACTIVE)" != "1" ]; then \
+	if [ -t 0 ] && [ "$(CI)" != "true" ] && [ "$(NONINTERACTIVE)" != "1" ] && [ "$(CONDA_ENV_ON_COMMAND_LINE)" != "true" ]; then \
 		if ! printf 'y\n' | read -r -t 1 _holon_probe >/dev/null 2>&1; then \
 			echo "$(COLOR_YELLOW)❌ This shell's read cannot time out, so the prompt cannot be offered safely.$(COLOR_RESET)"; \
-			echo "   Nothing was installed: an unanswerable prompt must not be answered on your behalf, and silently picking a default is an implicit yes."; \
-			echo "   Name the environment deliberately on the command line: make create-conda-env $(COLOR_BOLD)CONDA_ENV=<name>$(COLOR_RESET)"; \
+			echo "   Nothing was installed into a conda environment: an unanswerable prompt must not be answered on your behalf, and silently picking a default is an implicit yes."; \
+			echo "   (The install-miniforge prerequisite runs before this check and may have installed Miniforge itself.)"; \
+			echo "   Name the environment deliberately on the command line: make create-conda-env $(COLOR_BOLD)CONDA_ENV=<name>$(COLOR_RESET); a name typed there is not prompted for."; \
 			exit 1; \
 		else \
 			echo "$(COLOR_BOLD)====================================================$(COLOR_RESET)"; \
@@ -463,7 +562,7 @@ create-conda-env: install-miniforge
 			echo " Currently active: $$ACTIVE_DESC (press Enter to keep '$$CHOSEN_ENV')"; \
 			printf "Enter target environment name [default: %s]: " "$$CHOSEN_ENV"; \
 			if ! read -r -t "$$PROMPT_TIMEOUT" USER_INPUT; then \
-				echo "$(COLOR_RED)❌ No answer within $$PROMPT_TIMEOUT s; nothing was installed.$(COLOR_RESET)"; \
+				echo "$(COLOR_RED)❌ No answer within $$PROMPT_TIMEOUT s; nothing was installed into a conda environment.$(COLOR_RESET)"; \
 				echo "   It would have provisioned conda env '$$CHOSEN_ENV' from environment.yml (active: $$ACTIVE_DESC)."; \
 				echo "   Answer it deliberately, or pass the name on the command line: make create-conda-env $(COLOR_BOLD)CONDA_ENV=$$CHOSEN_ENV$(COLOR_RESET)"; \
 				exit 1; \
@@ -491,6 +590,7 @@ create-conda-env: install-miniforge
 		echo "$(COLOR_RED)❌ Empty environment name. Pass $(COLOR_BOLD)CONDA_ENV=<name>$(COLOR_RESET) or use the default 'holon'.$(COLOR_RESET)"; \
 		exit 1; \
 	fi; \
+	case "$$CHOSEN_ENV" in -*|*[!A-Za-z0-9._-]*) echo "$(COLOR_RED)❌ Invalid environment name '$$CHOSEN_ENV': use letters, digits, '.', '_' and '-', not starting with '-'.$(COLOR_RESET)"; exit 1;; esac; \
 	if [ "$$CHOSEN_ENV" = "base" ] && [ "$$BASE_CONSENT" != "true" ]; then \
 		echo "$(COLOR_RED)❌ Refusing to write to 'base': this invocation did not ask for it.$(COLOR_RESET)"; \
 		echo "   An inherited environment variable (CONDA_ENV=base or CONDA_ALLOW_BASE=1 in your shell) is not consent."; \
@@ -563,7 +663,7 @@ help:
 	@echo "All targets must be executed from the root of the repository."
 	@echo ""
 	@echo "$(COLOR_BOLD)Available targets:$(COLOR_RESET)"
-	@printf $(HELP_FORMAT) "check-prerequisites" "Check Docker, Conda, uv, OpenSSL, and npx prerequisites."
+	@printf $(HELP_FORMAT) "check-prerequisites" "Check Docker, Conda, uv, OpenSSL (fatal if missing) and npx (advisory: warns only)."
 	@printf $(HELP_FORMAT) "prerequisites" "Alias for check-prerequisites."
 	@printf $(HELP_FORMAT) "check-docker" "Check Docker prerequisite and install Docker if missing."
 	@printf $(HELP_FORMAT) "install-docker" "Install Docker for the detected operating system."
@@ -576,7 +676,7 @@ help:
 	@echo ""
 	@echo "$(COLOR_BOLD)Variables:$(COLOR_RESET)"
 	@printf $(HELP_FORMAT) "CONDA_ENV" "Environment to report in check-prerequisites (default: active CONDA_DEFAULT_ENV, else 'holon')."
-	@printf $(HELP_FORMAT) "CONDA_WRITE_ENV" "Environment create-conda-env writes to (default: 'holon'; follows CONDA_ENV when passed, never an activated 'base')."
+	@printf $(HELP_FORMAT) "CONDA_WRITE_ENV" "DERIVED, not a knob: the environment create-conda-env writes to ('holon', or the CONDA_ENV you pass; never an activated 'base'). Set CONDA_ENV instead."
 	@printf $(HELP_FORMAT) "CONDA_ALLOW_BASE" "Set to 1/true/yes ON THE MAKE COMMAND LINE to consent to writing into 'base'; an inherited value never grants consent."
 	@printf $(HELP_FORMAT) "CONDA_PRUNE" "Set to 1 or true on the make command line to add --prune to 'conda env update' for an existing environment (default: false; a shell-exported value is ignored)."
 	@printf $(HELP_FORMAT) "CONDA_PROMPT_TIMEOUT" "Seconds the interactive target prompt waits for an answer before refusing (default: 20)."

@@ -74,7 +74,9 @@ Three behaviours that previously failed silently, each pinned by a test:
 1. **Flexible Conda environment** — `create-conda-env` no longer insists on one environment name, and refuses to prune
    an environment it did not choose unless `CONDA_PRUNE` came from the command line.
 2. **Dry-run honesty** — `make -I incdir_n` used to skip every prerequisite check and exit 0; the word-scan over
-   `MAKEFLAGS` is replaced by an option-cluster test that consults only make's compacted leading options.
+   `MAKEFLAGS` is replaced by an option-cluster test that drops leading long options and assignments and reads the one
+   compacted flag word left (GNU make 3.81 and 4.x lay `MAKEFLAGS` out differently; recipe-time evaluation only), and no
+   installing recipe line references `$(MAKE)` any more, so a missed dry run cannot install anything.
 3. **A shell whose `read` cannot time out** (`/bin/dash`) — the target now **refuses and installs nothing** instead of
    skipping the prompt and exiting 0, so it never silently selects an environment on the user's behalf.
 

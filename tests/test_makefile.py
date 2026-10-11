@@ -237,7 +237,7 @@ def test_create_conda_env_refuses_on_a_shell_whose_read_cannot_time_out(tmp_path
         make_vars={"CONDA_PROMPT_TIMEOUT": "1"},
         env_vars={"CI": None, "NONINTERACTIVE": None},
     )
-    assert 'CHOSEN_ENV="holon"' in stdout
+    assert "CHOSEN_ENV='holon'" in stdout
 
     result, calls = _run_recipe_on_tty(tmp_path, recipe, existing_envs=("base", "holon"), shell="/bin/dash")
 
@@ -315,7 +315,7 @@ def test_makefile_dry_run(target):
 def test_create_conda_env_dry_run():
     """The recipe must resolve conda through FIND_CONDA_BIN and arm the requested target.
 
-    Only `CHOSEN_ENV="custom_dev"` is input-dependent here. The branch text (`env create
+    Only `CHOSEN_ENV='custom_dev'` is input-dependent here. The branch text (`env create
     ...`, `install -y -n base ...`) is echoed for every CONDA_ENV value, so asserting on it
     would be vacuous; branch exclusivity is pinned by
     `test_create_conda_env_dry_run_targets_only_the_requested_env` and by the stub-conda
@@ -324,7 +324,7 @@ def test_create_conda_env_dry_run():
     result = _create_conda_env_dry_run(make_vars={"CONDA_ENV": "custom_dev"})
     assert result.returncode == 0
     assert "$CONDA_BIN" in result.stdout
-    assert 'CHOSEN_ENV="custom_dev"' in result.stdout
+    assert "CHOSEN_ENV='custom_dev'" in result.stdout
 
 
 @pytest.mark.parametrize("env_name", CONDA_WRITE_TARGETS)
@@ -340,10 +340,10 @@ def test_create_conda_env_dry_run_targets_only_the_requested_env(env_name):
     the stub-conda tests below, which execute the emitted recipe.
     """
     stdout = _create_conda_env_dry_run(make_vars={"CONDA_ENV": env_name}).stdout
-    assert f'CHOSEN_ENV="{env_name}"' in stdout
+    assert f"CHOSEN_ENV='{env_name}'" in stdout
     for other in CONDA_WRITE_TARGETS:
         if other != env_name:
-            assert f'CHOSEN_ENV="{other}"' not in stdout
+            assert f"CHOSEN_ENV='{other}'" not in stdout
     expected_consent = "true" if env_name == "base" else "false"
     refused_consent = "false" if expected_consent == "true" else "true"
     assert f'BASE_CONSENT="{expected_consent}"' in stdout
@@ -354,15 +354,15 @@ def test_create_conda_env_dry_run_targets_only_the_requested_env(env_name):
 def test_create_conda_env_dry_run_active_base_does_not_target_base():
     """An activated `base` is not consent: without an explicit request the write stays on holon."""
     stdout = _create_conda_env_dry_run(env_vars={"CONDA_DEFAULT_ENV": "base", "CONDA_PREFIX": "/tmp/fake/base"}).stdout
-    assert 'CHOSEN_ENV="holon"' in stdout
-    assert 'CHOSEN_ENV="base"' not in stdout
+    assert "CHOSEN_ENV='holon'" in stdout
+    assert "CHOSEN_ENV='base'" not in stdout
     assert 'BASE_CONSENT="false"' in stdout
     assert 'BASE_CONSENT="true"' not in stdout
 
 
 @pytest.mark.parametrize(
     "prompt_timeout,expected_literal",
-    [(None, 'PROMPT_TIMEOUT="20"'), ("3", 'PROMPT_TIMEOUT="3"'), ("1", 'PROMPT_TIMEOUT="1"')],
+    [(None, "PROMPT_TIMEOUT='20'"), ("3", "PROMPT_TIMEOUT='3'"), ("1", "PROMPT_TIMEOUT='1'")],
 )
 def test_create_conda_env_dry_run_bounds_the_prompt_by_read_timeout(prompt_timeout, expected_literal):
     """The prompt must be offered through `read -t`, bounded by CONDA_PROMPT_TIMEOUT.
@@ -397,7 +397,7 @@ def test_create_conda_env_dry_run_prune_tracks_conda_prune(prune_value, prune_ex
 def test_create_conda_env_non_interactive_default_never_writes_to_base(tmp_path):
     """Run the emitted recipe non-interactively: a bare run provisions holon, never base."""
     stdout, recipe = _create_conda_env_recipe()
-    assert 'CHOSEN_ENV="holon"' in stdout
+    assert "CHOSEN_ENV='holon'" in stdout
 
     result, calls = _run_recipe_against_stub_conda(tmp_path, recipe, existing_envs=("base", "holon"))
 
@@ -412,7 +412,7 @@ def test_create_conda_env_non_interactive_default_never_writes_to_base(tmp_path)
 def test_create_conda_env_non_interactive_active_base_never_writes_to_base(tmp_path):
     """With `base` activated but not requested, the emitted recipe must not install into base."""
     stdout, recipe = _create_conda_env_recipe(env_vars={"CONDA_DEFAULT_ENV": "base"})
-    assert 'CHOSEN_ENV="holon"' in stdout
+    assert "CHOSEN_ENV='holon'" in stdout
     assert 'BASE_CONSENT="false"' in stdout
 
     _, calls = _run_recipe_against_stub_conda(
@@ -430,7 +430,7 @@ def test_create_conda_env_non_interactive_active_base_never_writes_to_base(tmp_p
 def test_create_conda_env_non_interactive_base_request_installs_into_base(tmp_path):
     """An explicit CONDA_ENV=base is the only non-interactive route that writes to base."""
     stdout, recipe = _create_conda_env_recipe(make_vars={"CONDA_ENV": "base"})
-    assert 'CHOSEN_ENV="base"' in stdout
+    assert "CHOSEN_ENV='base'" in stdout
     assert 'BASE_CONSENT="true"' in stdout
 
     _, calls = _run_recipe_against_stub_conda(tmp_path, recipe, existing_envs=("base", "holon"))
@@ -442,7 +442,7 @@ def test_create_conda_env_non_interactive_base_request_installs_into_base(tmp_pa
 def test_create_conda_env_non_interactive_new_env_uses_env_create(tmp_path):
     """A custom environment that does not exist goes through `conda env create`, never base."""
     stdout, recipe = _create_conda_env_recipe(make_vars={"CONDA_ENV": "custom_dev"})
-    assert 'CHOSEN_ENV="custom_dev"' in stdout
+    assert "CHOSEN_ENV='custom_dev'" in stdout
 
     _, calls = _run_recipe_against_stub_conda(tmp_path, recipe, existing_envs=("base", "holon"))
 
@@ -475,7 +475,7 @@ def test_create_conda_env_inherited_base_env_is_refused_without_installing(tmp_p
     the recipe reach `conda install -y -n base`, which this test sees in the stub log.
     """
     stdout, recipe = _create_conda_env_recipe(env_vars={"CONDA_ENV": "base"})
-    assert 'CHOSEN_ENV="base"' in stdout
+    assert "CHOSEN_ENV='base'" in stdout
     assert 'BASE_CONSENT="false"' in stdout
 
     result, calls = _run_recipe_against_stub_conda(
@@ -503,7 +503,7 @@ def test_create_conda_env_inherited_allow_base_env_is_refused_without_installing
 def test_create_conda_env_command_line_allow_base_arms_base_consent(tmp_path):
     """`CONDA_ALLOW_BASE=1` passed to make IS the deliberate act, so the write may proceed."""
     stdout, recipe = _create_conda_env_recipe(make_vars={"CONDA_WRITE_ENV": "base", "CONDA_ALLOW_BASE": "1"})
-    assert 'CHOSEN_ENV="base"' in stdout
+    assert "CHOSEN_ENV='base'" in stdout
     assert 'BASE_CONSENT="true"' in stdout
 
     _, calls = _run_recipe_against_stub_conda(tmp_path, recipe, existing_envs=("base", "holon"))
@@ -525,15 +525,17 @@ def test_create_conda_env_command_line_allow_base_zero_does_not_arm_consent(tmp_
 def test_create_conda_env_tty_timeout_refuses_and_installs_nothing(tmp_path):
     """A pty run that never answers must time out as a refusal, never as an implicit yes.
 
-    Consent is armed here (CONDA_ENV=base on the command line), so an unbounded `read`
-    hangs and hits the subprocess timeout, and a timeout treated as "yes" would record
-    `install -y -n base ...` in the stub log. Both regressions fail this test.
+    Base consent is pre-armed (CONDA_ALLOW_BASE=1 on the command line) but no name was
+    typed, so the prompt is offered: an unbounded `read` hangs and hits the subprocess
+    timeout, and a timeout treated as "yes" would record `install -y ...` in the stub log.
+    Both regressions fail this test. (A name typed as CONDA_ENV=... is itself the answer and
+    is deliberately not prompted for, so it cannot reach this prompt.)
     """
     stdout, recipe = _create_conda_env_recipe(
-        make_vars={"CONDA_ENV": "base", "CONDA_PROMPT_TIMEOUT": "1"},
+        make_vars={"CONDA_ALLOW_BASE": "1", "CONDA_PROMPT_TIMEOUT": "1"},
         env_vars={"CI": None, "NONINTERACTIVE": None},
     )
-    assert 'CHOSEN_ENV="base"' in stdout
+    assert "CHOSEN_ENV='holon'" in stdout
     assert 'BASE_CONSENT="true"' in stdout
 
     result, calls = _run_recipe_on_tty(tmp_path, recipe, existing_envs=("base", "holon"))
@@ -551,7 +553,7 @@ def test_create_conda_env_tty_prompt_honours_the_typed_environment_name(tmp_path
     stdout, recipe = _create_conda_env_recipe(
         make_vars={"CONDA_PROMPT_TIMEOUT": "5"}, env_vars={"CI": None, "NONINTERACTIVE": None}
     )
-    assert 'CHOSEN_ENV="holon"' in stdout
+    assert "CHOSEN_ENV='holon'" in stdout
 
     result, calls = _run_recipe_on_tty(tmp_path, recipe, keystrokes=b"custom_dev\n", existing_envs=("base", "holon"))
 
@@ -566,7 +568,7 @@ def test_create_conda_env_tty_typed_yes_grants_base_consent(tmp_path):
         make_vars={"CONDA_WRITE_ENV": "base", "CONDA_PROMPT_TIMEOUT": "5"},
         env_vars={"CI": None, "NONINTERACTIVE": None},
     )
-    assert 'CHOSEN_ENV="base"' in stdout
+    assert "CHOSEN_ENV='base'" in stdout
     assert 'BASE_CONSENT="false"' in stdout
 
     result, calls = _run_recipe_on_tty(tmp_path, recipe, keystrokes=b"\nyes\n", existing_envs=("base", "holon"))
@@ -604,7 +606,7 @@ def test_create_conda_env_tty_run_never_writes_to_unconsented_base(tmp_path):
         make_vars={"CONDA_WRITE_ENV": "base", "CONDA_PROMPT_TIMEOUT": "1"},
         env_vars={"CI": None, "NONINTERACTIVE": None},
     )
-    assert 'CHOSEN_ENV="base"' in stdout
+    assert "CHOSEN_ENV='base'" in stdout
     assert 'BASE_CONSENT="false"' in stdout
 
     result, calls = _run_recipe_on_tty(tmp_path, recipe, existing_envs=("base", "holon"))
@@ -837,13 +839,20 @@ def test_install_miniforge_checksum_dry_run():
 # Dry-run detector (Bean 0079 review)
 #
 # The long recipes are guarded so `make -n` cannot execute a line that embeds $(MAKE).
-# That guard produced two different silent skips in two revisions and no test caught
+# That guard produced three different silent skips in three revisions and no test caught
 # either one, because nothing pinned it: scanning every MAKEFLAGS word read the option
 # argument in `make -I incdir_n` as a -n, and reading only the first word read
 # `DETECTED_OS=Linux` as a -n ("Linux" contains an n). Both made check-prerequisites
 # print its banner, probe nothing and exit 0 - a green prerequisite check that verified
-# nothing. Asserted on executed output only, never on Makefile text, so rewording the
-# guard cannot make these vacuous.
+# nothing. Reading only the first word failed the other way on GNU make 3.81, which writes
+# `--no-print-directory -n` as " --no-print-directory -n": the long option was dropped,
+# the cluster was never seen, and the dry run EXECUTED every probe for real. Asserted on
+# executed output only, never on Makefile text, so rewording the guard cannot make these
+# vacuous.
+#
+# Every case is run through the make that `make` resolves to on this host, which is
+# /usr/bin/make (GNU Make 3.81) on macOS and 4.x on Linux runners; the pair is what the
+# detector has to satisfy at once.
 # ---------------------------------------------------------------------------
 
 
@@ -852,7 +861,20 @@ def _probe_lines(stdout):
     return [line for line in stdout.splitlines() if line.startswith("Checking ")]
 
 
-@pytest.mark.parametrize("flags", [["-n"], ["-s", "-n"], ["--dry-run"], ["-Bn"]], ids=["n", "s-n", "long", "bundled"])
+@pytest.mark.parametrize(
+    "flags",
+    [
+        ["-n"],
+        ["-s", "-n"],
+        ["--dry-run"],
+        ["-Bn"],
+        ["--no-print-directory", "-n"],
+        ["-n", "--no-print-directory"],
+        ["-B", "--no-print-directory", "-n"],
+        ["--warn-undefined-variables", "-n"],
+    ],
+    ids=["n", "s-n", "long", "bundled", "npd-then-n", "n-then-npd", "B-npd-n", "warn-undef-n"],
+)
 def test_check_prerequisites_stays_inert_under_every_dry_run_spelling(tmp_path, flags):
     result = _run_check_prerequisites(
         tmp_path,
@@ -862,6 +884,74 @@ def test_check_prerequisites_stays_inert_under_every_dry_run_spelling(tmp_path, 
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert _probe_lines(result.stdout) == [], f"{flags} executed the checks:\n{result.stdout}"
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        ["--no-print-directory"],
+        ["--warn-undefined-variables"],
+        ["-I", "n"],
+        ["--no-print-directory", "-I", "n"],
+    ],
+    ids=["npd-only", "warn-undef-only", "include-dir-n", "npd-include-dir-n"],
+)
+def test_check_prerequisites_probes_when_no_dry_run_was_asked_for(tmp_path, flags):
+    """The opposite direction: a long option, or an argument that spells `n`, is not a -n.
+
+    GNU make 4.x writes `make -I n` as `-In` inside MAKEFLAGS and 3.81 writes it as two
+    words, `I n`; a detector that believed any word holding an n would skip the check for
+    both. `--no-print-directory` alone is the spelling whose dry-run half the previous
+    revision missed, so its non-dry-run half is asserted here too.
+    """
+    include_dir = tmp_path / "n"
+    include_dir.mkdir(exist_ok=True)
+    result = _run_check_prerequisites(
+        tmp_path,
+        extra_args=flags,
+        path_tools=("docker", "openssl", "npx"),
+        uv_prefix=tmp_path / "envs" / "holon",
+    )
+    probes = _probe_lines(result.stdout)
+    assert probes, f"{flags} was read as a dry run and skipped the checks:\n{result.stdout}"
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+# The targets whose recipes install software. A recipe line that references $(MAKE) is
+# executed by GNU make even under -n (measured on 3.81 and 4.4.1: the whole shell command
+# runs, everything sharing the line with the recursion included), so an installer sitting on
+# such a line installs during a dry run however the DRY_RUN detector is written. Expressing
+# the recursion as a prerequisite instead keeps the guarantee independent of the detector.
+INSTALLING_TARGETS = ("install-homebrew", "install-docker", "install-miniforge", "check-docker")
+
+
+def _makefile_recipe_lines(target):
+    """The joined recipe lines of one Makefile target, without their leading tabs and `@`.
+
+    A target can be named twice (once to add a prerequisite, once to define the recipe), so
+    every occurrence is scanned and the one carrying the recipe wins.
+    """
+    lines = (REPO_ROOT / "Makefile").read_text().splitlines()
+    best: list[str] = []
+    for index, line in enumerate(lines):
+        if not line.startswith(f"{target}:"):
+            continue
+        recipe = []
+        for following in lines[index + 1 :]:
+            if not following.startswith("\t"):
+                break
+            recipe.append(following.lstrip("\t@"))
+        if len(recipe) > len(best):
+            best = recipe
+    assert best, f"no recipe found for {target}"
+    return " ".join(best).split(";")
+
+
+def test_installing_recipes_never_reference_make():
+    """No line that can install may reference $(MAKE), so no dry run can execute it."""
+    for target in INSTALLING_TARGETS:
+        offenders = [command for command in _makefile_recipe_lines(target) if "$(MAKE)" in command]
+        assert offenders == [], f"{target} can install from a line that runs even under -n: {offenders}"
 
 
 def test_check_prerequisites_runs_when_an_option_argument_spells_n(tmp_path):
@@ -923,3 +1013,106 @@ def test_check_prerequisites_runs_when_a_command_line_assignment_spells_n(tmp_pa
     probes = _probe_lines(result.stdout)
     assert probes, f"the guard misread an assignment as a dry run:\n{result.stdout}"
     assert any(line.startswith("Checking Docker CLI") for line in probes)
+
+
+# ---------------------------------------------------------------------------
+# Review iteration 1 (run 2): base consent from an inherited name, explicit name under
+# dash, unvalidated names, uv probe target. Each runs the emitted recipe against a stub
+# conda confined to tmp_path; nothing reaches a real conda.
+# ---------------------------------------------------------------------------
+
+
+def test_create_conda_env_allow_base_does_not_bless_an_inherited_base_name(tmp_path):
+    """`export CONDA_ENV=base` + `CONDA_ALLOW_BASE=1` typed on the command line must not write to base.
+
+    The flag pre-authorises a name typed in this invocation; here the name is inherited, so
+    base would be selected by shell state alone (no prompt at all in CI).
+    """
+    stdout, recipe = _create_conda_env_recipe(
+        make_vars={"CONDA_ALLOW_BASE": "1"}, env_vars={"CONDA_ENV": "base"}
+    )
+    assert "CHOSEN_ENV='base'" in stdout
+    assert 'BASE_CONSENT="false"' in stdout
+
+    result, calls = _run_recipe_against_stub_conda(
+        tmp_path, recipe, existing_envs=("base", "holon"), expect_success=False
+    )
+
+    assert "Refusing to write to 'base'" in result.stdout
+    assert calls == []
+
+
+@pytest.mark.skipif(shutil.which("/bin/dash") is None, reason="dash is not available on this host")
+def test_create_conda_env_explicit_name_is_honoured_under_dash(tmp_path):
+    """The README remedy for dash (`CONDA_ENV=<name>`) must work on dash, not refuse again."""
+    stdout, recipe = _create_conda_env_recipe(
+        make_vars={"CONDA_ENV": "mydev"}, env_vars={"CI": None, "NONINTERACTIVE": None}
+    )
+    assert "CHOSEN_ENV='mydev'" in stdout
+
+    result, calls = _run_recipe_on_tty(tmp_path, recipe, existing_envs=("base",), shell="/bin/dash")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "cannot time out" not in result.stdout
+    assert any(call.startswith("env create") and "mydev" in call for call in calls), calls
+
+
+@pytest.mark.parametrize("bad_name", ["-evil", "has space", "a;b"], ids=["leading-dash", "space", "semicolon"])
+def test_create_conda_env_rejects_malformed_environment_names(tmp_path, bad_name):
+    stdout, recipe = _create_conda_env_recipe(make_vars={"CONDA_ENV": bad_name})
+
+    result, calls = _run_recipe_against_stub_conda(
+        tmp_path, recipe, existing_envs=("base", "holon"), expect_success=False
+    )
+
+    assert "Invalid environment name" in result.stdout
+    assert calls == []
+
+
+def test_create_conda_env_exported_name_is_data_not_shell_code(tmp_path):
+    """A backtick in an exported CONDA_ENV must not run, and the name must then be rejected."""
+    marker = tmp_path / "pwned"
+    stdout, recipe = _create_conda_env_recipe(env_vars={"CONDA_ENV": f"`touch {marker}`"})
+
+    result, calls = _run_recipe_against_stub_conda(
+        tmp_path, recipe, existing_envs=("base", "holon"), expect_success=False
+    )
+
+    assert not marker.exists(), "an exported CONDA_ENV was executed as shell code"
+    assert "Invalid environment name" in result.stdout
+    assert calls == []
+
+
+def test_create_conda_env_rejects_a_non_numeric_prompt_timeout(tmp_path):
+    stdout, recipe = _create_conda_env_recipe(make_vars={"CONDA_PROMPT_TIMEOUT": "abc"})
+
+    result, calls = _run_recipe_against_stub_conda(tmp_path, recipe, existing_envs=("holon",), expect_success=False)
+
+    assert "CONDA_PROMPT_TIMEOUT must be a whole number" in result.stdout
+    assert calls == []
+
+
+def test_check_prerequisites_uv_probe_inspects_the_requested_env_not_the_active_one(tmp_path):
+    """With CONDA_ENV=other, a uv sitting in the ACTIVE env must not be reported as other's."""
+    active_prefix = tmp_path / "envs" / "active"
+    run_env = _prerequisites_run_env(
+        tmp_path,
+        path_tools=("docker", "openssl", "npx"),
+        uv_prefix=active_prefix,
+        env_list_line=f"active {active_prefix}\nother {tmp_path / 'envs' / 'other'}\n",
+    )
+    run_env["CONDA_PREFIX"] = str(active_prefix)
+    run_env["CONDA_DEFAULT_ENV"] = "active"
+
+    result = subprocess.run(
+        ["make", "check-prerequisites", "CONDA_ENV=other"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=run_env,
+        timeout=120,
+    )
+
+    assert "uv inside conda env active" not in result.stdout, result.stdout
+    assert "other" in result.stdout
+    assert result.returncode != 0, "uv is not installed in 'other', so the probe must fail"
