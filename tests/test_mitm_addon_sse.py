@@ -19,6 +19,7 @@ from holon_coherence.mitm_addon import (
     extract_sse_cache_read_tokens,
     extract_sse_content,
     extract_sse_token_counts,
+    extract_token_counts,
     safe_int,
     scrub_headers,
     scrub_string,
@@ -432,3 +433,115 @@ class TestScrubHeaders:
     def test_unrecognised_shape_yields_empty_dict(self) -> None:
         assert scrub_headers(None) == {}
         assert scrub_headers(42) == {}
+
+
+def _estimate_tokens(payload: object) -> int:
+    """Mirror the documented chars//4 heuristic, including the zero-content case."""
+    chars = estimate_chars(payload)
+    return max(1, chars // 4) if chars > 0 else 0
+
+
+class TestNonStreamingTokenCounts:
+    """`extract_token_counts` for ordinary JSON responses, where the reduction ratio is reported from."""
+
+    def test_string_response_is_routed_to_the_stream_parser(self) -> None:
+        stream = _sse({"usage": {"prompt_tokens": 4, "completion_tokens": 6}})
+        assert tuple(extract_token_counts({}, stream, "openai")) == (4, 6, 0)
+
+    def test_anthropic_prompt_caching_sums_into_input_tokens(self) -> None:
+        resp = {
+            "usage": {
+                "input_tokens": 200,
+                "cache_read_input_tokens": 120,
+                "cache_creation_input_tokens": 20,
+                "output_tokens": 35,
+            }
+        }
+
+        counts = extract_token_counts({}, resp, "anthropic")
+
+        assert tuple(counts) == (340, 35, 120)
+        assert counts.cache_creation_tokens == 20
+
+    def test_anthropic_reasoning_falls_back_to_thinking_tokens(self) -> None:
+        resp = {"usage": {"input_tokens": 1, "output_tokens": 2, "thinking_tokens": 9}}
+        assert extract_token_counts({}, resp, "anthropic").reasoning_tokens == 9
+
+    def test_openai_reads_cached_and_reasoning_from_details(self) -> None:
+        resp = {
+            "usage": {
+                "prompt_tokens": 90,
+                "completion_tokens": 11,
+                "prompt_tokens_details": {"cached_tokens": 60},
+                "completion_tokens_details": {"reasoning_tokens": 4},
+            }
+        }
+        counts = extract_token_counts({}, resp, "openai")
+        assert tuple(counts) == (90, 11, 60)
+        assert counts.reasoning_tokens == 4
+
+    def test_openai_flat_cached_tokens_is_the_fallback(self) -> None:
+        resp = {"usage": {"prompt_tokens": 30, "completion_tokens": 3, "cached_tokens": 10}}
+        assert extract_token_counts({}, resp, "openai") == (30, 3, 10)
+
+    def test_gemini_accepts_usage_metadata_and_the_usage_alias(self) -> None:
+        with_meta = {"usageMetadata": {"promptTokenCount": 60, "candidatesTokenCount": 7, "cachedContentTokenCount": 5}}
+        with_alias = {"usage": {"promptTokenCount": 60, "candidatesTokenCount": 7, "reasoningTokenCount": 2}}
+
+        assert tuple(extract_token_counts({}, with_meta, "gemini")) == (60, 7, 5)
+        assert extract_token_counts({}, with_alias, "gemini").reasoning_tokens == 2
+
+    def test_incomplete_usage_block_falls_back_instead_of_trusting_partial_data(self) -> None:
+        """Usage missing one required key is treated as no usage at all."""
+        req = {"messages": [{"role": "user", "content": "x" * 40}]}
+        resp = {"usage": {"input_tokens": 9999, "output_tokens": 9999}}
+
+        counts = extract_token_counts(req, resp, "openai")
+
+        assert tuple(counts) != (9999, 9999, 0)
+        assert counts.input_tokens == _estimate_tokens(req)
+        assert counts.output_tokens == _estimate_tokens(resp)
+
+    def test_estimation_yields_zero_rather_than_one_for_a_content_free_payload(self) -> None:
+        """The floor of 1 applies to a non-empty payload; an empty one must not invent a token.
+
+        Reading `max(1, chars // 4)` alone suggests a bare integer response still costs a token.
+        The guard is `if chars > 0 else 0`, and estimate_chars counts strings, not numbers, so a
+        usage-only body estimates to zero.
+        """
+        counts = extract_token_counts({}, {"usage": {"input_tokens": 9999, "output_tokens": 9999}}, "openai")
+
+        assert estimate_chars({"usage": {"input_tokens": 9999}}) == 0
+        assert counts.output_tokens == 0
+
+    def test_estimation_counts_string_content_of_a_response_without_usage(self) -> None:
+        resp = {"content": [{"type": "text", "text": "y" * 80}]}
+
+        counts = extract_token_counts({}, resp, "openai")
+
+        assert counts.output_tokens == 80 // 4
+
+    def test_unparseable_response_never_raises(self) -> None:
+        for resp in ({"usage": "not-a-dict"}, {"usage": [1, 2]}, [], None):
+            counts = extract_token_counts({}, resp, "anthropic")
+            assert len(tuple(counts)) == 3
+
+    def test_non_streaming_and_stream_paths_agree_on_the_same_numbers(self) -> None:
+        """The two parsers must not disagree about one exchange depending on transport."""
+        req = {}
+        json_resp = {
+            "usage": {"prompt_tokens": 55, "completion_tokens": 17, "prompt_tokens_details": {"cached_tokens": 5}}
+        }
+        stream = _sse(
+            {
+                "usage": {
+                    "prompt_tokens": 55,
+                    "completion_tokens": 17,
+                    "prompt_tokens_details": {"cached_tokens": 5},
+                }
+            }
+        )
+
+        assert tuple(extract_token_counts(req, json_resp, "openai")) == tuple(
+            extract_token_counts(req, stream, "openai")
+        )
