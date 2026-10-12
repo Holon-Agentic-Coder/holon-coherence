@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from holon_coherence.cli import (
+    CA_ENV_VARS,
     CONTAINER_NAME,
     DEFAULT_PROXY_PORT,
     DOCKER_BUILD_TIMEOUT_SECONDS,
@@ -242,6 +243,42 @@ class TestProxyEnvironmentInjectionAndMergedCA:
             assert "Warning: CA certificate not found" in captured.err
             assert "Ensure 'holon-coherence start' has been run at least once" in captured.err
             assert "initialize CA with 'holon-coherence init-ca'" in captured.err
+
+    def test_inherited_ca_vars_are_cleared_when_bundle_is_missing(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A missing bundle must not leave an inherited CA path pointing at nothing.
+
+        This is the case the assertion above only catches by accident: it passes on a clean CI
+        machine because nothing set the variables, and fails on a developer or agent shell that
+        exports them. Either way the child would be told to trust a bundle that does not exist,
+        and then git, curl, requests or Node report a certificate error instead of the stale
+        environment an earlier setup left behind.
+        """
+        for var in CA_ENV_VARS:
+            monkeypatch.setenv(var, "/nonexistent/stale-bundle.crt")
+
+        with patch("os.path.exists", return_value=False):
+            env = build_agent_env("claude", port=9090)
+
+        for var in CA_ENV_VARS:
+            assert var not in env, f"{var} still points at a bundle that was reported missing"
+        assert "Warning: CA certificate not found" in capsys.readouterr().err
+
+    def test_resolved_bundle_overrides_inherited_ca_vars(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """When a bundle does resolve, it must win over whatever the shell already exported."""
+        ca = tmp_path / "mitmproxy-ca-cert.pem"
+        ca.write_text("-----BEGIN CERTIFICATE-----\n")
+        merged = tmp_path / "holon-merged-ca-bundle.crt"
+        monkeypatch.setenv("HOLON_CA_CERT", str(ca))
+        for var in CA_ENV_VARS:
+            monkeypatch.setenv(var, "/nonexistent/stale-bundle.crt")
+        monkeypatch.setattr("holon_coherence.cli.get_or_create_merged_ca_bundle", lambda _p: str(merged))
+
+        env = build_agent_env("claude", port=9090)
+
+        for var in CA_ENV_VARS:
+            assert env[var] == str(merged), f"{var} kept the inherited path instead of the resolved bundle"
 
     def test_build_proxy_env_sets_all_proxy_vars_and_node_extra_ca_certs(self) -> None:
         with (

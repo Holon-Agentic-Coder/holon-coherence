@@ -34,6 +34,15 @@ PROXY_READY_TIMEOUT_SECONDS = 15.0
 PROXY_POLL_INTERVAL_SECONDS = 0.25
 DOCKER_BUILD_TIMEOUT_SECONDS = 600
 NO_PROXY_HOSTS = "localhost,127.0.0.1,::1,169.254.169.254,api.github.com,github.com"
+# Every environment variable by which a child process is told which CA bundle to trust. Kept as one
+# list so "set them all" and "clear them all" can never disagree about which clients are covered.
+CA_ENV_VARS = (
+    "SSL_CERT_FILE",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+    "NODE_EXTRA_CA_CERTS",
+    "GIT_SSL_CAINFO",
+)
 CONTAINER_NAME = "holon-coherence"
 
 # Resolves the Docker host gateway inside the container and dials a TCP port on it.
@@ -798,11 +807,8 @@ def build_proxy_env(
 
     if os.path.exists(ca_cert):
         merged_bundle = get_or_create_merged_ca_bundle(ca_cert)
-        env["SSL_CERT_FILE"] = merged_bundle
-        env["REQUESTS_CA_BUNDLE"] = merged_bundle
-        env["CURL_CA_BUNDLE"] = merged_bundle
-        env["NODE_EXTRA_CA_CERTS"] = merged_bundle
-        env["GIT_SSL_CAINFO"] = merged_bundle
+        for var in CA_ENV_VARS:
+            env[var] = merged_bundle
     else:
         print(
             f"⚠️  Warning: CA certificate not found at '{ca_cert}'.\n"
@@ -811,6 +817,10 @@ def build_proxy_env(
             "initialize CA with 'holon-coherence init-ca'.",
             file=sys.stderr,
         )
+        # Nothing is advertised from here: this dict is built from scratch, so omitting the CA
+        # variables already is the whole contract on this side. The hazard lives in the caller,
+        # which starts from os.environ and must not forward an inherited CA path when resolution
+        # failed -- that clearing has its own test on build_agent_env.
 
     return env
 
@@ -827,7 +837,14 @@ def build_agent_env(
     """
     env = os.environ.copy()
     proxy_url = f"http://127.0.0.1:{port}"
-    env.update(build_proxy_env(proxy_url, drop_no_proxy=drop_no_proxy))
+    proxy_env = build_proxy_env(proxy_url, drop_no_proxy=drop_no_proxy)
+    env.update(proxy_env)
+    if not all(var in proxy_env for var in CA_ENV_VARS):
+        # No bundle was resolved. Drop any inherited CA path rather than forwarding it: a child
+        # configured to trust a nonexistent bundle fails TLS with a message that points at the
+        # certificate, not at the stale environment left behind by an earlier setup.
+        for var in CA_ENV_VARS:
+            env.pop(var, None)
 
     # Credential mapping: HOLON_AGENT_KEY -> vendor keys
     # Invariant Rule 4: If HOLON_AGENT_KEY is omitted, runner never validates vendor keys;

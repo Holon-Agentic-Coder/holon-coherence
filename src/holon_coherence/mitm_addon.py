@@ -91,7 +91,7 @@ _BODY_SECRET_PATTERNS = [
 ]
 
 _SECRET_DICT_KEY_PATTERN = re.compile(
-    r"(?i)^(?:auth|credential|credentials|password|passwd|api[-_]?key|apikey|api[-_]?token|auth[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|secret[-_]?key|secret|private[-_]?key|client[-_]?secret|session[-_]?token)$"
+    r"(?i)^(?:auth|authorization|credential|credentials|password|passwd|token|api[-_]?key|apikey|api[-_]?token|auth[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|secret[-_]?key|secret|private[-_]?key|client[-_]?secret|session[-_]?token)$"
 )
 
 
