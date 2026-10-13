@@ -32,8 +32,8 @@ However, upstream prompt caching fails completely if:
 
 | Component                     | Repository Path                                                                 | Core Function / Class                                  |
 | :---------------------------- | :------------------------------------------------------------------------------ | :----------------------------------------------------- |
-| **Cache Control Injector**    | `apps/sandbox-executor/src/sandbox_executor/token_reduction/payload_cleaner.py` | `JSONContextCleaner._inject_anthropic_cache_control()` |
-| **MITM Telemetry Normalizer** | `apps/sandbox-executor/src/sandbox_executor/token_reduction/mitm_addon.py`      | Normalization of `cache_read_input_tokens`             |
+| **Cache Control Injector**    | `src/holon_coherence/payload_cleaner.py` | `JSONContextCleaner._inject_anthropic_cache_control()` |
+| **MITM Telemetry Normalizer** | `src/holon_coherence/mitm_addon.py`      | Normalization of `cache_read_input_tokens`             |
 | **Unified Benchmark Harness** | `todo/ab_measure_all_methods.py`                                                | Multi-turn cache read measurement                      |
 
 ---
@@ -78,10 +78,10 @@ from pathlib import Path
 
 repo_root = Path(".").resolve()
 files = [
-    "apps/sandbox-executor/src/sandbox_executor/token_reduction/mitm_addon.py",
-    "apps/sandbox-executor/src/sandbox_executor/token_reduction/payload_cleaner.py",
-    "apps/sandbox-executor/src/sandbox_executor/token_reduction/hybrid_cache.py",
-    "apps/sandbox-executor/src/sandbox_executor/cli.py",
+    "src/holon_coherence/mitm_addon.py",
+    "src/holon_coherence/payload_cleaner.py",
+    "src/holon_coherence/hybrid_cache.py",
+    "src/holon_coherence/cli.py",
 ]
 large_context = "\n".join(
     f"=== FILE {f} ===\n{(repo_root / f).read_text(encoding='utf-8')}" for f in files if (repo_root / f).exists()
@@ -120,8 +120,8 @@ import sys
 from pathlib import Path
 
 repo_root = Path(".").resolve()
-sys.path.insert(0, str(repo_root / "apps/sandbox-executor/src"))
-from sandbox_executor.token_reduction import JSONContextCleaner
+sys.path.insert(0, str(repo_root / "src"))
+from holon_coherence import JSONContextCleaner
 
 cleaner = JSONContextCleaner(enable_prompt_caching=True)
 

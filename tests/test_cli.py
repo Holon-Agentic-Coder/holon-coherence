@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import signal
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -29,6 +30,7 @@ from holon_coherence.cli import (
     execute_interactive_process,
     extract_runner_flags,
     find_system_ca_bundle,
+    get_active_web_token,
     get_or_create_merged_ca_bundle,
     host_local_container_args,
     host_local_covered,
@@ -40,7 +42,9 @@ from holon_coherence.cli import (
     probe_host_local_reachable,
     report_local_llm_route,
     resolve_agent_binary,
+    resolve_web_password,
     run_agent,
+    save_web_token,
     stop_proxy_container,
     wait_for_proxy_ready,
 )
@@ -2203,3 +2207,117 @@ class TestPlanAndReportLocalLlmRoute:
         assert dropped == ()
         captured = capsys.readouterr()
         assert "NO_PROXY contains '*'" in captured.err
+
+
+class TestWebTokenAndDashboardAuth:
+    """Tests for web dashboard token management and password protection (Bean 0042)."""
+
+    def test_web_token_resolution_and_generation(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 1. Explicit CLI argument
+        assert resolve_web_password("explicit-cli-pwd") == "explicit-cli-pwd"
+
+        # 2. Environment variable fallback
+        monkeypatch.setenv("HOLON_COHERENCE_WEB_PASSWORD", "env-secret-password")
+        assert resolve_web_password(None) == "env-secret-password"
+
+        # 3. Auto-generation fallback
+        monkeypatch.delenv("HOLON_COHERENCE_WEB_PASSWORD", raising=False)
+        auto_token = resolve_web_password(None)
+        assert isinstance(auto_token, str)
+        assert len(auto_token) >= 16
+
+    def test_web_token_file_persistence_and_permissions(self, tmp_path: Path) -> None:
+        target_path = tmp_path / "subdir" / "web-token"
+        saved = save_web_token("super-secret-token", token_path=str(target_path))
+        assert saved == str(target_path)
+        assert target_path.read_text().strip() == "super-secret-token"
+
+        # POSIX file permissions must be 0600
+        mode = target_path.stat().st_mode
+        assert (mode & 0o777) == (stat.S_IRUSR | stat.S_IWUSR)
+        assert (mode & 0o077) == 0
+
+        # Retrieval helper
+        retrieved = get_active_web_token(token_path=str(target_path))
+        assert retrieved == "super-secret-token"
+
+    def test_start_web_command_forwards_web_password_in_container(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("holon_coherence.cli.is_in_container", lambda: True)
+        launched: list[list[str]] = []
+
+        def fake_run(cmd, *args, **kwargs):
+            launched.append(list(cmd))
+            return MagicMock(returncode=0)
+
+        with (
+            patch("holon_coherence.cli.save_web_token"),
+            patch("subprocess.run", side_effect=fake_run),
+        ):
+            main(["start", "--port", "8080", "--web", "--web-password", "container-pwd"])
+
+        assert len(launched) == 1
+        cmd = launched[0]
+        assert "--set" in cmd
+        set_idx = cmd.index("--set") + 1
+        assert cmd[set_idx] == "web_password=container-pwd"
+
+    def test_start_web_command_forwards_web_password_on_host(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("holon_coherence.cli.is_in_container", lambda: False)
+        with (
+            patch("holon_coherence.cli.save_web_token"),
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.ensure_docker_image"),
+            patch("os.makedirs"),
+            patch("os.path.exists", return_value=True),
+            patch("subprocess.run") as mock_run,
+        ):
+            main(["start", "-d", "--web", "--web-password", "host-custom-pwd"])
+            assert mock_run.call_count == 2
+            docker_cmd = mock_run.call_args_list[1][0][0]
+            assert "-e" in docker_cmd
+            assert "HOLON_COHERENCE_WEB_PASSWORD=host-custom-pwd" in docker_cmd
+            assert "--web-password" in docker_cmd
+            pwd_idx = docker_cmd.index("--web-password") + 1
+            assert docker_cmd[pwd_idx] == "host-custom-pwd"
+
+    def test_status_command_displays_web_token(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch("holon_coherence.cli.get_active_web_token", return_value="active-session-tok"),
+            patch("subprocess.run", return_value=MagicMock(returncode=0)),
+        ):
+            main(["status"])
+            captured = capsys.readouterr()
+            assert "active-session-tok" in captured.out
+            assert "Web Dashboard Token:" in captured.out
+
+    def test_web_token_and_web_key_commands(self, capsys: pytest.CaptureFixture[str]) -> None:
+        # Token exists: web-token
+        with (
+            patch("holon_coherence.cli.get_active_web_token", return_value="existing-key-999"),
+            pytest.raises(SystemExit) as exc,
+        ):
+            main(["web-token"])
+        assert exc.value.code == 0
+        captured = capsys.readouterr()
+        assert "Active web dashboard token: existing-key-999" in captured.out
+
+        # Token exists: web-key alias
+        with (
+            patch("holon_coherence.cli.get_active_web_token", return_value="existing-key-999"),
+            pytest.raises(SystemExit) as exc,
+        ):
+            main(["web-key"])
+        assert exc.value.code == 0
+        captured = capsys.readouterr()
+        assert "Active web dashboard token: existing-key-999" in captured.out
+
+        # Token missing
+        with (
+            patch("holon_coherence.cli.get_active_web_token", return_value=None),
+            pytest.raises(SystemExit) as exc,
+        ):
+            main(["web-token"])
+        assert exc.value.code == 1
+        captured = capsys.readouterr()
+        assert "No active web dashboard session token found" in captured.out

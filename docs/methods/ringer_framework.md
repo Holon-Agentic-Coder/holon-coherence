@@ -26,8 +26,8 @@ cost, making them ideal for high-volume, structured execution tasks.
 
 | Component                     | Repository Path                                                                     | Core Function / Class                                  |
 | :---------------------------- | :---------------------------------------------------------------------------------- | :----------------------------------------------------- |
-| **Ringer Orchestrator**       | `apps/sandbox-executor/src/sandbox_executor/token_reduction/ringer_orchestrator.py` | `RingerOrchestrator.plan_subtask()`, `record_result()` |
-| **Subtask Result Summarizer** | `apps/sandbox-executor/src/sandbox_executor/token_reduction/ringer_orchestrator.py` | `SubtaskResult._summarize()`                           |
+| **Ringer Orchestrator**       | `src/holon_coherence/ringer_orchestrator.py` | `RingerOrchestrator.plan_subtask()`, `record_result()` |
+| **Subtask Result Summarizer** | `src/holon_coherence/ringer_orchestrator.py` | `SubtaskResult._summarize()`                           |
 | **Unified Benchmark Harness** | `todo/ab_measure_all_methods.py`                                                    | Multi-turn tiered execution suites                     |
 
 ---
@@ -99,8 +99,8 @@ import sys
 from pathlib import Path
 
 repo_root = Path(".").resolve()
-sys.path.insert(0, str(repo_root / "apps/sandbox-executor/src"))
-from sandbox_executor.token_reduction import RingerOrchestrator
+sys.path.insert(0, str(repo_root / "src"))
+from holon_coherence.ringer_orchestrator import RingerOrchestrator
 
 orchestrator = RingerOrchestrator(
     architect_model=tier1_model,

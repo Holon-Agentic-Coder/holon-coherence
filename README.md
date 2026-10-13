@@ -120,20 +120,30 @@ isolated container, eliminating host Python version conflicts, compilation issue
 
 ### 1. Install CLI Wrapper
 
-Install `holon-coherence` into your system `$PATH` via `uv`:
+Install `holon-coherence` into your system `$PATH` via `uv` (recommended):
 
 ```bash
-# Install from local checkout
+# Standard installation directly from GitHub repository
+uv tool install git+https://github.com/Holon-Agentic-Coder/holon-coherence.git
+```
+
+> **Shell Rehashing**: If your shell does not immediately find `holon-coherence` after installation:
+> - For **zsh**: run `rehash` to immediately refresh command hashing.
+> - For **bash**: run `hash -r` to reset remembered shell command locations.
+
+#### For Local Contributors & Development:
+
+For local contributors modifying `holon-coherence`, install from a local checkout using `--editable`:
+
+```bash
+git clone https://github.com/Holon-Agentic-Coder/holon-coherence.git
 cd holon-coherence
 uv tool install --editable .
-
-# Or install directly from GitHub
-uv tool install git+https://github.com/Holon-Agentic-Coder/holon-coherence.git
 ```
 
 ### 2. Manage the Proxy Container
 
-The `holon-coherence` CLI automatically manages Docker images, volumes, and certificates for you:
+The `holon-coherence` CLI automatically manages Docker images, volumes, certificates, and web credentials for you:
 
 ```bash
 # Start proxy container (port 8080)
@@ -142,10 +152,17 @@ holon-coherence start
 # Run in background (detached)
 holon-coherence start -d
 
-# Start with interactive web inspection dashboard (port 8081)
+# Start with password-protected interactive web inspection dashboard (port 8081)
 holon-coherence start --web
 
-# Check container status
+# Start with explicit web password (defaults to HOLON_COHERENCE_WEB_PASSWORD or auto-generated token)
+holon-coherence start --web --web-password "custom-secret-key"
+
+# Display active web dashboard authentication token
+holon-coherence web-token
+# (alias: holon-coherence web-key)
+
+# Check container status (and display web dashboard token if active)
 holon-coherence status
 
 # Stream container logs

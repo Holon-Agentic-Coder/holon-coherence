@@ -24,8 +24,8 @@ proxy and execution harness. When an outgoing request matches an existing entry:
 
 | Component                  | Repository Path                                                              | Core Function / Class                              |
 | :------------------------- | :--------------------------------------------------------------------------- | :------------------------------------------------- |
-| **Hybrid Cache Store**     | `apps/sandbox-executor/src/sandbox_executor/token_reduction/hybrid_cache.py` | `HybridCacheStore.get()`, `HybridCacheStore.put()` |
-| **MITM Interception Hook** | `apps/sandbox-executor/src/sandbox_executor/token_reduction/mitm_addon.py`   | `MitmproxyAddon.request()` short-circuiting        |
+| **Hybrid Cache Store**     | `src/holon_coherence/hybrid_cache.py` | `HybridCacheStore.get()`, `HybridCacheStore.put()` |
+| **MITM Interception Hook** | `src/holon_coherence/mitm_addon.py`   | `MitmproxyAddon.request()` short-circuiting        |
 | **Database Storage**       | `todo/cache/llm_cache.db`                                                    | Table `prompt_cache` (WAL mode enabled)            |
 
 ---
@@ -78,8 +78,8 @@ import sys
 from pathlib import Path
 
 repo_root = Path(".").resolve()
-sys.path.insert(0, str(repo_root / "apps/sandbox-executor/src"))
-from sandbox_executor.token_reduction import HybridCacheStore
+sys.path.insert(0, str(repo_root / "src"))
+from holon_coherence import HybridCacheStore
 
 cache_store = HybridCacheStore(
     cache_dir=str(repo_root / "todo/cache"),

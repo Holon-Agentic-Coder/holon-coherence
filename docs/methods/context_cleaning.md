@@ -77,8 +77,8 @@ never hashed or deduplicated, avoiding unnecessary tombstone clutter for trivial
 
 | Component                     | Repository Path                                                                 | Core Function / Class                             |
 | :---------------------------- | :------------------------------------------------------------------------------ | :------------------------------------------------ |
-| **Payload Cleaner Engine**    | `apps/sandbox-executor/src/sandbox_executor/token_reduction/payload_cleaner.py` | `JSONContextCleaner.process_payload_with_stats()` |
-| **MITM Proxy Interceptor**    | `apps/sandbox-executor/src/sandbox_executor/token_reduction/mitm_addon.py`      | `MitmproxyAddon.request(flow)`                    |
+| **Payload Cleaner Engine**    | `src/holon_coherence/payload_cleaner.py` | `JSONContextCleaner.process_payload_with_stats()` |
+| **MITM Proxy Interceptor**    | `src/holon_coherence/mitm_addon.py`      | `MitmproxyAddon.request(flow)`                    |
 | **Unified Benchmark Harness** | `todo/ab_measure_all_methods.py`                                                | `clean_context_payload()`, Turn telemetry         |
 
 ---
@@ -115,8 +115,8 @@ docker run -d --name mitm-context-cleaner \
   -e WIRE_LOG_DIR=/tmp/wire_logs \
   -e CACHE_DIR=/tmp/cache \
   -e PYTHONPATH=/tmp/src \
-  -v "${REPO_ROOT}/holon-agentic-coder-ref/develop/apps/sandbox-executor/src":/tmp/src:ro \
-  -v "${REPO_ROOT}/holon-agentic-coder-ref/develop/apps/sandbox-executor/src/sandbox_executor/token_reduction/mitm_addon.py":/tmp/mitm_addon.py:ro \
+  -v "${REPO_ROOT}/src":/tmp/src:ro \
+  -v "${REPO_ROOT}/src/holon_coherence/mitm_addon.py":/tmp/mitm_addon.py:ro \
   -v "${REPO_ROOT}/todo/mitm_wire_logs":/tmp/wire_logs \
   -v "${REPO_ROOT}/todo/cache":/tmp/cache \
   -v ~/.holon/proxy-ca:/home/mitmproxy/.mitmproxy \
@@ -164,10 +164,10 @@ from pathlib import Path
 
 repo_root = Path(".").resolve()
 files = [
-    "apps/sandbox-executor/src/sandbox_executor/token_reduction/mitm_addon.py",
-    "apps/sandbox-executor/src/sandbox_executor/token_reduction/payload_cleaner.py",
-    "apps/sandbox-executor/src/sandbox_executor/token_reduction/hybrid_cache.py",
-    "apps/sandbox-executor/src/sandbox_executor/cli.py",
+    "src/holon_coherence/mitm_addon.py",
+    "src/holon_coherence/payload_cleaner.py",
+    "src/holon_coherence/hybrid_cache.py",
+    "src/holon_coherence/cli.py",
 ]
 codebase_context = "\n".join(
     f"=== FILE: {f} ===\n{(repo_root / f).read_text(encoding='utf-8')}" for f in files if (repo_root / f).exists()
@@ -193,9 +193,9 @@ Enable `JSONContextCleaner` either via the proxy sidecar or programmatically:
 import sys
 from pathlib import Path
 
-# Add sandbox-executor src to path
-sys.path.insert(0, str(Path("apps/sandbox-executor/src").resolve()))
-from sandbox_executor.token_reduction import JSONContextCleaner
+# Add coherence src to path
+sys.path.insert(0, str(Path("src").resolve()))
+from holon_coherence import JSONContextCleaner
 
 cleaner = JSONContextCleaner(enable_deduplication=True, max_turns=30)
 
