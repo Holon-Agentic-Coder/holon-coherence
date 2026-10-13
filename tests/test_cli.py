@@ -1415,7 +1415,10 @@ class TestCLIDispatchAndMain:
             return MagicMock(returncode=0)
 
         monkeypatch.setattr("holon_coherence.cli.is_in_container", lambda: True)
-        with patch("subprocess.run", side_effect=fake_run):
+        with (
+            patch("holon_coherence.cli.save_web_token"),
+            patch("subprocess.run", side_effect=fake_run),
+        ):
             main(["start", "--web", "--web-port", "8081"])
 
         assert len(launched) == 1
