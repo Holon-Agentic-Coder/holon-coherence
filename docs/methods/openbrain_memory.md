@@ -26,11 +26,11 @@ unnecessary tokens.
 
 ## 🏛️ Codebase Architecture & Source Locations
 
-| Component                     | Repository Path                                                                  | Core Function / Class                                   |
-| :---------------------------- | :------------------------------------------------------------------------------- | :------------------------------------------------------ |
-| **Episodic Memory Registry**  | `apps/sandbox-executor/src/sandbox_executor/token_reduction/openbrain_memory.py` | `OpenBrainMemory.store_memory()`, `retrieve_memories()` |
-| **Database Storage**          | `todo/openbrain/openbrain.db`                                                    | Table `memories`                                        |
-| **Unified Benchmark Harness** | `todo/ab_measure_all_methods.py`                                                 | Episodic memory turn reduction measurement              |
+| Component                     | Repository Path                           | Core Function / Class                                   |
+| :---------------------------- | :---------------------------------------- | :------------------------------------------------------ |
+| **Episodic Memory Registry**  | `src/holon_coherence/openbrain_memory.py` | `OpenBrainMemory.store_memory()`, `retrieve_memories()` |
+| **Database Storage**          | `todo/openbrain/openbrain.db`             | Table `memories`                                        |
+| **Unified Benchmark Harness** | `todo/ab_measure_all_methods.py`          | Episodic memory turn reduction measurement              |
 
 ---
 
@@ -64,8 +64,8 @@ import sys
 from pathlib import Path
 
 repo_root = Path(".").resolve()
-sys.path.insert(0, str(repo_root / "apps/sandbox-executor/src"))
-from sandbox_executor.token_reduction import OpenBrainMemory
+sys.path.insert(0, str(repo_root / "src"))
+from holon_coherence import OpenBrainMemory
 
 # Initialize database in todo/openbrain
 ob = OpenBrainMemory(db_dir=str(repo_root / "todo/openbrain"))

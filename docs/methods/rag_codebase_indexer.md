@@ -24,11 +24,11 @@ unrelated codebase noise.
 
 ## 🏛️ Codebase Architecture & Source Locations
 
-| Component                     | Repository Path                                                             | Core Function / Class                                          |
-| :---------------------------- | :-------------------------------------------------------------------------- | :------------------------------------------------------------- |
-| **AST & Keyword Indexer**     | `apps/sandbox-executor/src/sandbox_executor/token_reduction/rag_indexer.py` | `RAGCodebaseIndexer.build_index()`, `get_context_for_prompt()` |
-| **AST Symbol Parser**         | `apps/sandbox-executor/src/sandbox_executor/token_reduction/rag_indexer.py` | `_extract_ast_symbols()`                                       |
-| **Unified Benchmark Harness** | `todo/ab_measure_all_methods.py`                                            | Turn 0 context size comparison                                 |
+| Component                     | Repository Path                      | Core Function / Class                                          |
+| :---------------------------- | :----------------------------------- | :------------------------------------------------------------- |
+| **AST & Keyword Indexer**     | `src/holon_coherence/rag_indexer.py` | `RAGCodebaseIndexer.build_index()`, `get_context_for_prompt()` |
+| **AST Symbol Parser**         | `src/holon_coherence/rag_indexer.py` | `_extract_ast_symbols()`                                       |
+| **Unified Benchmark Harness** | `todo/ab_measure_all_methods.py`     | Turn 0 context size comparison                                 |
 
 ---
 
@@ -46,10 +46,10 @@ Select the active Tier 1 Architect model (e.g., `gemini-3.8-flash-high` or `clau
 
 ### 2. Verify Target Codebase Directory
 
-The indexer operates over authentic source trees. Ensure `apps/sandbox-executor/src` is present:
+The indexer operates over authentic source trees. Ensure `src/holon_coherence` is present:
 
 ```bash
-ls -la apps/sandbox-executor/src/sandbox_executor/token_reduction/
+ls -la src/holon_coherence/
 ```
 
 ---
@@ -65,11 +65,11 @@ import sys
 from pathlib import Path
 
 repo_root = Path(".").resolve()
-sys.path.insert(0, str(repo_root / "apps/sandbox-executor/src"))
-from sandbox_executor.token_reduction import RAGCodebaseIndexer
+sys.path.insert(0, str(repo_root / "src"))
+from holon_coherence import RAGCodebaseIndexer
 
-# Build AST index over the sandbox executor source directory
-src_dir = str(repo_root / "apps/sandbox-executor/src")
+# Build AST index over the holon coherence source directory
+src_dir = str(repo_root / "src")
 indexer = RAGCodebaseIndexer(root_dir=src_dir)
 
 print(f"Indexed {len(indexer.file_index)} files.")

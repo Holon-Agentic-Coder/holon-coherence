@@ -1,9 +1,23 @@
 """Ringer multi-agent framework: Architect/Executor subagent delegation."""
 
 import logging
+import os
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_ARCHITECT_MODEL = "claude-3-5-sonnet"
+DEFAULT_EXECUTOR_MODEL = "gemini-3.5-flash"
+
+
+def get_default_architect_model() -> str:
+    """Resolve default architect model dynamically from environment or fallback."""
+    return os.environ.get("HOLON_ARCHITECT_MODEL", DEFAULT_ARCHITECT_MODEL)
+
+
+def get_default_executor_model() -> str:
+    """Resolve default executor model dynamically from environment or fallback."""
+    return os.environ.get("HOLON_EXECUTOR_MODEL", DEFAULT_EXECUTOR_MODEL)
 
 
 class SubtaskResult:
@@ -31,15 +45,19 @@ class SubtaskResult:
 
 
 class RingerOrchestrator:
-    """Orchestrates execution between high-capability Architect models and fast, low-cost Executor subagents."""
+    """Orchestrates execution between high-capability Architect models and fast, low-cost Executor subagents.
+
+    Model identifiers are dynamically resolved from arguments or environment variables
+    (HOLON_ARCHITECT_MODEL and HOLON_EXECUTOR_MODEL) without hardcoded vendor locks.
+    """
 
     def __init__(
         self,
-        architect_model: str = "claude-3-5-sonnet",
-        executor_model: str = "gemini-3.5-flash",
+        architect_model: str | None = None,
+        executor_model: str | None = None,
     ):
-        self.architect_model = architect_model
-        self.executor_model = executor_model
+        self.architect_model = architect_model or get_default_architect_model()
+        self.executor_model = executor_model or get_default_executor_model()
         self.subtasks: list[dict[str, Any]] = []
         self.results: list[SubtaskResult] = []
 

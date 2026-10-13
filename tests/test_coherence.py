@@ -76,6 +76,27 @@ class TestHolonCoherence(unittest.TestCase):
         subtask = ringer.plan_subtask("task_01", "Compile assets", ["make build"])
         self.assertEqual(subtask["assigned_model"], "model-t2")
 
+    def test_ringer_orchestrator_dynamic_env_resolution(self):
+        from unittest.mock import patch
+
+        # 1. Default fallback without env vars
+        with patch.dict(os.environ, {}, clear=True):
+            ringer_default = RingerOrchestrator()
+            self.assertEqual(ringer_default.architect_model, "claude-3-5-sonnet")
+            self.assertEqual(ringer_default.executor_model, "gemini-3.5-flash")
+
+        # 2. Dynamic environment variable overrides
+        with patch.dict(
+            os.environ,
+            {
+                "HOLON_ARCHITECT_MODEL": "custom-arch-model",
+                "HOLON_EXECUTOR_MODEL": "custom-exec-model",
+            },
+        ):
+            ringer_env = RingerOrchestrator()
+            self.assertEqual(ringer_env.architect_model, "custom-arch-model")
+            self.assertEqual(ringer_env.executor_model, "custom-exec-model")
+
     def test_cli_parser_and_run(self):
         import sys
 

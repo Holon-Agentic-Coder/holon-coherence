@@ -45,17 +45,21 @@ It stores known hashes in `seen_content_hashes: dict[hash, (turn_idx, tool_use_i
   ($\text{hash}_{\text{T5}} = \text{hash}_{\text{T1}}$). Because the content is identical, the older historical turn is
   replaced with a structural tombstone pointing to Turn 1.
 - **File Modified**: If the agent edits `utils.py` in Turn 3 and re-runs `cat utils.py` in Turn 4, the output contains
-  the new lines of code. Its SHA-256 hash is completely different ($\text{hash}_{\text{T4}} \neq
-  \text{hash}_{\text{T1}}$). The cleaner recognizes $\text{hash}_{\text{T4}}$ as a new state, records it as a distinct
-  entry in `seen_content_hashes`, and **preserves the entire updated file content verbatim** in the context.
+  the new lines of code. Its SHA-256 hash is completely different
+  ($\text{hash}_{\text{T4}} \neq
+  \text{hash}_{\text{T1}}$). The cleaner recognizes $\text{hash}_{\text{T4}}$ as a new
+  state, records it as a distinct entry in `seen_content_hashes`, and **preserves the entire updated file content
+  verbatim** in the context.
 
 #### 3. What Happens When a File is Renamed or Added (`ls`)
 
 - **Directory Unchanged**: If the directory contents have not changed, subsequent `ls` commands return the exact same
   listing text, producing an identical SHA-256 hash that triggers deduplication on historical turns.
 - **File Renamed, Created, or Deleted**: If the agent renames `app.js` to `main.js` and re-runs `ls`, the output listing
-  text changes. Because the text differs, its SHA-256 hash changes ($\text{hash}_{\text{new}} \neq
-  \text{hash}_{\text{old}}$). The cleaner sees a fresh hash and **preserves the new directory listing in full**.
+  text changes. Because the text differs, its SHA-256 hash changes
+  ($\text{hash}_{\text{new}} \neq
+  \text{hash}_{\text{old}}$). The cleaner sees a fresh hash and **preserves the new
+  directory listing in full**.
 
 #### 4. Active Working Memory Protection (`_RECENT_TURNS_TO_KEEP = 6`)
 
@@ -75,11 +79,11 @@ never hashed or deduplicated, avoiding unnecessary tombstone clutter for trivial
 
 ## 🏛️ Codebase Architecture & Source Locations
 
-| Component                     | Repository Path                                                                 | Core Function / Class                             |
-| :---------------------------- | :------------------------------------------------------------------------------ | :------------------------------------------------ |
-| **Payload Cleaner Engine**    | `apps/sandbox-executor/src/sandbox_executor/token_reduction/payload_cleaner.py` | `JSONContextCleaner.process_payload_with_stats()` |
-| **MITM Proxy Interceptor**    | `apps/sandbox-executor/src/sandbox_executor/token_reduction/mitm_addon.py`      | `MitmproxyAddon.request(flow)`                    |
-| **Unified Benchmark Harness** | `todo/ab_measure_all_methods.py`                                                | `clean_context_payload()`, Turn telemetry         |
+| Component                     | Repository Path                          | Core Function / Class                             |
+| :---------------------------- | :--------------------------------------- | :------------------------------------------------ |
+| **Payload Cleaner Engine**    | `src/holon_coherence/payload_cleaner.py` | `JSONContextCleaner.process_payload_with_stats()` |
+| **MITM Proxy Interceptor**    | `src/holon_coherence/mitm_addon.py`      | `MitmproxyAddon.request(flow)`                    |
+| **Unified Benchmark Harness** | `todo/ab_measure_all_methods.py`         | `clean_context_payload()`, Turn telemetry         |
 
 ---
 
@@ -115,8 +119,8 @@ docker run -d --name mitm-context-cleaner \
   -e WIRE_LOG_DIR=/tmp/wire_logs \
   -e CACHE_DIR=/tmp/cache \
   -e PYTHONPATH=/tmp/src \
-  -v "${REPO_ROOT}/holon-agentic-coder-ref/develop/apps/sandbox-executor/src":/tmp/src:ro \
-  -v "${REPO_ROOT}/holon-agentic-coder-ref/develop/apps/sandbox-executor/src/sandbox_executor/token_reduction/mitm_addon.py":/tmp/mitm_addon.py:ro \
+  -v "${REPO_ROOT}/src":/tmp/src:ro \
+  -v "${REPO_ROOT}/src/holon_coherence/mitm_addon.py":/tmp/mitm_addon.py:ro \
   -v "${REPO_ROOT}/todo/mitm_wire_logs":/tmp/wire_logs \
   -v "${REPO_ROOT}/todo/cache":/tmp/cache \
   -v ~/.holon/proxy-ca:/home/mitmproxy/.mitmproxy \
@@ -164,10 +168,10 @@ from pathlib import Path
 
 repo_root = Path(".").resolve()
 files = [
-    "apps/sandbox-executor/src/sandbox_executor/token_reduction/mitm_addon.py",
-    "apps/sandbox-executor/src/sandbox_executor/token_reduction/payload_cleaner.py",
-    "apps/sandbox-executor/src/sandbox_executor/token_reduction/hybrid_cache.py",
-    "apps/sandbox-executor/src/sandbox_executor/cli.py",
+    "src/holon_coherence/mitm_addon.py",
+    "src/holon_coherence/payload_cleaner.py",
+    "src/holon_coherence/hybrid_cache.py",
+    "src/holon_coherence/cli.py",
 ]
 codebase_context = "\n".join(
     f"=== FILE: {f} ===\n{(repo_root / f).read_text(encoding='utf-8')}" for f in files if (repo_root / f).exists()
@@ -193,9 +197,9 @@ Enable `JSONContextCleaner` either via the proxy sidecar or programmatically:
 import sys
 from pathlib import Path
 
-# Add sandbox-executor src to path
-sys.path.insert(0, str(Path("apps/sandbox-executor/src").resolve()))
-from sandbox_executor.token_reduction import JSONContextCleaner
+# Add coherence src to path
+sys.path.insert(0, str(Path("src").resolve()))
+from holon_coherence import JSONContextCleaner
 
 cleaner = JSONContextCleaner(enable_deduplication=True, max_turns=30)
 
