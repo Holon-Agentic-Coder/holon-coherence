@@ -128,6 +128,7 @@ uv tool install git+https://github.com/Holon-Agentic-Coder/holon-coherence.git
 ```
 
 > **Shell Rehashing**: If your shell does not immediately find `holon-coherence` after installation:
+>
 > - For **zsh**: run `rehash` to immediately refresh command hashing.
 > - For **bash**: run `hash -r` to reset remembered shell command locations.
 

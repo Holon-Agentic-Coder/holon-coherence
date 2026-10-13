@@ -24,11 +24,11 @@ cost, making them ideal for high-volume, structured execution tasks.
 
 ## 🏛️ Codebase Architecture & Source Locations
 
-| Component                     | Repository Path                                                                     | Core Function / Class                                  |
-| :---------------------------- | :---------------------------------------------------------------------------------- | :----------------------------------------------------- |
+| Component                     | Repository Path                              | Core Function / Class                                  |
+| :---------------------------- | :------------------------------------------- | :----------------------------------------------------- |
 | **Ringer Orchestrator**       | `src/holon_coherence/ringer_orchestrator.py` | `RingerOrchestrator.plan_subtask()`, `record_result()` |
 | **Subtask Result Summarizer** | `src/holon_coherence/ringer_orchestrator.py` | `SubtaskResult._summarize()`                           |
-| **Unified Benchmark Harness** | `todo/ab_measure_all_methods.py`                                                    | Multi-turn tiered execution suites                     |
+| **Unified Benchmark Harness** | `todo/ab_measure_all_methods.py`             | Multi-turn tiered execution suites                     |
 
 ---
 

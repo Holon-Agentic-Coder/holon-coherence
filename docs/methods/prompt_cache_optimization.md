@@ -30,11 +30,11 @@ However, upstream prompt caching fails completely if:
 
 ## 🏛️ Codebase Architecture & Source Locations
 
-| Component                     | Repository Path                                                                 | Core Function / Class                                  |
-| :---------------------------- | :------------------------------------------------------------------------------ | :----------------------------------------------------- |
+| Component                     | Repository Path                          | Core Function / Class                                  |
+| :---------------------------- | :--------------------------------------- | :----------------------------------------------------- |
 | **Cache Control Injector**    | `src/holon_coherence/payload_cleaner.py` | `JSONContextCleaner._inject_anthropic_cache_control()` |
 | **MITM Telemetry Normalizer** | `src/holon_coherence/mitm_addon.py`      | Normalization of `cache_read_input_tokens`             |
-| **Unified Benchmark Harness** | `todo/ab_measure_all_methods.py`                                                | Multi-turn cache read measurement                      |
+| **Unified Benchmark Harness** | `todo/ab_measure_all_methods.py`         | Multi-turn cache read measurement                      |
 
 ---
 

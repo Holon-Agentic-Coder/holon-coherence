@@ -1355,6 +1355,7 @@ class TestCLIDispatchAndMain:
         with (
             patch("holon_coherence.cli.is_in_container", return_value=False),
             patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.save_web_token"),
             patch("holon_coherence.cli.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
@@ -1376,6 +1377,7 @@ class TestCLIDispatchAndMain:
         with (
             patch("holon_coherence.cli.is_in_container", return_value=False),
             patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.save_web_token"),
             patch("holon_coherence.cli.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
@@ -2241,6 +2243,21 @@ class TestWebTokenAndDashboardAuth:
         retrieved = get_active_web_token(token_path=str(target_path))
         assert retrieved == "super-secret-token"
 
+    def test_get_active_web_token_edge_cases(self, tmp_path: Path) -> None:
+        # Non-existent file
+        assert get_active_web_token(token_path=str(tmp_path / "nonexistent")) is None
+
+        # Empty or whitespace-only file
+        empty_token = tmp_path / "empty"
+        empty_token.write_text("   \n")
+        assert get_active_web_token(token_path=str(empty_token)) is None
+
+        # Unreadable file / OSError handling
+        unreadable = tmp_path / "unreadable"
+        unreadable.write_text("valid-token")
+        with patch("builtins.open", side_effect=OSError("Disk error")):
+            assert get_active_web_token(token_path=str(unreadable)) is None
+
     def test_start_web_command_forwards_web_password_in_container(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("holon_coherence.cli.is_in_container", lambda: True)
         launched: list[list[str]] = []
@@ -2276,9 +2293,9 @@ class TestWebTokenAndDashboardAuth:
             docker_cmd = mock_run.call_args_list[1][0][0]
             assert "-e" in docker_cmd
             assert "HOLON_COHERENCE_WEB_PASSWORD=host-custom-pwd" in docker_cmd
-            assert "--web-password" in docker_cmd
-            pwd_idx = docker_cmd.index("--web-password") + 1
-            assert docker_cmd[pwd_idx] == "host-custom-pwd"
+            # Plaintext password must NOT be in container CLI tail arguments (SEC-01)
+            tail_args = docker_cmd[docker_cmd.index("holon-coherence:latest") :]
+            assert "--web-password" not in tail_args
 
     def test_status_command_displays_web_token(self, capsys: pytest.CaptureFixture[str]) -> None:
         with (

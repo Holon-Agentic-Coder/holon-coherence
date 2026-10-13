@@ -26,11 +26,11 @@ unnecessary tokens.
 
 ## 🏛️ Codebase Architecture & Source Locations
 
-| Component                     | Repository Path                                                                  | Core Function / Class                                   |
-| :---------------------------- | :------------------------------------------------------------------------------- | :------------------------------------------------------ |
+| Component                     | Repository Path                           | Core Function / Class                                   |
+| :---------------------------- | :---------------------------------------- | :------------------------------------------------------ |
 | **Episodic Memory Registry**  | `src/holon_coherence/openbrain_memory.py` | `OpenBrainMemory.store_memory()`, `retrieve_memories()` |
-| **Database Storage**          | `todo/openbrain/openbrain.db`                                                    | Table `memories`                                        |
-| **Unified Benchmark Harness** | `todo/ab_measure_all_methods.py`                                                 | Episodic memory turn reduction measurement              |
+| **Database Storage**          | `todo/openbrain/openbrain.db`             | Table `memories`                                        |
+| **Unified Benchmark Harness** | `todo/ab_measure_all_methods.py`          | Episodic memory turn reduction measurement              |
 
 ---
 

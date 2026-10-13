@@ -22,11 +22,11 @@ proxy and execution harness. When an outgoing request matches an existing entry:
 
 ## 🏛️ Codebase Architecture & Source Locations
 
-| Component                  | Repository Path                                                              | Core Function / Class                              |
-| :------------------------- | :--------------------------------------------------------------------------- | :------------------------------------------------- |
+| Component                  | Repository Path                       | Core Function / Class                              |
+| :------------------------- | :------------------------------------ | :------------------------------------------------- |
 | **Hybrid Cache Store**     | `src/holon_coherence/hybrid_cache.py` | `HybridCacheStore.get()`, `HybridCacheStore.put()` |
 | **MITM Interception Hook** | `src/holon_coherence/mitm_addon.py`   | `MitmproxyAddon.request()` short-circuiting        |
-| **Database Storage**       | `todo/cache/llm_cache.db`                                                    | Table `prompt_cache` (WAL mode enabled)            |
+| **Database Storage**       | `todo/cache/llm_cache.db`             | Table `prompt_cache` (WAL mode enabled)            |
 
 ---
 
@@ -216,5 +216,6 @@ The output confirms:
   rm -f todo/cache/llm_cache.db*
   ```
 - **Semantic False Positives**: Setting `similarity_threshold` too low ($<0.75$) may cause prompts with subtle
-  differences (e.g., different file names) to incorrectly return cached code for the wrong file. Maintain threshold $\ge
+  differences (e.g., different file names) to incorrectly return cached code for the wrong file. Maintain threshold
+  $\ge
   0.85$.

@@ -60,7 +60,7 @@ def handle_web_token(args: Any = None, token_path: str = WEB_TOKEN_PATH) -> int:
     token = tok_getter(token_path)
     if token:
         print(f"🔑 Active web dashboard token: {token}")
-        print("🌐 Access URL: http://127.0.0.1:8081 (or configured --web-port)")
+        print(f"🌐 Access URL: http://127.0.0.1:8081/?token={token} (or configured --web-port)")
         return 0
     print("No active web dashboard session token found.")
     print("Start the proxy with '--web' to generate one: holon-coherence start --web")

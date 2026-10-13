@@ -239,7 +239,7 @@ def handle_status(args: Any = None) -> int:
     token = get_token()
     if token and is_running():
         print(f"\n🔑 Web Dashboard Token: {token}")
-        print("🌐 Access URL: http://127.0.0.1:8081 (or configured --web-port)")
+        print(f"🌐 Access URL: http://127.0.0.1:8081/?token={token} (or configured --web-port)")
     return res.returncode
 
 

@@ -469,7 +469,8 @@ def handle_start(args: Any) -> None:
             )
         print(f"🚀 Starting holon-coherence proxy via {tool} on port {args.port}...")
         if args.web and web_password:
-            print(f"🌐 Web dashboard exposed at http://127.0.0.1:{args.web_port} (Password: {web_password})")
+            print(f"🌐 Web dashboard exposed at http://127.0.0.1:{args.web_port}/?token={web_password}")
+            print(f"🔑 Web API Key / Password: {web_password}")
         try:
             subprocess.run(cmd, check=True)
         except KeyboardInterrupt:
@@ -538,11 +539,12 @@ def handle_start(args: Any) -> None:
     docker_cmd.append(args.image)
     docker_cmd.extend(["start", "--port", "8080"])
     if args.web:
-        docker_cmd.extend(["--web", "--web-port", "8081", "--web-password", web_password])
+        docker_cmd.extend(["--web", "--web-port", "8081"])
 
     print(f"🐳 Starting holon-coherence proxy via Docker container on port {args.port}...")
     if args.web and web_password:
-        print(f"🌐 Web dashboard exposed at http://127.0.0.1:{args.web_port} (Password: {web_password})")
+        print(f"🌐 Web dashboard exposed at http://127.0.0.1:{args.web_port}/?token={web_password}")
+        print(f"🔑 Web API Key / Password: {web_password}")
 
     if args.detach:
         subprocess.run(docker_cmd, check=True)
