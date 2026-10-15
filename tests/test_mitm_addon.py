@@ -769,7 +769,6 @@ class TestTelemetryThroughputBean0097:
     def test_cumulative_metrics_ignores_unmeasured_rates(self) -> None:
         metrics = CumulativeMetrics()
         metrics.record_response(input_tokens=100, output_tokens=50, ttft=None, output_tps=None, prefill_tps=None)
-
         snapshot = metrics.to_dict()
         assert snapshot["avg_prefill_throughput_tps"] == 0.0
         assert snapshot["avg_decode_throughput_tps"] == 0.0
@@ -787,6 +786,25 @@ class TestTelemetryThroughputBean0097:
         assert snapshot["avg_prefill_throughput_tps"] == 400.0
         assert snapshot["latest_ttft_ms"] == 250.0
         assert snapshot["latest_total_time_ms"] == 500.0
+
+    def test_non_200_response_enters_no_rate_samples(self, tmp_path: Path) -> None:
+        """An upstream error is recorded as *not measured* (`None`), never as a fabricated 0.0 rate."""
+        addon = self._addon(tmp_path)
+        flow = self._flow(body='{"error":"rate_limited"}', sse=False)
+        flow.response.status_code = 429
+        flow.request_start_time = time.perf_counter() - 0.05
+        addon.response(flow)
+
+        snapshot = addon.metrics.to_dict()
+        assert snapshot["total_turns"] == 1
+        assert addon.metrics.count_ttft == 0
+        assert addon.metrics.count_prefill == 0
+        assert addon.metrics.count_tail_prefill == 0
+        assert addon.metrics.count_decode == 0
+        assert snapshot["decode_samples"] == 0
+        assert snapshot["avg_decode_throughput_tps"] == 0.0
+        assert snapshot["avg_prefill_throughput_tps"] == 0.0
+        assert snapshot["avg_ttft_ms"] == 0.0
 
     def test_resolve_flow_timing_marks_buffered_reply_without_generation(self) -> None:
         now = time.perf_counter()
@@ -810,6 +828,20 @@ class TestTelemetryThroughputBean0097:
         timing = resolve_flow_timing(flow, completed_at=now)
         assert timing.streaming is True
         assert "below floor" in timing.decode_reason()
+
+    def test_resolve_flow_timing_epoch_fallback_requires_end_time(self) -> None:
+        """A replayed stream without `response.timestamp_end` cannot close an epoch window with perf_counter."""
+        flow = DummyFlow()
+        flow.sse_chunks = [b"data: x\n\n"]
+        flow.request.timestamp_start = 0.5
+        flow.response.timestamp_first_byte = 1.0
+        timing = resolve_flow_timing(flow, completed_at=10.5)
+
+        assert timing.streaming is True
+        assert timing.ttft_sec == pytest.approx(0.5)
+        assert timing.total_sec is None
+        assert timing.generation_sec is None
+        assert timing.decode_reason() == "no chunk window"
 
     def test_metrics_math_guards(self) -> None:
         assert compute_prefill_tps(1000, 0.5) == 2000.0

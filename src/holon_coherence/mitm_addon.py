@@ -445,9 +445,12 @@ def resolve_flow_timing(flow: Any, completed_at: float | None = None) -> FlowTim
 
     generation_sec: float | None = None
     if streaming:
-        window_end = end_time if end_time is not None else completed_at
-        if first_chunk is not None:
-            generation_sec = positive_seconds(window_end - first_chunk)
+        # Both window endpoints must share ``first_chunk``'s clock domain. The perf_counter branch
+        # always resolves an ``end_time``; in the epoch fallback a missing ``response.timestamp_end``
+        # leaves the window unmeasured instead of subtracting an epoch first-chunk from a
+        # perf_counter completion.
+        if first_chunk is not None and end_time is not None:
+            generation_sec = positive_seconds(end_time - first_chunk)
         elif total_sec is not None and ttft_sec is not None:
             generation_sec = positive_seconds(total_sec - ttft_sec)
 
@@ -2264,9 +2267,9 @@ class MitmproxyAddon:
                     cache_creation_tokens=0,
                     reasoning_tokens=0,
                     ttft=None,
-                    output_tps=0.0,
-                    prefill_tps=0.0,
-                    tail_prefill_tps=0.0,
+                    output_tps=None,
+                    prefill_tps=None,
+                    tail_prefill_tps=None,
                 )
             except Exception as exc:
                 logger.debug("Failed to record non-200 wire transaction: %s", exc)
