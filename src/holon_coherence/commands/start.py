@@ -100,10 +100,30 @@ def is_in_container() -> bool:
 
 
 def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
-    """Check if the specified TCP port is currently open and accepting connections."""
+    """Check if the specified TCP port is currently open and accepting connections or cannot be bound."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.5)
-        return s.connect_ex((host, port)) == 0
+        if s.connect_ex((host, port)) == 0:
+            return True
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind((host, port))
+            return False
+        except OSError:
+            return True
+
+
+def find_available_port(start_port: int = 8080, max_attempts: int = 100, host: str = "127.0.0.1") -> int:
+    """Find an available TCP port on the host starting from start_port."""
+    cli = get_cli()
+    in_use = getattr(cli, "is_port_in_use", is_port_in_use)
+    for p in range(start_port, start_port + max_attempts):
+        if not in_use(p, host=host):
+            return p
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((host, 0))
+        return s.getsockname()[1]
 
 
 def wait_for_proxy_ready(port: int, timeout: float = PROXY_READY_TIMEOUT_SECONDS) -> bool:
@@ -483,6 +503,18 @@ def handle_start(args: Any) -> None:
         print(err, file=sys.stderr)
         sys.exit(1)
 
+    in_use = getattr(cli, "is_port_in_use", is_port_in_use)
+    find_port = getattr(cli, "find_available_port", find_available_port)
+
+    # Check proxy port conflict and fallback
+    actual_proxy_port = args.port
+    if in_use(actual_proxy_port):
+        actual_proxy_port = find_port(actual_proxy_port + 1)
+        print(
+            f"⚠️  Port {args.port} is already in use on host. "
+            f"Mapping proxy to host port {actual_proxy_port} instead."
+        )
+
     ca_dir = os.path.expanduser("~/.holon/proxy-ca")
     cache_dir = os.path.expanduser("~/.holon/cache")
     logs_dir = os.path.expanduser("~/.holon/logs")
@@ -508,7 +540,7 @@ def handle_start(args: Any) -> None:
         CONTAINER_NAME,
         *get_alias_args(),
         "-p",
-        f"127.0.0.1:{args.port}:8080",
+        f"127.0.0.1:{actual_proxy_port}:8080",
         "-v",
         f"{ca_dir}:/home/mitmproxy/.mitmproxy",
         "-v",
@@ -520,15 +552,23 @@ def handle_start(args: Any) -> None:
         "-e",
         "WIRE_LOG_DIR=/tmp/wire_logs",
         "-e",
-        f"HOLON_PROXY_PORT={args.port}",
+        f"HOLON_PROXY_PORT={actual_proxy_port}",
         *get_host_local_args(start_host_local_spec),
     ]
 
     web_password = None
+    actual_web_port = getattr(args, "web_port", 8081)
     if args.web:
         web_password = resolve_pwd(getattr(args, "web_password", None))
         save_tok(web_password)
-        docker_cmd.extend(["-p", f"127.0.0.1:{args.web_port}:8081"])
+        if in_use(actual_web_port) or actual_web_port == actual_proxy_port:
+            candidate_start = actual_web_port + 1 if actual_web_port != actual_proxy_port else actual_web_port + 2
+            actual_web_port = find_port(candidate_start)
+            print(
+                f"⚠️  Port {args.web_port} is already in use on host. "
+                f"Mapping web dashboard to host port {actual_web_port} instead."
+            )
+        docker_cmd.extend(["-p", f"127.0.0.1:{actual_web_port}:8081"])
         docker_cmd.extend(["-e", f"HOLON_COHERENCE_WEB_PASSWORD={web_password}"])
 
     if args.detach:
@@ -541,18 +581,33 @@ def handle_start(args: Any) -> None:
     if args.web:
         docker_cmd.extend(["--web", "--web-port", "8081"])
 
-    print(f"🐳 Starting holon-coherence proxy via Docker container on port {args.port}...")
+    print(f"🐳 Starting holon-coherence proxy via Docker container on port {actual_proxy_port}...")
     if args.web and web_password:
-        print(f"🌐 Web dashboard exposed at http://127.0.0.1:{args.web_port}/?token={web_password}")
+        print(f"🌐 Web dashboard exposed at http://127.0.0.1:{actual_web_port}/?token={web_password}")
         print(f"🔑 Web API Key / Password: {web_password}")
 
     if args.detach:
-        subprocess.run(docker_cmd, check=True)
-        print("✅ holon-coherence container running in background.")
-        print("Use 'holon-coherence logs -f' to stream logs or 'holon-coherence stop' to shut down.")
+        try:
+            subprocess.run(docker_cmd, check=True)
+            print("✅ holon-coherence container running in background.")
+            print("Use 'holon-coherence logs -f' to stream logs or 'holon-coherence stop' to shut down.")
+        except subprocess.CalledProcessError as e:
+            print(
+                f"❌ Error: Failed to start Docker container on ports "
+                f"(proxy={actual_proxy_port}, web={actual_web_port if args.web else 'N/A'}): {e}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
     else:
         try:
             subprocess.run(docker_cmd)
+        except subprocess.CalledProcessError as e:
+            print(
+                f"❌ Error: Failed to start Docker container on ports "
+                f"(proxy={actual_proxy_port}, web={actual_web_port if args.web else 'N/A'}): {e}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         except KeyboardInterrupt:
             print("\nShutting down holon-coherence container...")
             subprocess.run(

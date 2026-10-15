@@ -161,15 +161,40 @@ class TestCumulativeMetrics:
 
     def test_record_response(self) -> None:
         m = CumulativeMetrics()
-        m.record_response(input_tokens=100, output_tokens=50, cache_read_tokens=20, ttft=0.2, output_tps=25.0)
-        m.record_response(input_tokens=200, output_tokens=100, cache_read_tokens=40, ttft=0.4, output_tps=35.0)
+        m.record_response(
+            input_tokens=100,
+            output_tokens=50,
+            cache_read_tokens=20,
+            cache_creation_tokens=10,
+            reasoning_tokens=5,
+            ttft=0.2,
+            output_tps=25.0,
+            prefill_tps=500.0,
+            tail_prefill_tps=400.0,
+        )
+        m.record_response(
+            input_tokens=200,
+            output_tokens=100,
+            cache_read_tokens=40,
+            cache_creation_tokens=20,
+            reasoning_tokens=15,
+            ttft=0.4,
+            output_tps=35.0,
+            prefill_tps=500.0,
+            tail_prefill_tps=400.0,
+        )
         d = m.to_dict()
         assert d["total_turns"] == 2
         assert d["total_input_tokens"] == 300
         assert d["total_output_tokens"] == 150
         assert d["total_cache_read_tokens"] == 60
+        assert d["total_cache_creation_tokens"] == 30
+        assert d["total_reasoning_tokens"] == 20
         assert d["avg_ttft_ms"] == 300.0  # (200ms + 400ms) / 2
         assert d["avg_decode_throughput_tps"] == 30.0  # (25.0 + 35.0) / 2
+        assert d["avg_prefill_throughput_tps"] == 500.0
+        assert d["avg_tail_prefill_tps"] == 400.0
+        assert d["provider_cache_hit_rate"] == 0.2  # 60 / 300
 
 
 class TestMetricsAndDashboardEndpoints:

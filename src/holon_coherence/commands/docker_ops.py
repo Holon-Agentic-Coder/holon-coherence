@@ -233,42 +233,72 @@ def handle_stop(args: Any = None) -> int:
     return 0
 
 
+def get_container_mapped_port(container_name: str = CONTAINER_NAME, container_port: int = 8080) -> int | None:
+    """Return the host port mapped to the specified container TCP port."""
+    try:
+        res = subprocess.run(
+            ["docker", "port", container_name, f"{container_port}/tcp"],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=False,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            first_line = res.stdout.strip().splitlines()[0]
+            port_str = first_line.split(":")[-1].strip()
+            return int(port_str)
+    except Exception:
+        pass
+    return None
+
+
 def handle_status(args: Any = None) -> int:
     """Check status of holon-coherence Docker container."""
     cli = get_cli()
     is_running = getattr(cli, "is_container_running", is_container_running)
     get_token = getattr(cli, "get_active_web_token", get_active_web_token)
+    get_mapped_port = getattr(cli, "get_container_mapped_port", get_container_mapped_port)
     res = subprocess.run(["docker", "ps", "-a", "--filter", f"name={CONTAINER_NAME}"])
     token = get_token()
-    if is_running():
-        if token:
-            print(f"\n🔑 Web Dashboard Token: {token}")
-            print(f"🌐 Access URL: http://127.0.0.1:8081/?token={token} (or configured --web-port)")
+
+    if not is_running():
+        print("\n🔴 holon-coherence is down (not running).")
+        return res.returncode
+
+    web_port = get_mapped_port(CONTAINER_NAME, 8081)
+    if token and web_port:
+        print(f"\n🔑 Web Dashboard Token: {token}")
+        print(f"🌐 Access URL: http://127.0.0.1:{web_port}/?token={token}")
+
+    proxy_port = get_mapped_port(CONTAINER_NAME, 8080)
+    if proxy_port is None:
         proxy_port_str = os.getenv("HOLON_PROXY_PORT", "8080")
         try:
             proxy_port = int(proxy_port_str)
         except ValueError:
             proxy_port = 8080
-        try:
-            req = urllib.request.Request(
-                f"http://127.0.0.1:{proxy_port}/holon/api/metrics",
-                headers={"User-Agent": "holon-coherence-cli"},
-            )
-            with urllib.request.urlopen(req, timeout=1.0) as resp:
-                if resp.status == 200:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    hit_rate = data.get("cache_hit_rate", 0.0) * 100
-                    pruned = data.get("tool_calls_pruned", 0)
-                    reduced = data.get("tokens_reduced", 0)
-                    tps = data.get("avg_decode_throughput_tps", 0.0)
-                    print("\n📊 Optimization Metrics Summary:")
-                    print(
-                        f"   Tool Calls Saved: {pruned:,} | Tokens Reduced: {reduced:,} | "
-                        f"Cache Hit Rate: {hit_rate:.1f}% | Throughput: {tps:.1f} t/s"
-                    )
-                    print(f"   🌐 Live Dashboard: http://127.0.0.1:{proxy_port}/holon/")
-        except Exception:
-            pass
+
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{proxy_port}/holon/api/metrics",
+            headers={"User-Agent": "holon-coherence-cli"},
+        )
+        with urllib.request.urlopen(req, timeout=1.0) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode("utf-8"))
+                hit_rate = data.get("cache_hit_rate", 0.0) * 100
+                pruned = data.get("tool_calls_pruned", 0)
+                reduced = data.get("tokens_reduced", 0)
+                tps = data.get("avg_decode_throughput_tps", 0.0)
+                prefill_tps = data.get("avg_prefill_throughput_tps", 0.0)
+                print("\n📊 Optimization Metrics Summary:")
+                print(
+                    f"   Tool Calls Saved: {pruned:,} | Tokens Reduced: {reduced:,} | "
+                    f"Cache Hit Rate: {hit_rate:.1f}% | Prefill: {prefill_tps:.1f} t/s | Output: {tps:.1f} t/s"
+                )
+                print(f"   🌐 Live Dashboard: http://127.0.0.1:{proxy_port}/holon/")
+    except Exception:
+        pass
     return res.returncode
 
 
