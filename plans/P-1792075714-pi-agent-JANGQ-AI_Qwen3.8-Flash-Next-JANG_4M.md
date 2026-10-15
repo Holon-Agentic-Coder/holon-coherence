@@ -27,7 +27,7 @@ Three defects make `holon-coherence` telemetry untrustworthy:
 
    ```python
    if req_start is None:
-       req_start = now          # both stamps land on the same reading
+       req_start = now  # both stamps land on the same reading
    if resp_headers_time is None:
        resp_headers_time = now  # => ttfb = 0.0, ttft = 0.0
    prefill_tps = input_tokens / ttft if ttft > 0 else 0.0
@@ -35,7 +35,7 @@ Three defects make `holon-coherence` telemetry untrustworthy:
 
    A flow whose request hook never stamped `request_start_time` (resumed/replayed flows, and any
    path where `request()` is not observed for the same flow object) therefore produced
-   `ttft == 0.0` and a *fabricated* `0.00` prefill reading next to a genuinely large token volume.
+   `ttft == 0.0` and a _fabricated_ `0.00` prefill reading next to a genuinely large token volume.
    `0.0` was then indistinguishable from "no data" in every consumer.
 
 2. **Decode throughput reads 34,000-38,000+ tokens/sec.**
@@ -138,13 +138,13 @@ the 34k-38k artefacts while still admitting credible legacy windows.
 
 ## 4. Acceptance Criteria Mapping
 
-| Acceptance criterion                                                            | Implementation                                        | Test                                                  |
-| ------------------------------------------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------- |
-| Non-streaming requests never compute or corrupt decode TPS                       | `generation_sec` is `None` unless SSE; header/logging | `test_non_streaming_reply_never_samples_decode`       |
-| Sub-50 ms generation windows are guarded                                         | `compute_decode_tps` floor                            | `test_buffered_stream_burst_below_floor_is_unmeasured` |
-| Prefill = prompt tokens / TTFT whenever both are positive                        | `compute_prefill_tps`, no `now` substitution          | `test_genuine_stream_yields_prefill_and_decode`, `test_missing_start_timestamp_is_unmeasured_not_zero`, `test_wall_clock_timestamps_recover_prefill` |
-| All surfaces mathematically consistent                                           | shared `metrics_math`, stored wire-log rates          | `test_live_and_offline_metric_surfaces_agree`, `test_wire_log_publishes_streaming_timing` |
-| Comprehensive tests for streaming and non-streaming TPS in `test_mitm_addon.py` / `test_cli.py` | 15 new cases                                          | both classes                                          |
+| Acceptance criterion                                                                            | Implementation                                        | Test                                                                                                                                                 |
+| ----------------------------------------------------------------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Non-streaming requests never compute or corrupt decode TPS                                      | `generation_sec` is `None` unless SSE; header/logging | `test_non_streaming_reply_never_samples_decode`                                                                                                      |
+| Sub-50 ms generation windows are guarded                                                        | `compute_decode_tps` floor                            | `test_buffered_stream_burst_below_floor_is_unmeasured`                                                                                               |
+| Prefill = prompt tokens / TTFT whenever both are positive                                       | `compute_prefill_tps`, no `now` substitution          | `test_genuine_stream_yields_prefill_and_decode`, `test_missing_start_timestamp_is_unmeasured_not_zero`, `test_wall_clock_timestamps_recover_prefill` |
+| All surfaces mathematically consistent                                                          | shared `metrics_math`, stored wire-log rates          | `test_live_and_offline_metric_surfaces_agree`, `test_wire_log_publishes_streaming_timing`                                                            |
+| Comprehensive tests for streaming and non-streaming TPS in `test_mitm_addon.py` / `test_cli.py` | 15 new cases                                          | both classes                                                                                                                                         |
 
 ## 5. Risks and Mitigations
 
