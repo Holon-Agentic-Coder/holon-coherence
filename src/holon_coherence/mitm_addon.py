@@ -440,9 +440,7 @@ class CumulativeMetrics:
             )
             avg_ttft = (self.sum_ttft_ms / self.count_ttft) if self.count_ttft > 0 else 0.0
             avg_tps = (self.sum_decode_throughput_tps / self.count_decode) if self.count_decode > 0 else 0.0
-            avg_prefill = (
-                (self.sum_prefill_throughput_tps / self.count_prefill) if self.count_prefill > 0 else 0.0
-            )
+            avg_prefill = (self.sum_prefill_throughput_tps / self.count_prefill) if self.count_prefill > 0 else 0.0
             avg_tail_prefill = (
                 (self.sum_tail_prefill_throughput_tps / self.count_tail_prefill) if self.count_tail_prefill > 0 else 0.0
             )

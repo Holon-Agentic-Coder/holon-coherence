@@ -1413,6 +1413,27 @@ class TestCLIDispatchAndMain:
             docker_cmd = mock_run.call_args_list[1][0][0]
             assert "127.0.0.1:8082:8081" in docker_cmd
 
+    def test_start_command_proxy_and_web_port_conflict_prevents_collision(self) -> None:
+        def fake_in_use(port: int, host: str = "127.0.0.1") -> bool:
+            return port in (8080, 8081)
+
+        with (
+            patch("holon_coherence.cli.is_in_container", return_value=False),
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", side_effect=fake_in_use),
+            patch("holon_coherence.cli.save_web_token"),
+            patch("holon_coherence.cli.ensure_docker_image"),
+            patch("os.makedirs"),
+            patch("os.path.exists", return_value=True),
+            patch("subprocess.run") as mock_run,
+        ):
+            main(["start", "-d", "--web"])
+            docker_cmd = mock_run.call_args_list[1][0][0]
+            # Proxy was 8080 (in use) -> falls back to 8082
+            assert "127.0.0.1:8082:8080" in docker_cmd
+            # Web was 8081 (in use) -> candidate 8082 collides with proxy -> falls back to 8083
+            assert "127.0.0.1:8083:8081" in docker_cmd
+
     def test_start_command_with_custom_web_port(self) -> None:
         with (
             patch("holon_coherence.cli.is_in_container", return_value=False),
@@ -2353,7 +2374,20 @@ class TestWebTokenAndDashboardAuth:
             assert "Web Dashboard Token:" in captured.out
 
     def test_status_command_when_down_displays_explicit_indicator(self, capsys: pytest.CaptureFixture[str]) -> None:
-        with patch("holon_coherence.cli.is_container_running", return_value=False):
+        with (
+            patch("holon_coherence.cli.is_container_running", return_value=False),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value.returncode = 1
+            main(["status"])
+            captured = capsys.readouterr()
+            assert "🔴 holon-coherence is down (not running)" in captured.out
+
+    def test_status_command_when_docker_missing_does_not_crash(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("holon_coherence.cli.is_container_running", return_value=False),
+            patch("subprocess.run", side_effect=FileNotFoundError("docker")),
+        ):
             main(["status"])
             captured = capsys.readouterr()
             assert "🔴 holon-coherence is down (not running)" in captured.out

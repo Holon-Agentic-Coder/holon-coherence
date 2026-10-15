@@ -258,12 +258,16 @@ def handle_status(args: Any = None) -> int:
     is_running = getattr(cli, "is_container_running", is_container_running)
     get_token = getattr(cli, "get_active_web_token", get_active_web_token)
     get_mapped_port = getattr(cli, "get_container_mapped_port", get_container_mapped_port)
-    res = subprocess.run(["docker", "ps", "-a", "--filter", f"name={CONTAINER_NAME}"])
+    try:
+        res = subprocess.run(["docker", "ps", "-a", "--filter", f"name={CONTAINER_NAME}"])
+        retcode = res.returncode
+    except (subprocess.SubprocessError, OSError):
+        retcode = 1
     token = get_token()
 
     if not is_running():
         print("\n🔴 holon-coherence is down (not running).")
-        return res.returncode
+        return retcode
 
     web_port = get_mapped_port(CONTAINER_NAME, 8081)
     if token and web_port:
@@ -299,7 +303,7 @@ def handle_status(args: Any = None) -> int:
                 print(f"   🌐 Live Dashboard: http://127.0.0.1:{proxy_port}/holon/")
     except Exception:
         pass
-    return res.returncode
+    return retcode
 
 
 def handle_logs(args: Any) -> int:

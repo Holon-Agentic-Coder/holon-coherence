@@ -212,6 +212,7 @@ def handle_metrics(
             candidate_dirs.append(env_wire_log)
         candidate_dirs.append("todo/mitm_wire_logs")
         candidate_dirs.append(os.path.expanduser("~/.holon/logs"))
+        candidate_dirs = list(dict.fromkeys(candidate_dirs))
 
         for c_dir in candidate_dirs:
             metrics = _read_offline_metrics(c_dir)

@@ -510,10 +510,7 @@ def handle_start(args: Any) -> None:
     actual_proxy_port = args.port
     if in_use(actual_proxy_port):
         actual_proxy_port = find_port(actual_proxy_port + 1)
-        print(
-            f"⚠️  Port {args.port} is already in use on host. "
-            f"Mapping proxy to host port {actual_proxy_port} instead."
-        )
+        print(f"⚠️  Port {args.port} is already in use on host. Mapping proxy to host port {actual_proxy_port} instead.")
 
     ca_dir = os.path.expanduser("~/.holon/proxy-ca")
     cache_dir = os.path.expanduser("~/.holon/cache")
@@ -562,8 +559,10 @@ def handle_start(args: Any) -> None:
         web_password = resolve_pwd(getattr(args, "web_password", None))
         save_tok(web_password)
         if in_use(actual_web_port) or actual_web_port == actual_proxy_port:
-            candidate_start = actual_web_port + 1 if actual_web_port != actual_proxy_port else actual_web_port + 2
+            candidate_start = actual_web_port + 1
             actual_web_port = find_port(candidate_start)
+            while actual_web_port == actual_proxy_port or in_use(actual_web_port):
+                actual_web_port = find_port(actual_web_port + 1)
             print(
                 f"⚠️  Port {args.web_port} is already in use on host. "
                 f"Mapping web dashboard to host port {actual_web_port} instead."
