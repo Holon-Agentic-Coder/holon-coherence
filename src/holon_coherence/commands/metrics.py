@@ -9,6 +9,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from holon_coherence.commands.docker_ops import CONTAINER_NAME, get_container_mapped_port
 from holon_coherence.commands.start import DEFAULT_PROXY_PORT
 
 WIRE_LOG_DIR = os.getenv("WIRE_LOG_DIR", "todo/mitm_wire_logs")
@@ -29,10 +30,18 @@ def _read_offline_metrics(wire_log_dir: str) -> dict[str, Any] | None:
     total_input_tokens = 0
     total_output_tokens = 0
     total_cache_read_tokens = 0
+    total_cache_creation_tokens = 0
+    total_reasoning_tokens = 0
     sum_ttft_ms = 0.0
     count_ttft = 0
     sum_decode_throughput_tps = 0.0
     count_decode = 0
+    sum_prefill_throughput_tps = 0.0
+    count_prefill = 0
+    latest_prefill_tps = 0.0
+    sum_tail_prefill_tps = 0.0
+    count_tail_prefill = 0
+    latest_tail_prefill_tps = 0.0
     seen_turn_ids: set[str | int] = set()
 
     try:
@@ -62,26 +71,43 @@ def _read_offline_metrics(wire_log_dir: str) -> dict[str, Any] | None:
                     cache_control_injected += delta.get("cache_control_injected", 0)
 
                 resp = record.get("response", {})
+                in_toks = 0
+                out_toks = 0
+                cache_read_toks = 0
+                cache_create_toks = 0
+                reason_toks = 0
                 if isinstance(resp, dict):
                     usage = resp.get("usage", {})
                     if isinstance(usage, dict):
-                        total_input_tokens += usage.get("input_tokens", 0)
-                        total_output_tokens += usage.get("output_tokens", 0)
-                        total_cache_read_tokens += usage.get("cache_read_input_tokens", 0)
+                        in_toks = usage.get("input_tokens") or 0
+                        out_toks = usage.get("output_tokens") or 0
+                        cache_read_toks = usage.get("cache_read_input_tokens") or 0
+                        cache_create_toks = usage.get("cache_creation_input_tokens") or 0
+                        reason_toks = usage.get("reasoning_tokens") or usage.get("thinking_tokens") or 0
+                        total_input_tokens += in_toks
+                        total_output_tokens += out_toks
+                        total_cache_read_tokens += cache_read_toks
+                        total_cache_creation_tokens += cache_create_toks
+                        total_reasoning_tokens += reason_toks
 
                 timing = record.get("timing", {})
                 if isinstance(timing, dict):
                     ttft = timing.get("ttft_ms")
+                    total_ms = timing.get("total_ms")
                     if ttft is not None and ttft > 0:
                         sum_ttft_ms += float(ttft)
                         count_ttft += 1
-                    total_ms = timing.get("total_ms")
-                    resp_val = record.get("response", {})
-                    out_toks = 0
-                    if isinstance(resp_val, dict):
-                        usage_val = resp_val.get("usage", {})
-                        if isinstance(usage_val, dict):
-                            out_toks = usage_val.get("output_tokens", 0)
+                        ttft_sec = float(ttft) / 1000.0
+                        if in_toks > 0 and ttft_sec > 0:
+                            p_tps = in_toks / ttft_sec
+                            sum_prefill_throughput_tps += p_tps
+                            count_prefill += 1
+                            latest_prefill_tps = p_tps
+                            uncached_in = max(0, in_toks - cache_read_toks)
+                            tail_p_tps = uncached_in / ttft_sec
+                            sum_tail_prefill_tps += tail_p_tps
+                            count_tail_prefill += 1
+                            latest_tail_prefill_tps = tail_p_tps
                     if total_ms is not None and ttft is not None and (total_ms - ttft) > 0 and out_toks > 0:
                         gen_sec = (total_ms - ttft) / 1000.0
                         sum_decode_throughput_tps += out_toks / gen_sec
@@ -94,8 +120,11 @@ def _read_offline_metrics(wire_log_dir: str) -> dict[str, Any] | None:
         return None
 
     cache_hit_rate = (cache_hits / total_requests) if total_requests > 0 else 0.0
+    provider_cache_hit_rate = (total_cache_read_tokens / total_input_tokens) if total_input_tokens > 0 else 0.0
     avg_ttft_ms = (sum_ttft_ms / count_ttft) if count_ttft > 0 else 0.0
     avg_decode_throughput_tps = (sum_decode_throughput_tps / count_decode) if count_decode > 0 else 0.0
+    avg_prefill_throughput_tps = (sum_prefill_throughput_tps / count_prefill) if count_prefill > 0 else 0.0
+    avg_tail_prefill_tps = (sum_tail_prefill_tps / count_tail_prefill) if count_tail_prefill > 0 else 0.0
     tokens_reduced = chars_saved // 4
 
     return {
@@ -104,6 +133,7 @@ def _read_offline_metrics(wire_log_dir: str) -> dict[str, Any] | None:
         "cache_hits": cache_hits,
         "cache_misses": max(0, total_requests - cache_hits),
         "cache_hit_rate": round(cache_hit_rate, 4),
+        "provider_cache_hit_rate": round(provider_cache_hit_rate, 4),
         "tool_calls_pruned": tool_calls_pruned,
         "tokens_reduced": tokens_reduced,
         "chars_saved": chars_saved,
@@ -111,9 +141,15 @@ def _read_offline_metrics(wire_log_dir: str) -> dict[str, Any] | None:
         "cache_control_injected": cache_control_injected,
         "avg_ttft_ms": round(avg_ttft_ms, 2),
         "avg_decode_throughput_tps": round(avg_decode_throughput_tps, 2),
+        "avg_prefill_throughput_tps": round(avg_prefill_throughput_tps, 2),
+        "latest_prefill_tps": round(latest_prefill_tps, 2),
+        "avg_tail_prefill_tps": round(avg_tail_prefill_tps, 2),
+        "latest_tail_prefill_tps": round(latest_tail_prefill_tps, 2),
         "total_input_tokens": total_input_tokens,
         "total_output_tokens": total_output_tokens,
         "total_cache_read_tokens": total_cache_read_tokens,
+        "total_cache_creation_tokens": total_cache_creation_tokens,
+        "total_reasoning_tokens": total_reasoning_tokens,
         "source": "offline_wire_log",
     }
 
@@ -146,7 +182,8 @@ def handle_metrics(
             except ValueError:
                 target_port = DEFAULT_PROXY_PORT
         else:
-            target_port = DEFAULT_PROXY_PORT
+            mapped = get_container_mapped_port(CONTAINER_NAME, DEFAULT_PROXY_PORT)
+            target_port = mapped if mapped is not None else DEFAULT_PROXY_PORT
 
     is_json = getattr(args, "json", False) if args is not None else False
     if json_output:
@@ -169,8 +206,18 @@ def handle_metrics(
 
     # 2. Fallback to offline wire logs if proxy is not reachable
     if metrics is None:
-        target_dir = os.getenv("WIRE_LOG_DIR", WIRE_LOG_DIR)
-        metrics = _read_offline_metrics(target_dir)
+        candidate_dirs = []
+        env_wire_log = os.getenv("WIRE_LOG_DIR")
+        if env_wire_log:
+            candidate_dirs.append(env_wire_log)
+        candidate_dirs.append("todo/mitm_wire_logs")
+        candidate_dirs.append(os.path.expanduser("~/.holon/logs"))
+        candidate_dirs = list(dict.fromkeys(candidate_dirs))
+
+        for c_dir in candidate_dirs:
+            metrics = _read_offline_metrics(c_dir)
+            if metrics is not None:
+                break
 
     # 3. Handle case where neither live proxy nor offline logs are available
     if metrics is None:
@@ -178,7 +225,7 @@ def handle_metrics(
             print(json.dumps({"error": "Proxy not reachable and no offline wire logs found", "port": target_port}))
         else:
             print(f"⚠️  Could not connect to proxy at {endpoint_url}", file=sys.stderr)
-            print("   No offline transaction logs found in WIRE_LOG_DIR.", file=sys.stderr)
+            print("   No offline transaction logs found in WIRE_LOG_DIR or ~/.holon/logs.", file=sys.stderr)
             print(
                 "   Start the proxy with 'holon-coherence start' or run an agent with 'holon-coherence claude'.",
                 file=sys.stderr,
@@ -198,6 +245,9 @@ def handle_metrics(
     chars_saved = metrics.get("chars_saved", 0)
     avg_ttft = metrics.get("avg_ttft_ms", 0.0)
     avg_decode_tps = metrics.get("avg_decode_throughput_tps", 0.0)
+    avg_prefill_tps = metrics.get("avg_prefill_throughput_tps", 0.0)
+    latest_prefill_tps = metrics.get("latest_prefill_tps", 0.0)
+    avg_tail_prefill_tps = metrics.get("avg_tail_prefill_tps", 0.0)
     total_turns = metrics.get("total_turns", 0)
     total_requests = metrics.get("total_requests", 0)
     cache_hits = metrics.get("cache_hits", 0)
@@ -205,6 +255,12 @@ def handle_metrics(
     total_in = metrics.get("total_input_tokens", 0)
     total_out = metrics.get("total_output_tokens", 0)
     total_cache_read = metrics.get("total_cache_read_tokens", 0)
+    total_cache_create = metrics.get("total_cache_creation_tokens", 0)
+    total_reasoning = metrics.get("total_reasoning_tokens", 0)
+    provider_cache_rate = metrics.get("provider_cache_hit_rate")
+    if provider_cache_rate is None:
+        provider_cache_rate = (total_cache_read / total_in) if total_in > 0 else 0.0
+    provider_cache_pct = provider_cache_rate * 100.0
 
     print("=" * 64)
     print("           HOLON COHERENCE OPTIMIZATION METRICS")
@@ -214,13 +270,20 @@ def handle_metrics(
     print(f"  ⚡ Tokens Reduced:              {tokens_reduced:,} (Chars Saved: {chars_saved:,})")
     print(f"  🎯 Cache Hit Rate:              {hit_rate_pct:.1f}% ({cache_hits:,} hits / {total_requests:,} total)")
     print(f"  ⏱️  Average TTFT:               {avg_ttft:.2f} ms")
+    print(f"  🚀 Prompt (Prefill) Speed:     {avg_prefill_tps:.2f} tokens/sec (Latest: {latest_prefill_tps:.2f} t/s)")
+    if avg_tail_prefill_tps > 0:
+        print(f"  ⚡ Tail Prefill Speed:        {avg_tail_prefill_tps:.2f} tokens/sec")
     print(f"  🚀 Decode Throughput:          {avg_decode_tps:.2f} tokens/sec")
     print("-" * 64)
     print(f"  📊 Total Turns:                {total_turns:,}")
     print(f"  🔄 Total Requests:             {total_requests:,} ({cache_hits:,} cached, {cache_misses:,} upstream)")
     print(f"  📥 Total Input Tokens:         {total_in:,}")
     print(f"  📤 Total Output Tokens:        {total_out:,}")
-    print(f"  💾 Cache Read Tokens:          {total_cache_read:,}")
+    print(f"  💾 Cache Read Tokens:          {total_cache_read:,} ({provider_cache_pct:.1f}% KV hit)")
+    if total_cache_create > 0:
+        print(f"  💾 Cache Write Tokens:         {total_cache_create:,}")
+    if total_reasoning > 0:
+        print(f"  🧠 Reasoning Tokens:          {total_reasoning:,}")
     print("=" * 64)
     print(f"🌐 Live Web Dashboard: http://127.0.0.1:{target_port}/holon/")
     print("=" * 64)

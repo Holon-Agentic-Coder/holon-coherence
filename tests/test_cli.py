@@ -1357,6 +1357,7 @@ class TestCLIDispatchAndMain:
         with (
             patch("holon_coherence.cli.is_in_container", return_value=False),
             patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", return_value=False),
             patch("holon_coherence.cli.save_web_token"),
             patch("holon_coherence.cli.ensure_docker_image"),
             patch("os.makedirs"),
@@ -1375,10 +1376,69 @@ class TestCLIDispatchAndMain:
             web_port_idx = docker_cmd.index("--web-port") + 1
             assert docker_cmd[web_port_idx] == "8081"
 
+    def test_start_command_proxy_port_conflict_fallback(self) -> None:
+        def fake_in_use(port: int, host: str = "127.0.0.1") -> bool:
+            return port == 8080
+
+        with (
+            patch("holon_coherence.cli.is_in_container", return_value=False),
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", side_effect=fake_in_use),
+            patch("holon_coherence.cli.ensure_docker_image"),
+            patch("os.makedirs"),
+            patch("os.path.exists", return_value=True),
+            patch("subprocess.run") as mock_run,
+        ):
+            main(["start", "-d"])
+            docker_cmd = mock_run.call_args_list[1][0][0]
+            port_index = docker_cmd.index("-p") + 1
+            assert docker_cmd[port_index] == "127.0.0.1:8081:8080"
+            assert "HOLON_PROXY_PORT=8081" in docker_cmd
+
+    def test_start_command_web_port_conflict_fallback(self) -> None:
+        def fake_in_use(port: int, host: str = "127.0.0.1") -> bool:
+            return port == 8081
+
+        with (
+            patch("holon_coherence.cli.is_in_container", return_value=False),
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", side_effect=fake_in_use),
+            patch("holon_coherence.cli.save_web_token"),
+            patch("holon_coherence.cli.ensure_docker_image"),
+            patch("os.makedirs"),
+            patch("os.path.exists", return_value=True),
+            patch("subprocess.run") as mock_run,
+        ):
+            main(["start", "-d", "--web"])
+            docker_cmd = mock_run.call_args_list[1][0][0]
+            assert "127.0.0.1:8082:8081" in docker_cmd
+
+    def test_start_command_proxy_and_web_port_conflict_prevents_collision(self) -> None:
+        def fake_in_use(port: int, host: str = "127.0.0.1") -> bool:
+            return port in (8080, 8081)
+
+        with (
+            patch("holon_coherence.cli.is_in_container", return_value=False),
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", side_effect=fake_in_use),
+            patch("holon_coherence.cli.save_web_token"),
+            patch("holon_coherence.cli.ensure_docker_image"),
+            patch("os.makedirs"),
+            patch("os.path.exists", return_value=True),
+            patch("subprocess.run") as mock_run,
+        ):
+            main(["start", "-d", "--web"])
+            docker_cmd = mock_run.call_args_list[1][0][0]
+            # Proxy was 8080 (in use) -> falls back to 8082
+            assert "127.0.0.1:8082:8080" in docker_cmd
+            # Web was 8081 (in use) -> candidate 8082 collides with proxy -> falls back to 8083
+            assert "127.0.0.1:8083:8081" in docker_cmd
+
     def test_start_command_with_custom_web_port(self) -> None:
         with (
             patch("holon_coherence.cli.is_in_container", return_value=False),
             patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", return_value=False),
             patch("holon_coherence.cli.save_web_token"),
             patch("holon_coherence.cli.ensure_docker_image"),
             patch("os.makedirs"),
@@ -2313,6 +2373,25 @@ class TestWebTokenAndDashboardAuth:
             assert "active-session-tok" in captured.out
             assert "Web Dashboard Token:" in captured.out
 
+    def test_status_command_when_down_displays_explicit_indicator(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("holon_coherence.cli.is_container_running", return_value=False),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value.returncode = 1
+            main(["status"])
+            captured = capsys.readouterr()
+            assert "🔴 holon-coherence is down (not running)" in captured.out
+
+    def test_status_command_when_docker_missing_does_not_crash(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("holon_coherence.cli.is_container_running", return_value=False),
+            patch("subprocess.run", side_effect=FileNotFoundError("docker")),
+        ):
+            main(["status"])
+            captured = capsys.readouterr()
+            assert "🔴 holon-coherence is down (not running)" in captured.out
+
     def test_web_token_and_web_key_commands(self, capsys: pytest.CaptureFixture[str]) -> None:
         # Token exists: web-token
         with (
@@ -2417,7 +2496,14 @@ class TestCLIMetricsCommand:
                 "turn_id": 2,
                 "cache_action": "MISS",
                 "delta": {"tool_outputs_omitted": 3, "chars_saved": 800},
-                "response": {"usage": {"input_tokens": 200, "output_tokens": 100, "cache_read_input_tokens": 0}},
+                "response": {
+                    "usage": {
+                        "input_tokens": 200,
+                        "output_tokens": 100,
+                        "cache_read_input_tokens": 0,
+                        "reasoning_tokens": None,
+                    }
+                },
                 "timing": {"ttft_ms": 100.0, "total_ms": 1100.0},
             },
         ]
@@ -2436,6 +2522,96 @@ class TestCLIMetricsCommand:
         assert data["cache_hits"] == 1
         assert data["total_requests"] == 2
         assert data["avg_decode_throughput_tps"] == 100.0
+        assert data["total_reasoning_tokens"] == 0
+
+    def test_handle_metrics_offline_fallback_holon_logs(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.delenv("WIRE_LOG_DIR", raising=False)
+        fake_home = tmp_path / "home"
+        holon_logs = fake_home / ".holon" / "logs"
+        holon_logs.mkdir(parents=True)
+        jsonl = holon_logs / "transactions.jsonl"
+        record = {
+            "turn_id": 1,
+            "cache_action": "MISS",
+            "delta": {"tool_outputs_omitted": 1, "chars_saved": 40},
+            "response": {
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "cache_read_input_tokens": 20,
+                    "cache_creation_input_tokens": 10,
+                    "reasoning_tokens": 5,
+                }
+            },
+            "timing": {"ttft_ms": 200.0, "total_ms": 1200.0},
+        }
+        with open(jsonl, "w", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+
+        with (
+            patch("os.path.expanduser", side_effect=lambda p: str(holon_logs) if "~/.holon/logs" in p else p),
+            patch("urllib.request.urlopen", side_effect=OSError("connection refused")),
+        ):
+            ret = handle_metrics(json_output=True)
+        assert ret == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["source"] == "offline_wire_log"
+        assert data["avg_prefill_throughput_tps"] == 500.0  # 100 / 0.2s
+        assert data["avg_tail_prefill_tps"] == 400.0  # 80 / 0.2s
+        assert data["avg_decode_throughput_tps"] == 50.0  # 50 / 1.0s
+        assert data["total_cache_creation_tokens"] == 10
+        assert data["total_reasoning_tokens"] == 5
+
+    def test_handle_metrics_prefill_and_kv_cache_terminal_output(
+        self,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        mock_payload = json.dumps(
+            {
+                "total_turns": 3,
+                "total_requests": 5,
+                "cache_hits": 2,
+                "cache_misses": 3,
+                "cache_hit_rate": 0.4,
+                "provider_cache_hit_rate": 0.75,
+                "tool_calls_pruned": 6,
+                "tokens_reduced": 100,
+                "chars_saved": 400,
+                "avg_ttft_ms": 150.0,
+                "avg_decode_throughput_tps": 60.0,
+                "avg_prefill_throughput_tps": 650.0,
+                "latest_prefill_tps": 700.0,
+                "avg_tail_prefill_tps": 200.0,
+                "total_input_tokens": 2000,
+                "total_output_tokens": 500,
+                "total_cache_read_tokens": 1500,
+                "total_cache_creation_tokens": 250,
+                "total_reasoning_tokens": 40,
+            }
+        ).encode("utf-8")
+
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = mock_payload
+        mock_resp.__enter__.return_value = mock_resp
+
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            ret = handle_metrics(port=8080)
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "Prompt (Prefill) Speed:     650.00 tokens/sec" in out
+        assert "Latest: 700.00 t/s" in out
+        assert "Tail Prefill Speed:        200.00 tokens/sec" in out
+        assert "Decode Throughput:          60.00 tokens/sec" in out
+        assert "Cache Hit Rate:              40.0%" in out
+        assert "75.0% KV hit" in out
+        assert "Cache Write Tokens:         250" in out
+        assert "Reasoning Tokens:          40" in out
 
     def test_metrics_cli_dispatch(self) -> None:
         with (

@@ -58,3 +58,5 @@ scratch/
 
 # Holon
 .holon-cache/
+.holon/
+.holon

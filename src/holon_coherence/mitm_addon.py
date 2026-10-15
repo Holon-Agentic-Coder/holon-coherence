@@ -360,9 +360,17 @@ class CumulativeMetrics:
     count_ttft: int = 0
     sum_decode_throughput_tps: float = 0.0
     count_decode: int = 0
+    sum_prefill_throughput_tps: float = 0.0
+    count_prefill: int = 0
+    latest_prefill_tps: float = 0.0
+    sum_tail_prefill_throughput_tps: float = 0.0
+    count_tail_prefill: int = 0
+    latest_tail_prefill_tps: float = 0.0
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     total_cache_read_tokens: int = 0
+    total_cache_creation_tokens: int = 0
+    total_reasoning_tokens: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def record_request(self) -> None:
@@ -393,8 +401,12 @@ class CumulativeMetrics:
         input_tokens: int = 0,
         output_tokens: int = 0,
         cache_read_tokens: int = 0,
+        cache_creation_tokens: int = 0,
+        reasoning_tokens: int = 0,
         ttft: float | None = None,
         output_tps: float = 0.0,
+        prefill_tps: float = 0.0,
+        tail_prefill_tps: float = 0.0,
     ) -> None:
         """Records completed response metrics including token counts and timing."""
         with self._lock:
@@ -402,25 +414,43 @@ class CumulativeMetrics:
             self.total_input_tokens += input_tokens
             self.total_output_tokens += output_tokens
             self.total_cache_read_tokens += cache_read_tokens
+            self.total_cache_creation_tokens += cache_creation_tokens
+            self.total_reasoning_tokens += reasoning_tokens
             if ttft is not None and ttft > 0:
                 self.sum_ttft_ms += ttft * 1000.0
                 self.count_ttft += 1
             if output_tps > 0:
                 self.sum_decode_throughput_tps += output_tps
                 self.count_decode += 1
+            if prefill_tps > 0:
+                self.sum_prefill_throughput_tps += prefill_tps
+                self.count_prefill += 1
+                self.latest_prefill_tps = prefill_tps
+            if tail_prefill_tps > 0:
+                self.sum_tail_prefill_throughput_tps += tail_prefill_tps
+                self.count_tail_prefill += 1
+                self.latest_tail_prefill_tps = tail_prefill_tps
 
     def to_dict(self) -> dict[str, Any]:
         """Produces a snapshot dictionary of cumulative metrics and derived rates."""
         with self._lock:
             hit_rate = (self.cache_hits / self.total_requests) if self.total_requests > 0 else 0.0
+            provider_cache_hit_rate = (
+                (self.total_cache_read_tokens / self.total_input_tokens) if self.total_input_tokens > 0 else 0.0
+            )
             avg_ttft = (self.sum_ttft_ms / self.count_ttft) if self.count_ttft > 0 else 0.0
             avg_tps = (self.sum_decode_throughput_tps / self.count_decode) if self.count_decode > 0 else 0.0
+            avg_prefill = (self.sum_prefill_throughput_tps / self.count_prefill) if self.count_prefill > 0 else 0.0
+            avg_tail_prefill = (
+                (self.sum_tail_prefill_throughput_tps / self.count_tail_prefill) if self.count_tail_prefill > 0 else 0.0
+            )
             return {
                 "total_turns": self.total_turns,
                 "total_requests": self.total_requests,
                 "cache_hits": self.cache_hits,
                 "cache_misses": max(0, self.total_requests - self.cache_hits),
                 "cache_hit_rate": round(hit_rate, 4),
+                "provider_cache_hit_rate": round(provider_cache_hit_rate, 4),
                 "tool_calls_pruned": self.tool_calls_pruned,
                 "tokens_reduced": self.tokens_reduced,
                 "chars_saved": self.chars_saved,
@@ -428,9 +458,15 @@ class CumulativeMetrics:
                 "cache_control_injected": self.cache_control_injected,
                 "avg_ttft_ms": round(avg_ttft, 2),
                 "avg_decode_throughput_tps": round(avg_tps, 2),
+                "avg_prefill_throughput_tps": round(avg_prefill, 2),
+                "latest_prefill_tps": round(self.latest_prefill_tps, 2),
+                "avg_tail_prefill_tps": round(avg_tail_prefill, 2),
+                "latest_tail_prefill_tps": round(self.latest_tail_prefill_tps, 2),
                 "total_input_tokens": self.total_input_tokens,
                 "total_output_tokens": self.total_output_tokens,
                 "total_cache_read_tokens": self.total_cache_read_tokens,
+                "total_cache_creation_tokens": self.total_cache_creation_tokens,
+                "total_reasoning_tokens": self.total_reasoning_tokens,
             }
 
 
@@ -1132,7 +1168,10 @@ def render_dashboard_html() -> str:
       <div class="card">
         <div class="card-title">⏱️ Latency & Speed</div>
         <div id="avg-ttft" class="card-val amber">0.0 ms</div>
-        <div class="card-desc">Avg TTFT | <span id="decode-tps">0.0</span> tok/s decode</div>
+        <div class="card-desc">
+          Prefill: <span id="prefill-tps">0.0</span> t/s (latest: <span id="latest-prefill-tps">0.0</span>) |
+          Decode: <span id="decode-tps">0.0</span> t/s
+        </div>
       </div>
     </div>
 
@@ -1148,6 +1187,14 @@ def render_dashboard_html() -> str:
           <span id="cache-misses" class="detail-value">0</span>
         </div>
         <div class="detail-item">
+          <span class="detail-label">Prompt Prefill Speed (Avg)</span>
+          <span id="avg-prefill-val" class="detail-value">0.0 tok/s</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Tail Prefill Speed</span>
+          <span id="tail-prefill-val" class="detail-value">0.0 tok/s</span>
+        </div>
+        <div class="detail-item">
           <span class="detail-label">Total Input Tokens</span>
           <span id="total-input-tokens" class="detail-value">0</span>
         </div>
@@ -1158,6 +1205,18 @@ def render_dashboard_html() -> str:
         <div class="detail-item">
           <span class="detail-label">Cache Read Tokens</span>
           <span id="total-cache-read-tokens" class="detail-value">0</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Provider KV Cache Hit Rate</span>
+          <span id="provider-cache-hit-rate" class="detail-value">0.0%</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Provider Cache Creation Tokens</span>
+          <span id="cache-creation-tokens" class="detail-value">0</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Reasoning Tokens</span>
+          <span id="reasoning-tokens" class="detail-value">0</span>
         </div>
         <div class="detail-item">
           <span class="detail-label">Raw Characters Saved</span>
@@ -1204,6 +1263,18 @@ def render_dashboard_html() -> str:
         const avgTtft = hasTtft ? data.avg_ttft_ms.toFixed(1) : "0.0";
         document.getElementById("avg-ttft").textContent = avgTtft + " ms";
         document.getElementById("decode-tps").textContent = (data.avg_decode_throughput_tps || 0).toFixed(1);
+
+        const prefillTps = (data.avg_prefill_throughput_tps || 0).toFixed(1);
+        const latestPrefill = (data.latest_prefill_tps || 0).toFixed(1);
+        const tailPrefill = (data.avg_tail_prefill_tps || 0).toFixed(1);
+        document.getElementById("prefill-tps").textContent = prefillTps;
+        document.getElementById("latest-prefill-tps").textContent = latestPrefill;
+        document.getElementById("avg-prefill-val").textContent = prefillTps + " tok/s";
+        document.getElementById("tail-prefill-val").textContent = tailPrefill + " tok/s";
+        const kvHitPct = ((data.provider_cache_hit_rate || 0) * 100).toFixed(1);
+        document.getElementById("provider-cache-hit-rate").textContent = kvHitPct + "%";
+        document.getElementById("cache-creation-tokens").textContent = formatNumber(data.total_cache_creation_tokens);
+        document.getElementById("reasoning-tokens").textContent = formatNumber(data.total_reasoning_tokens);
 
         document.getElementById("total-turns").textContent = formatNumber(data.total_turns);
         document.getElementById("cache-misses").textContent = formatNumber(data.cache_misses);
@@ -1906,7 +1977,12 @@ class MitmproxyAddon:
                         self.interceptor.intercept_response(url, req_data, resp_data, status_code=status_code)
 
                     # Extract token counts and cache read tokens in a single pass
-                    input_tokens, output_tokens, cache_read_tokens = extract_token_counts(req_data, resp_data, provider)
+                    token_counts = extract_token_counts(req_data, resp_data, provider)
+                    input_tokens = token_counts[0]
+                    output_tokens = token_counts[1]
+                    cache_read_tokens = token_counts[2]
+                    cache_creation_tokens = getattr(token_counts, "cache_creation_tokens", 0)
+                    reasoning_tokens = getattr(token_counts, "reasoning_tokens", 0)
 
                     # Compute timing metrics
                     req_start = getattr(flow, "request_start_time", None)
@@ -1972,8 +2048,12 @@ class MitmproxyAddon:
                         input_tokens=input_tokens,
                         output_tokens=output_tokens,
                         cache_read_tokens=cache_read_tokens,
+                        cache_creation_tokens=cache_creation_tokens,
+                        reasoning_tokens=reasoning_tokens,
                         ttft=ttft,
                         output_tps=output_tps,
+                        prefill_tps=prefill_tps,
+                        tail_prefill_tps=tail_prefill_tps,
                     )
             except json.JSONDecodeError as exc:
                 logger.debug("Non-JSON request/response body for endpoint %s: %s", url, exc)
@@ -2021,8 +2101,12 @@ class MitmproxyAddon:
                     input_tokens=0,
                     output_tokens=0,
                     cache_read_tokens=0,
+                    cache_creation_tokens=0,
+                    reasoning_tokens=0,
                     ttft=None,
                     output_tps=0.0,
+                    prefill_tps=0.0,
+                    tail_prefill_tps=0.0,
                 )
             except Exception as exc:
                 logger.debug("Failed to record non-200 wire transaction: %s", exc)
