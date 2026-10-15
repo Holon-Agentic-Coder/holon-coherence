@@ -75,6 +75,17 @@ def _read_offline_metrics(wire_log_dir: str) -> dict[str, Any] | None:
                     if ttft is not None and ttft > 0:
                         sum_ttft_ms += float(ttft)
                         count_ttft += 1
+                    total_ms = timing.get("total_ms")
+                    resp_val = record.get("response", {})
+                    out_toks = 0
+                    if isinstance(resp_val, dict):
+                        usage_val = resp_val.get("usage", {})
+                        if isinstance(usage_val, dict):
+                            out_toks = usage_val.get("output_tokens", 0)
+                    if total_ms is not None and ttft is not None and (total_ms - ttft) > 0 and out_toks > 0:
+                        gen_sec = (total_ms - ttft) / 1000.0
+                        sum_decode_throughput_tps += out_toks / gen_sec
+                        count_decode += 1
 
     except Exception:
         return None

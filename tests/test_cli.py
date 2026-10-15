@@ -2418,7 +2418,7 @@ class TestCLIMetricsCommand:
                 "cache_action": "MISS",
                 "delta": {"tool_outputs_omitted": 3, "chars_saved": 800},
                 "response": {"usage": {"input_tokens": 200, "output_tokens": 100, "cache_read_input_tokens": 0}},
-                "timing": {"ttft_ms": 100.0},
+                "timing": {"ttft_ms": 100.0, "total_ms": 1100.0},
             },
         ]
         with open(jsonl, "w", encoding="utf-8") as f:
@@ -2435,6 +2435,7 @@ class TestCLIMetricsCommand:
         assert data["tokens_reduced"] == 300
         assert data["cache_hits"] == 1
         assert data["total_requests"] == 2
+        assert data["avg_decode_throughput_tps"] == 100.0
 
     def test_metrics_cli_dispatch(self) -> None:
         with (
@@ -2466,6 +2467,7 @@ class TestLocalLlmRunnerFlagsAndEnvs:
 
     def test_build_agent_env_claude_local(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HOLON_AGENT_KEY", "test-claude-key")
+        monkeypatch.delenv("USER", raising=False)
         env = build_agent_env("claude", port=8080, model="claude-3-5-sonnet", local_llm_base="localhost:8081")
         assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8080"
         assert env["ANTHROPIC_AUTH_TOKEN"] == "test-claude-key"
@@ -2473,9 +2475,11 @@ class TestLocalLlmRunnerFlagsAndEnvs:
         assert env["ANTHROPIC_MODEL"] == "claude-3-5-sonnet"
         assert env["ANTHROPIC_DISABLE_TELEMETRY"] == "1"
         assert env["CLAUDE_SUPPRESS_FALLBACK"] == "1"
+        assert env["USER"] == "holon"
 
     def test_build_agent_env_agy_local_gateway_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HOLON_AGENT_KEY", "test-agy-key")
+        monkeypatch.delenv("USER", raising=False)
         env = build_agent_env("agy", port=8080, model="gemini-flash", local_llm_base="localhost:11434")
         # Bean 0051: sets AGY_GATEWAY_URL with non-loopback alias (NOT GOOGLE_GEMINI_BASE_URL)
         assert env["AGY_GATEWAY_URL"] == "http://127.0.0.1.nip.io:8080"
@@ -2483,6 +2487,16 @@ class TestLocalLlmRunnerFlagsAndEnvs:
         assert env["AGY_MODEL"] == "gemini-flash"
         assert env["GEMINI_API_KEY"] == "test-agy-key"
         assert env["AGY_USER_TOKEN"] == "test-agy-key"
+        assert env["USER"] == "holon"
+
+    def test_build_agent_env_agy_local_dummy_credentials(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HOLON_AGENT_KEY", raising=False)
+        monkeypatch.delenv("USER", raising=False)
+        env = build_agent_env("agy", port=8080, model="gemini-flash", local_llm_base="localhost:11434")
+        assert env["AGY_GATEWAY_URL"] == "http://127.0.0.1.nip.io:8080"
+        assert env["GEMINI_API_KEY"] == "dummy-local-key"
+        assert env["AGY_USER_TOKEN"] == "dummy-local-key"
+        assert env["USER"] == "holon"
 
     def test_build_agent_env_cloud_preservation(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("HOLON_LOCAL_LLM_BASE", raising=False)

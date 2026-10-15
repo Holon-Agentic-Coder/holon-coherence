@@ -289,7 +289,8 @@ When `--local-llm-base` (or `--local-llm-endpoint`) and `--model` are supplied:
   - Translates `generateContent` and `streamGenerateContent` into OpenAI `/v1/chat/completions`.
   - Translates function calling declarations (`tools[].functionDeclarations`) to OpenAI `tools[].function`.
   - Translates assistant tool calls (`functionCall`) and user tool outputs (`functionResponse`) bidirectionally.
-  - Translates OpenAI Server-Sent Events (SSE) streaming chunks and final finish reasons back to Gemini candidates format.
+  - Translates OpenAI Server-Sent Events (SSE) streaming chunks and final finish reasons back to Gemini candidates
+    format.
   - Zero modifications to cloud Gemini API calls (`generativelanguage.googleapis.com`).
 
 ```bash
@@ -369,8 +370,8 @@ holon-coherence metrics
 holon-coherence metrics --json
 ```
 
-If the proxy is offline, `holon-coherence metrics` automatically falls back to calculating cumulative statistics from the
-persisted wire transaction ledger (`transactions.jsonl`).
+If the proxy is offline, `holon-coherence metrics` automatically falls back to calculating cumulative statistics from
+the persisted wire transaction ledger (`transactions.jsonl`).
 
 ---
 

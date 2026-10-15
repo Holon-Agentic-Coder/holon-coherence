@@ -56,13 +56,13 @@ When contributing or executing tasks in `holon-coherence`:
 3. **Coding Agent Runners & Automated Proxy**: Use `holon-coherence <agent>` (or `holon-coherence run-agent <agent>`) to
    launch agents (`agy`, `claude`, `codex`, `opencode`, `pi`) through the optimization proxy. The proxy runs in
    background daemon mode by default and supports `--ephemeral` for one-off task teardowns. Runners support `--model`
-   and `--local-llm-base` / `--local-llm-endpoint` for self-hosted inference engines with transparent protocol adaptation
-   and parameter normalization.
+   and `--local-llm-base` / `--local-llm-endpoint` for self-hosted inference engines with transparent protocol
+   adaptation and parameter normalization.
 4. **Universal Credentials & Native Auth Fallback (Rule 4)**: Standardize host credentials on `HOLON_AGENT_KEY`. Never
    require vendor-specific API keys. If `HOLON_AGENT_KEY` is omitted, runners transparently fallback to native host auth
    sessions (such as `~/.gemini`, `~/.claude.json`).
 5. **Strict Repository Separation**: Commands targeting `holon-coherence` must be executed strictly inside
    `holon-coherence/` (or its git worktrees).
-6. **Live Telemetry & Metrics Verification**: Use `holon-coherence metrics` (or `--json`) and the live proxy web dashboard
-   at `http://127.0.0.1:<port>/holon/` to inspect real-time cumulative performance, tool call pruning, cache hit rates,
-   and latency stats.
+6. **Live Telemetry & Metrics Verification**: Use `holon-coherence metrics` (or `--json`) and the live proxy web
+   dashboard at `http://127.0.0.1:<port>/holon/` to inspect real-time cumulative performance, tool call pruning, cache
+   hit rates, and latency stats.

@@ -166,6 +166,7 @@ def build_agent_env(
 
     effective_local_base = local_llm_base or os.getenv("HOLON_LOCAL_LLM_BASE")
     if effective_local_base:
+        env.setdefault("USER", "holon")
         if normalized_agent == "claude":
             env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{port}"
             env["ANTHROPIC_AUTH_TOKEN"] = holon_key or "sk-ant-local"
@@ -178,6 +179,8 @@ def build_agent_env(
             env["AGY_GATEWAY_URL"] = f"http://127.0.0.1.nip.io:{port}"
             if model:
                 env["AGY_MODEL"] = model
+            env.setdefault("GEMINI_API_KEY", holon_key or "dummy-local-key")
+            env.setdefault("AGY_USER_TOKEN", holon_key or "dummy-local-key")
         elif normalized_agent in ("codex", "opencode", "pi"):
             env["OPENAI_BASE_URL"] = f"http://127.0.0.1:{port}/v1"
             if model:

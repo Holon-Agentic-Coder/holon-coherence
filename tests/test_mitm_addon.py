@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -294,6 +296,13 @@ class TestAnthropicNormalizer:
                     ],
                 }
             ],
+            "tools": [
+                {
+                    "name": "run_command",
+                    "description": "Run shell command",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
         }
         headers = {
             "anthropic-beta": "thinking-2024-11-04,prompt-caching-2024-07-31",
@@ -308,6 +317,7 @@ class TestAnthropicNormalizer:
         assert "context_management" not in cleaned
         assert "cache_control" not in cleaned["system"][0]
         assert "cache_control" not in cleaned["messages"][0]["content"][0]
+        assert "cache_control" not in cleaned["tools"][0]
         assert "anthropic-beta" not in flow.request.headers
         assert flow.request.headers.get("Content-Type") == "application/json"
 
@@ -402,6 +412,35 @@ class TestGeminiOpenAIBridge:
         assert messages[1]["role"] == "tool"
         assert messages[1]["name"] == "run_command"
         assert json.loads(messages[1]["content"]) == {"output": "total 0"}
+        assert tc["id"] == messages[1]["tool_call_id"]
+
+    def test_request_translation_multi_turn_tool_call_id_alignment(self) -> None:
+        gemini_req = {
+            "contents": [
+                {
+                    "role": "model",
+                    "parts": [{"functionCall": {"name": "run_command", "args": {"cmd": "ls"}}}],
+                },
+                {
+                    "role": "user",
+                    "parts": [{"functionResponse": {"name": "run_command", "response": {"output": "file.txt"}}}],
+                },
+                {
+                    "role": "model",
+                    "parts": [{"functionCall": {"name": "run_command", "args": {"cmd": "cat file.txt"}}}],
+                },
+                {
+                    "role": "user",
+                    "parts": [{"functionResponse": {"name": "run_command", "response": {"output": "hello"}}}],
+                },
+            ]
+        }
+        openai_req = translate_gemini_to_openai_request(gemini_req)
+        msgs = openai_req["messages"]
+        assert len(msgs) == 4
+        assert msgs[0]["tool_calls"][0]["id"] == msgs[1]["tool_call_id"]
+        assert msgs[2]["tool_calls"][0]["id"] == msgs[3]["tool_call_id"]
+        assert msgs[0]["tool_calls"][0]["id"] != msgs[2]["tool_calls"][0]["id"]
 
     def test_response_translation(self) -> None:
         openai_resp = {
@@ -465,3 +504,66 @@ class TestGeminiOpenAIBridge:
         second_data = json.loads(lines[1][len("data: ") :])
         assert second_data["candidates"][0]["content"]["parts"][0]["text"] == "world!"
         assert second_data["candidates"][0]["finishReason"] == "STOP"
+
+    def test_gemini_bridge_model_from_url_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("AGY_MODEL", raising=False)
+        monkeypatch.delenv("HOLON_LOCAL_MODEL", raising=False)
+        addon = MitmproxyAddon()
+        req_body = {"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]}
+        flow = DummyFlow(
+            request=DummyRequest(
+                url="http://127.0.0.1:8080/v1beta/models/qwen2.5-coder:streamGenerateContent?alt=sse",
+                method="POST",
+                path="/v1beta/models/qwen2.5-coder:streamGenerateContent?alt=sse",
+                headers={"Content-Type": "application/json"},
+                text=json.dumps(req_body),
+            )
+        )
+        flow.provider = "gemini"
+        with patch("holon_coherence.mitm_addon.is_local_target", return_value=True):
+            addon.request(flow)
+        assert flow.is_gemini_bridged is True
+        assert flow.request.path == "/v1/chat/completions"
+        parsed_req = json.loads(flow.request.get_text())
+        assert parsed_req["model"] == "qwen2.5-coder"
+        assert parsed_req.get("stream") is True
+
+    def test_sse_chunk_translation_usage_metadata(self) -> None:
+        chunk = 'data: {"choices": [], "usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20}}\n\n'
+        translated = translate_openai_sse_chunk_to_gemini(chunk)
+        assert "data: " in translated
+        parsed = json.loads(translated.strip()[len("data: ") :])
+        assert "usageMetadata" in parsed
+        assert parsed["usageMetadata"]["promptTokenCount"] == 12
+        assert parsed["usageMetadata"]["candidatesTokenCount"] == 8
+        assert parsed["usageMetadata"]["totalTokenCount"] == 20
+
+    def test_sse_chunk_translation_tool_call_fragments_and_buffering(self) -> None:
+        stream_state: dict[str, Any] = {}
+        # Fragment 1: function name declared, empty arguments
+        chunk1 = (
+            'data: {"choices": [{"delta": {"tool_calls": ['
+            '{"index": 0, "function": {"name": "run_command", "arguments": ""}}]}}]}\n\n'
+        )
+        out1 = translate_openai_sse_chunk_to_gemini(chunk1, stream_state=stream_state)
+        # Should not emit candidate yet
+        assert out1 == ""
+
+        # Fragment 2: partial arguments
+        chunk2 = (
+            'data: {"choices": [{"delta": {"tool_calls": ['
+            '{"index": 0, "function": {"arguments": "{\\"cmd\\": \\"ls\\"}"}}]}}]}\n\n'
+        )
+        out2 = translate_openai_sse_chunk_to_gemini(chunk2, stream_state=stream_state)
+        assert out2 == ""
+
+        # Fragment 3: finish_reason tool_calls
+        chunk3 = 'data: {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}\n\n'
+        out3 = translate_openai_sse_chunk_to_gemini(chunk3, stream_state=stream_state)
+        assert "data: " in out3
+        parsed = json.loads(out3.strip()[len("data: ") :])
+        cand = parsed["candidates"][0]
+        assert cand["finishReason"] == "STOP"
+        part = cand["content"]["parts"][0]
+        assert part["functionCall"]["name"] == "run_command"
+        assert part["functionCall"]["args"] == {"cmd": "ls"}

@@ -536,7 +536,14 @@ def normalize_anthropic_request(
     elif isinstance(system, dict):
         system.pop("cache_control", None)
 
-    # 4. Remove vendor anthropic-beta header from request headers
+    # 4. Strip cache_control from tool definitions
+    tools = data.get("tools")
+    if isinstance(tools, list):
+        for tool in tools:
+            if isinstance(tool, dict):
+                tool.pop("cache_control", None)
+
+    # 5. Remove vendor anthropic-beta header from request headers
     req = getattr(flow, "request", None)
     if req is not None and hasattr(req, "headers") and req.headers is not None:
         headers = req.headers
@@ -554,6 +561,8 @@ def translate_gemini_to_openai_request(
 ) -> dict[str, Any]:
     """Translates a Gemini v1beta generateContent/streamGenerateContent request to OpenAI format."""
     openai_messages: list[dict[str, Any]] = []
+    pending_tool_call_ids: dict[str, list[str]] = {}
+    tool_call_counts: dict[str, int] = {}
 
     # 1. System instruction translation
     sys_inst = gemini_req.get("systemInstruction") or gemini_req.get("system_instruction")
@@ -586,7 +595,12 @@ def translate_gemini_to_openai_request(
                     fc = p["functionCall"]
                     fn_name = fc.get("name", "")
                     fn_args = fc.get("args", {})
-                    call_id = f"call_{uuid.uuid4().hex[:8]}"
+                    call_id = fc.get("id")
+                    if not call_id:
+                        tool_call_counts[fn_name] = tool_call_counts.get(fn_name, 0) + 1
+                        idx = tool_call_counts[fn_name]
+                        call_id = f"call_{fn_name}" if idx == 1 else f"call_{fn_name}_{idx}"
+                    pending_tool_call_ids.setdefault(fn_name, []).append(call_id)
                     tool_calls.append(
                         {
                             "id": call_id,
@@ -601,10 +615,12 @@ def translate_gemini_to_openai_request(
                     fr = p["functionResponse"]
                     fn_name = fr.get("name", "")
                     resp_val = fr.get("response", {})
+                    fr_id = fr.get("id")
                     tool_responses.append(
                         {
                             "name": fn_name,
                             "response": resp_val,
+                            "id": fr_id,
                         }
                     )
 
@@ -619,11 +635,20 @@ def translate_gemini_to_openai_request(
                         )
                     else:
                         content_body = json.dumps(resp_data) if not isinstance(resp_data, str) else resp_data
+
+                    fn_name = tr["name"]
+                    tool_call_id = tr.get("id")
+                    if not tool_call_id:
+                        if pending_tool_call_ids.get(fn_name):
+                            tool_call_id = pending_tool_call_ids[fn_name].pop(0)
+                        else:
+                            tool_call_id = f"call_{fn_name}"
+
                     openai_messages.append(
                         {
                             "role": "tool",
-                            "name": tr["name"],
-                            "tool_call_id": f"call_{tr['name']}",
+                            "name": fn_name,
+                            "tool_call_id": tool_call_id,
                             "content": content_body,
                         }
                     )
@@ -642,8 +667,10 @@ def translate_gemini_to_openai_request(
     # 3. Model name
     if model:
         openai_req["model"] = model
-    elif "model" in gemini_req:
+    elif gemini_req.get("model"):
         openai_req["model"] = gemini_req["model"]
+    else:
+        openai_req["model"] = "default"
 
     # 4. Tools translation
     tools = gemini_req.get("tools")
@@ -776,7 +803,10 @@ def translate_openai_to_gemini_response(openai_resp: dict[str, Any]) -> dict[str
     }
 
 
-def translate_openai_sse_chunk_to_gemini(chunk_str: str) -> str:
+def translate_openai_sse_chunk_to_gemini(
+    chunk_str: str,
+    stream_state: dict[str, Any] | None = None,
+) -> str:
     """Translates OpenAI SSE streaming chunk(s) to Gemini v1beta candidate SSE chunks."""
     output_lines: list[str] = []
     lines = chunk_str.split("\n")
@@ -796,7 +826,20 @@ def translate_openai_sse_chunk_to_gemini(chunk_str: str) -> str:
             except Exception:
                 continue
 
+            usage = chunk_json.get("usage")
+            usage_metadata: dict[str, Any] | None = None
+            if isinstance(usage, dict):
+                usage_metadata = {
+                    "promptTokenCount": usage.get("prompt_tokens", 0),
+                    "candidatesTokenCount": usage.get("completion_tokens", 0),
+                    "totalTokenCount": usage.get("total_tokens", 0),
+                }
+
             choices = chunk_json.get("choices", [])
+            if not choices and usage_metadata:
+                output_lines.append(f"data: {json.dumps({'usageMetadata': usage_metadata})}")
+                continue
+
             for choice in choices:
                 delta = choice.get("delta", {})
                 parts: list[dict[str, Any]] = []
@@ -808,29 +851,65 @@ def translate_openai_sse_chunk_to_gemini(chunk_str: str) -> str:
                 for tc in tool_calls:
                     fn = tc.get("function", {})
                     fn_name = fn.get("name", "")
-                    raw_args = fn.get("arguments", "{}")
-                    if isinstance(raw_args, str):
-                        try:
-                            parsed_args = json.loads(raw_args)
-                        except Exception:
-                            parsed_args = {"raw": raw_args}
-                    elif isinstance(raw_args, dict):
-                        parsed_args = raw_args
+                    raw_args = fn.get("arguments", "")
+
+                    if stream_state is not None:
+                        idx = tc.get("index", 0)
+                        tool_buf = stream_state.setdefault("tool_calls", {}).setdefault(
+                            idx, {"name": "", "arguments": ""}
+                        )
+                        if fn_name:
+                            tool_buf["name"] = fn_name
+                        if raw_args:
+                            tool_buf["arguments"] += raw_args
                     else:
-                        parsed_args = {}
-                    parts.append({"functionCall": {"name": fn_name, "args": parsed_args}})
+                        if not fn_name and not raw_args:
+                            continue
+                        if not fn_name:
+                            continue
+                        if isinstance(raw_args, str):
+                            try:
+                                parsed_args = json.loads(raw_args) if raw_args else {}
+                            except Exception:
+                                continue
+                        elif isinstance(raw_args, dict):
+                            parsed_args = raw_args
+                        else:
+                            parsed_args = {}
+                        parts.append({"functionCall": {"name": fn_name, "args": parsed_args}})
+
+                finish_reason = choice.get("finish_reason")
+                if finish_reason == "tool_calls" and stream_state is not None:
+                    buffered_calls = stream_state.pop("tool_calls", {})
+                    for idx in sorted(buffered_calls.keys()):
+                        b_call = buffered_calls[idx]
+                        b_name = b_call.get("name", "")
+                        b_args_raw = b_call.get("arguments", "{}")
+                        if not b_name:
+                            continue
+                        try:
+                            b_args = json.loads(b_args_raw) if b_args_raw else {}
+                        except Exception:
+                            b_args = {"raw": b_args_raw}
+                        parts.append({"functionCall": {"name": b_name, "args": b_args}})
 
                 gemini_candidate: dict[str, Any] = {}
                 if parts:
                     gemini_candidate["content"] = {"role": "model", "parts": parts}
-                if choice.get("finish_reason"):
+                if finish_reason:
                     gemini_candidate["finishReason"] = (
-                        "STOP" if choice["finish_reason"] in ("stop", "tool_calls") else "MAX_TOKENS"
+                        "STOP" if finish_reason in ("stop", "tool_calls") else "MAX_TOKENS"
                     )
 
                 if gemini_candidate:
                     gemini_payload = {"candidates": [gemini_candidate]}
+                    if usage_metadata:
+                        gemini_payload["usageMetadata"] = usage_metadata
+                        usage_metadata = None
                     output_lines.append(f"data: {json.dumps(gemini_payload)}")
+                elif usage_metadata:
+                    output_lines.append(f"data: {json.dumps({'usageMetadata': usage_metadata})}")
+                    usage_metadata = None
 
     if not output_lines:
         return ""
@@ -1635,7 +1714,12 @@ class MitmproxyAddon:
             if provider == "gemini" and is_local and data is not None:
                 flow.is_gemini_bridged = True
                 target_model = os.getenv("AGY_MODEL") or os.getenv("HOLON_LOCAL_MODEL")
-                data = translate_gemini_to_openai_request(data, model=target_model)
+                if not target_model:
+                    path_or_url = getattr(flow.request, "path", "") or url
+                    match = re.search(r"/models/([^/:]+)", path_or_url)
+                    if match:
+                        target_model = match.group(1)
+                data = translate_gemini_to_openai_request(data, model=target_model or "default")
                 flow.request.path = "/v1/chat/completions"
                 if ":streamgeneratecontent" in url.lower() or "alt=sse" in url.lower():
                     data["stream"] = True
@@ -1752,6 +1836,7 @@ class MitmproxyAddon:
                 if "text/event-stream" in content_type.lower():
                     flow.sse_chunks = []
                     flow.sse_bytes = 0
+                    flow._sse_stream_state = {}
                     existing_stream = getattr(response, "stream", None)
 
                     def sse_stream_wrapper(chunk: bytes) -> bytes:
@@ -1761,7 +1846,10 @@ class MitmproxyAddon:
                             if getattr(flow, "is_gemini_bridged", False):
                                 try:
                                     chunk_text = chunk.decode("utf-8", errors="ignore")
-                                    translated = translate_openai_sse_chunk_to_gemini(chunk_text)
+                                    translated = translate_openai_sse_chunk_to_gemini(
+                                        chunk_text,
+                                        stream_state=getattr(flow, "_sse_stream_state", None),
+                                    )
                                     chunk = translated.encode("utf-8")
                                 except Exception as exc:
                                     logger.debug("Failed translating bridged Gemini SSE chunk: %s", exc)
