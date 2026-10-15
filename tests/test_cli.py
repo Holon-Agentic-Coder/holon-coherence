@@ -2826,6 +2826,50 @@ class TestOfflineTelemetryThroughputBean0097:
         assert data["avg_prefill_throughput_tps"] == 3000.0  # 900 / 0.3s
         assert data["avg_tail_prefill_tps"] == 2000.0  # 600 uncached / 0.3s
 
+    def test_stored_zero_rate_stays_unmeasured_instead_of_re_derived(self, tmp_path: Path) -> None:
+        """A stored ``0.0`` rate is *unmeasured* and must not be re-derived from the recorded TTFT."""
+        log_dir = self._write_records(
+            tmp_path,
+            [
+                {
+                    "turn_id": 1,
+                    "cache_action": "MISS",
+                    "delta": {},
+                    "response": {"usage": {"input_tokens": 900, "output_tokens": 0, "cache_read_input_tokens": 300}},
+                    "timing": {
+                        "ttft_ms": 300.0,
+                        "total_ms": 300.0,
+                        "streaming": False,
+                        "prefill_tps": 0.0,
+                        "tail_prefill_tps": 0.0,
+                    },
+                },
+                {
+                    "turn_id": 2,
+                    "cache_action": "MISS",
+                    "delta": {},
+                    "response": {"usage": {"input_tokens": 1000, "output_tokens": 0, "cache_read_input_tokens": 0}},
+                    "timing": {
+                        "ttft_ms": 200.0,
+                        "total_ms": 200.0,
+                        "streaming": False,
+                        "prefill_tps": 5000.0,
+                        "tail_prefill_tps": 5000.0,
+                    },
+                },
+            ],
+        )
+
+        data = _read_offline_metrics(log_dir)
+
+        assert data is not None
+        # The 0.0 record contributes its timing only, never a rate, so the average is the 5000 t/s
+        # sample alone -- not (3000 derived + 5000) / 2 = 4000.
+        assert data["avg_prefill_throughput_tps"] == 5000.0
+        assert data["avg_tail_prefill_tps"] == 5000.0
+        assert data["latest_prefill_tps"] == 5000.0
+        assert data["avg_ttft_ms"] == 250.0  # (300 + 200) / 2
+
     def test_live_and_offline_metric_surfaces_agree(self, tmp_path: Path) -> None:
         """The in-memory proxy and the offline parser must publish identical numbers."""
         log_dir = self._write_records(

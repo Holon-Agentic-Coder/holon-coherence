@@ -69,16 +69,26 @@ Compute performance metrics and inject standardized response headers into `flow.
 
 - `X-Holon-TTFT-Ms`: Time-to-first-token in milliseconds.
 - `X-Holon-Prefill-TPS`: Prompt processing speed (tokens/sec).
-- `X-Holon-Output-TPS`: Generation speed (tokens/sec).
+- `X-Holon-Output-TPS`: Generation speed (tokens/sec), derived only from a genuine SSE chunk window.
 - `X-Holon-Decode-Time-Sec`: Generation duration in seconds.
 - `X-Holon-Total-Time-Ms`: Total end-to-end request duration in milliseconds.
+- `X-Holon-Streaming`: `true` when the upstream reply was an SSE stream, `false` when it was buffered.
+
+> [!IMPORTANT] **Bean 0097** Each timing/throughput header above carries the literal string `unmeasured` when the proxy
+> could not measure that value -- a missing timestamp or a buffered reply is **not measured**, never a `0` reading.
+> Consumers must therefore treat these headers as strings and parse a value only when it is numeric.
 
 ### Phase 4: Structured Telemetry Logging & SQLite Storage
 
 - Log formatted telemetry lines to proxy stderr / stdout for live inspection:
   ```text
   📊 [TELEMETRY] Provider: OPENROUTER | TTFT: 342.5ms | Prefill: 494.15 t/s (169 tok) | Output: 38.33 t/s (46 tok in 1.20s) | Total: 1542.5ms
+  📊 [TELEMETRY] Provider: ANTHROPIC | TTFT: unmeasured | Prefill: unmeasured t/s (1200000 tok) | Output: n/a [non-streaming] (0 tok) | Total: unmeasured
   ```
+- Publish the cumulative snapshot on `/holon/api/metrics` (and `holon-coherence metrics --json`) as the mean over
+  admitted samples plus the most recent reading of each series: `decode_samples` (the transactions that admitted a
+  decode rate), `latest_decode_throughput_tps`, `latest_prefill_tps`, `latest_tail_prefill_tps`, `latest_ttft_ms` and
+  `latest_total_time_ms`. Each `avg_*` key stays `0.0` only while no sample has been admitted.
 - Extend SQLite cache store schema (`llm_cache.db`) to record telemetry columns for historical A/B benchmarking
   analysis.
 

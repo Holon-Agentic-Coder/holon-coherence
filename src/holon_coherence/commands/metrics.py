@@ -33,6 +33,19 @@ def _milliseconds_to_seconds(value: Any) -> float | None:
         return None
 
 
+def _stored_rate(stored: Any, derived: float | None) -> float | None:
+    """Resolve a wire-log rate against the same rate re-derived from raw timings.
+
+    A stored positive number wins. A stored ``0.0`` (or any other unusable number) is *unmeasured*
+    under this project's rate contract, so it stays unmeasured instead of being silently replaced by
+    a re-derivation. A missing or ``null`` value means the writer had no rate to store, so the
+    derived value is used -- which is what lets legacy records still report prefill speed.
+    """
+    if stored is not None and not isinstance(stored, bool):
+        return positive_rate(stored)
+    return derived
+
+
 def _read_offline_metrics(wire_log_dir: str) -> dict[str, Any] | None:
     """Calculates cumulative metrics from persisted transactions.jsonl when proxy is offline."""
     jsonl_path = os.path.join(wire_log_dir, "transactions.jsonl")
@@ -127,15 +140,15 @@ def _read_offline_metrics(wire_log_dir: str) -> dict[str, Any] | None:
                 # Prefill is prompt tokens over the measured TTFT. Records written by Bean 0097 and
                 # later carry the computed rate explicitly, so live and offline readings agree even
                 # when the two disagree with a naive re-derivation from rounded millisecond values.
-                prefill_tps = positive_rate(timing.get("prefill_tps")) or compute_prefill_tps(in_toks, ttft_sec)
+                prefill_tps = _stored_rate(timing.get("prefill_tps"), compute_prefill_tps(in_toks, ttft_sec))
                 if prefill_tps is not None:
                     sum_prefill_throughput_tps += prefill_tps
                     count_prefill += 1
                     latest_prefill_tps = prefill_tps
 
                 uncached_in = max(0, in_toks - cache_read_toks)
-                tail_p_tps = positive_rate(timing.get("tail_prefill_tps")) or compute_tail_prefill_tps(
-                    uncached_in, ttft_sec
+                tail_p_tps = _stored_rate(
+                    timing.get("tail_prefill_tps"), compute_tail_prefill_tps(uncached_in, ttft_sec)
                 )
                 if tail_p_tps is not None:
                     sum_tail_prefill_tps += tail_p_tps

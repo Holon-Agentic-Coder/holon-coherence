@@ -32,6 +32,7 @@ from holon_coherence.host_local import (
 from holon_coherence.hybrid_cache import HybridCacheStore
 from holon_coherence.metrics_math import (
     UNMEASURED,
+    average,
     compute_decode_tps,
     compute_prefill_tps,
     compute_tail_prefill_tps,
@@ -570,12 +571,10 @@ class CumulativeMetrics:
             provider_cache_hit_rate = (
                 (self.total_cache_read_tokens / self.total_input_tokens) if self.total_input_tokens > 0 else 0.0
             )
-            avg_ttft = (self.sum_ttft_ms / self.count_ttft) if self.count_ttft > 0 else 0.0
-            avg_tps = (self.sum_decode_throughput_tps / self.count_decode) if self.count_decode > 0 else 0.0
-            avg_prefill = (self.sum_prefill_throughput_tps / self.count_prefill) if self.count_prefill > 0 else 0.0
-            avg_tail_prefill = (
-                (self.sum_tail_prefill_throughput_tps / self.count_tail_prefill) if self.count_tail_prefill > 0 else 0.0
-            )
+            avg_ttft = average(self.sum_ttft_ms, self.count_ttft)
+            avg_tps = average(self.sum_decode_throughput_tps, self.count_decode)
+            avg_prefill = average(self.sum_prefill_throughput_tps, self.count_prefill)
+            avg_tail_prefill = average(self.sum_tail_prefill_throughput_tps, self.count_tail_prefill)
             count_decode_samples = self.count_decode
             return {
                 "total_turns": self.total_turns,
