@@ -29,6 +29,9 @@ client agent.
    high-throughput execution models (Executor) with subtask result compression.
 7. **Transparent Wire Telemetry**: Non-synthetic wire-level transaction logging (`transactions.jsonl`) capturing raw
    requests, cleaned requests, SSE streams, TTFT latency, and exact token counts.
+8. **Live Telemetry & Local LLM Adapters**: In-memory cumulative metrics dashboard served at `/holon/`, CLI reporting
+   (`holon-coherence metrics`), and transparent protocol translation (Gemini v1beta <-> OpenAI ChatCompletions and
+   Anthropic local normalization) for self-hosted LLM runners.
 
 ---
 
@@ -163,8 +166,14 @@ holon-coherence start --web --web-password "custom-secret-key"
 holon-coherence web-token
 # (alias: holon-coherence web-key)
 
-# Check container status (and display web dashboard token if active)
+# Check container status (and display web dashboard token and live optimization summary)
 holon-coherence status
+
+# Display cumulative optimization metrics (tool calls pruned, cache hit rate, TTFT, tokens reduced)
+holon-coherence metrics
+
+# Display optimization metrics as raw JSON (reads from live proxy or falls back to transactions.jsonl)
+holon-coherence metrics --json
 
 # Stream container logs
 holon-coherence logs -f
@@ -258,24 +267,47 @@ holon-coherence claude -- --dangerously-skip-permissions
 
 #### Host-Local Model Servers (`--local-llm-base`)
 
-A model server on your own machine (Ollama, vMLX, LM Studio, vLLM) is unreachable through a containerized proxy in two
-separate ways: the runner's default `NO_PROXY` contains `localhost`, so the agent never asks the proxy at all, and even
-when it does, `localhost` resolves to the container and the host's LAN address is unroutable from the Docker Desktop VM.
-Declare the endpoint and both are handled:
+#### Host-Local Model Servers & Protocol Adapters (`--local-llm-base`, `--local-llm-endpoint`, `--model`)
+
+A model server on your own machine (Ollama, vLLM, LM Studio, vMLX, aphrodite, llama.cpp server) can be used as the
+inference backend for supported coding agents.
+
+When `--local-llm-base` (or `--local-llm-endpoint`) and `--model` are supplied:
+
+- **Automatic Runner Environment Configuration**:
+  - **Claude Code (`claude`)**: The runner sets `ANTHROPIC_BASE_URL` to route through the proxy, supplies a dummy
+    `ANTHROPIC_AUTH_TOKEN="local"`, sets `USER="holon"`, and disables telemetry / prompt caching fallbacks.
+  - **Antigravity (`agy`)**: The runner routes to the proxy using `AGY_GATEWAY_URL="http://127.0.0.1.nip.io:{port}"`.
+    Go's `net/http` client standard library automatically bypasses `HTTP_PROXY` for literal `localhost` and `127.0.0.1`;
+    using the `127.0.0.1.nip.io` alias ensures Go routes all requests through the proxy while resolving to loopback.
+- **Anthropic Protocol Normalizer**: Local OpenAI/Anthropic-compatible engines often reject proprietary Claude API
+  parameters. The proxy automatically normalizes outbound requests targeting local endpoints by stripping unsupported
+  fields (`thinking`, `output_config`, `context_management`, prompt caching `cache_control` annotations) and removing
+  `anthropic-beta` headers.
+- **Gemini v1beta <-> OpenAI ChatCompletions Bridge**: For agents emitting Google Gemini v1beta REST requests (such as
+  `agy`) targeting OpenAI-compatible local engines:
+  - Translates `generateContent` and `streamGenerateContent` into OpenAI `/v1/chat/completions`.
+  - Translates function calling declarations (`tools[].functionDeclarations`) to OpenAI `tools[].function`.
+  - Translates assistant tool calls (`functionCall`) and user tool outputs (`functionResponse`) bidirectionally.
+  - Translates OpenAI Server-Sent Events (SSE) streaming chunks and final finish reasons back to Gemini candidates
+    format.
+  - Zero modifications to cloud Gemini API calls (`generativelanguage.googleapis.com`).
 
 ```bash
-holon-coherence pi --local-llm-base=localhost:11434 -- -p "Summarize this repo" --model=ollama/llama3
-holon-coherence agy --local-llm-base=http://127.0.0.1:11434/v1 -- -p "Run single task" --model=ollama/llama3
+# Run Claude Code with local model server
+holon-coherence claude --local-llm-base http://localhost:8000/v1 --model qwen2.5-coder-32b
 
-# or configure via environment variable:
-export HOLON_LOCAL_LLM_BASE=localhost:11434
-holon-coherence pi -- -p "Summarize this repo" --model=ollama/llama3
+# Run AGY with local model server
+holon-coherence agy --local-llm-base http://localhost:8000/v1 --model qwen2.5-coder-32b
+
+# Run Pi with local model server
+holon-coherence pi --local-llm-base localhost:11434 --model ollama/llama3
 ```
 
-> [!NOTE] `--local-llm-base` (or environment variable `HOLON_LOCAL_LLM_BASE`) configures **proxy routing, container
-> gateway dialing and `NO_PROXY` pruning** only. It does not point the agent at the model: you still pass the agent's
-> own model arguments (`--model`, `OPENAI_BASE_URL`, or the agent's config file) so its client library targets that
-> endpoint. The flag decides what the proxy does with the requests that endpoint generates.
+A model server on your own machine is unreachable through a containerized proxy in two separate ways: the runner's
+default `NO_PROXY` contains `localhost`, so the agent never asks the proxy at all, and even when it does, `localhost`
+resolves to the container and the host's LAN address is unroutable from the Docker Desktop VM. Declaring the endpoint
+handles both:
 
 - **One endpoint, every spelling**: `localhost:11434`, `127.0.0.1:11434`, `[::1]:11434` and the host's own LAN address
   are treated as the same machine and are all routed to `host.docker.internal:<port>` inside the container, preserving
@@ -311,7 +343,39 @@ holon-coherence pi -- -p "Summarize this repo" --model=ollama/llama3
 
 ---
 
-### 4. Alternative: Direct Docker Invocation
+### 4. Real-Time Web & CLI Metrics Dashboard
+
+`holon-coherence` includes an in-memory cumulative optimization metrics engine and real-time dashboard served directly
+by the proxy without requiring external databases or third-party monitoring stacks.
+
+#### Interactive Web Dashboard
+
+Open `http://127.0.0.1:8080/holon/` in your browser (substituting your configured proxy port) to view the live dark-mode
+dashboard:
+
+- **Optimization Cards**: Real-time counters for tool calls pruned/saved, tokens reduced, cache hit rate, average TTFT
+  latency, and token decoding throughput.
+- **Token Usage Breakdown**: Input tokens, model output tokens, cache read tokens, and characters saved.
+- **Live Updating**: Polls the proxy's lightweight JSON endpoint (`/holon/api/metrics`) every 3 seconds.
+
+#### Terminal Metrics CLI
+
+Inspect cumulative optimization performance directly in the terminal:
+
+```bash
+# Formatted terminal summary
+holon-coherence metrics
+
+# Raw JSON telemetry output (ideal for automation, scripts, and scorecards)
+holon-coherence metrics --json
+```
+
+If the proxy is offline, `holon-coherence metrics` automatically falls back to calculating cumulative statistics from
+the persisted wire transaction ledger (`transactions.jsonl`).
+
+---
+
+### 5. Alternative: Direct Docker Invocation
 
 If you prefer to invoke Docker directly without using the Python CLI wrapper:
 
@@ -329,7 +393,7 @@ docker run --name holon-coherence --rm -it \
   holon-coherence:latest
 ```
 
-### 5. Connect Any Agent (Inline Execution)
+### 6. Connect Any Agent (Inline Execution)
 
 > [!IMPORTANT] **Why Inline Proxy Execution instead of `export`?**
 >

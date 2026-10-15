@@ -40,6 +40,7 @@ class RunnerFlags(NamedTuple):
     agent_args: list[str]
     help_requested: bool = False
     local_llm_base: str | None = None
+    model: str | None = None
 
 
 def extract_runner_flags(argv: list[str]) -> RunnerFlags:
@@ -48,6 +49,7 @@ def extract_runner_flags(argv: list[str]) -> RunnerFlags:
     port = None
     help_requested = False
     local_llm_base = None
+    model = None
     agent_args: list[str] = []
     i = 0
     while i < len(argv):
@@ -58,18 +60,34 @@ def extract_runner_flags(argv: list[str]) -> RunnerFlags:
         elif arg in ("--help", "-h"):
             help_requested = True
             i += 1
-        elif arg == "--local-llm-base":
+        elif arg in ("--local-llm-base", "--local-llm-endpoint"):
             if i + 1 >= len(argv) or argv[i + 1] == "--":
-                print("Error: Option --local-llm-base requires an argument, e.g. localhost:8081.", file=sys.stderr)
+                print(f"Error: Option {arg} requires an argument, e.g. localhost:8081.", file=sys.stderr)
                 sys.exit(1)
             local_llm_base = argv[i + 1]
             i += 2
-        elif arg.startswith("--local-llm-base="):
+        elif arg.startswith(("--local-llm-base=", "--local-llm-endpoint=")):
+            flag_name = arg.split("=", 1)[0]
             val = arg.split("=", 1)[1]
             if not val:
-                print("Error: Option --local-llm-base requires an argument, e.g. localhost:8081.", file=sys.stderr)
+                print(f"Error: Option {flag_name} requires an argument, e.g. localhost:8081.", file=sys.stderr)
                 sys.exit(1)
             local_llm_base = val
+            i += 1
+        elif arg == "--model":
+            if i + 1 >= len(argv) or argv[i + 1] == "--":
+                print("Error: Option --model requires an argument.", file=sys.stderr)
+                sys.exit(1)
+            model = argv[i + 1]
+            agent_args.extend([arg, argv[i + 1]])
+            i += 2
+        elif arg.startswith("--model="):
+            val = arg.split("=", 1)[1]
+            if not val:
+                print("Error: Option --model requires an argument.", file=sys.stderr)
+                sys.exit(1)
+            model = val
+            agent_args.append(arg)
             i += 1
         elif arg == "--port":
             if i + 1 < len(argv) and argv[i + 1] != "--":
@@ -105,7 +123,14 @@ def extract_runner_flags(argv: list[str]) -> RunnerFlags:
         else:
             agent_args.append(arg)
             i += 1
-    return RunnerFlags(ephemeral, port, agent_args, help_requested=help_requested, local_llm_base=local_llm_base)
+    return RunnerFlags(
+        ephemeral,
+        port,
+        agent_args,
+        help_requested=help_requested,
+        local_llm_base=local_llm_base,
+        model=model,
+    )
 
 
 def resolve_agent_binary(agent_name: str) -> str | None:
@@ -122,6 +147,8 @@ def build_agent_env(
     agent_name: str,
     port: int,
     drop_no_proxy: tuple[str, ...] = (),
+    model: str | None = None,
+    local_llm_base: str | None = None,
 ) -> dict[str, str]:
     """Construct environment variables for the child agent subprocess."""
     cli = get_cli()
@@ -135,13 +162,37 @@ def build_agent_env(
             env.pop(var, None)
 
     holon_key = env.get("HOLON_AGENT_KEY")
+    normalized_agent = "agy" if agent_name == "antigravity" else agent_name
+
+    effective_local_base = local_llm_base or os.getenv("HOLON_LOCAL_LLM_BASE")
+    if effective_local_base:
+        env.setdefault("USER", "holon")
+        if normalized_agent == "claude":
+            env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{port}"
+            env["ANTHROPIC_AUTH_TOKEN"] = holon_key or "sk-ant-local"
+            env["ANTHROPIC_API_KEY"] = holon_key or "sk-ant-local"
+            if model:
+                env["ANTHROPIC_MODEL"] = model
+            env["ANTHROPIC_DISABLE_TELEMETRY"] = "1"
+            env["CLAUDE_SUPPRESS_FALLBACK"] = "1"
+        elif normalized_agent == "agy":
+            env["AGY_GATEWAY_URL"] = f"http://127.0.0.1.nip.io:{port}"
+            if model:
+                env["AGY_MODEL"] = model
+            env.setdefault("GEMINI_API_KEY", holon_key or "dummy-local-key")
+            env.setdefault("AGY_USER_TOKEN", holon_key or "dummy-local-key")
+        elif normalized_agent in ("codex", "opencode", "pi"):
+            env["OPENAI_BASE_URL"] = f"http://127.0.0.1:{port}/v1"
+            if model:
+                env["OPENAI_MODEL"] = model
+
     if holon_key:
-        normalized_agent = "agy" if agent_name == "antigravity" else agent_name
         if normalized_agent == "agy":
             env["GEMINI_API_KEY"] = holon_key
             env["AGY_USER_TOKEN"] = holon_key
         elif normalized_agent == "claude":
-            env["ANTHROPIC_API_KEY"] = holon_key
+            if "ANTHROPIC_API_KEY" not in env:
+                env["ANTHROPIC_API_KEY"] = holon_key
         elif normalized_agent == "codex":
             env["OPENAI_API_KEY"] = holon_key
         elif normalized_agent == "opencode":
@@ -158,6 +209,7 @@ def run_agent(
     ephemeral: bool = False,
     port: int | None = None,
     local_llm_base: str | None = None,
+    model: str | None = None,
 ) -> int:
     """Launch the optimization proxy and execute the requested coding agent with full telemetry."""
     cli = get_cli()
@@ -238,7 +290,17 @@ def run_agent(
             reachable, detail = probe_host(route.target.port)
         drop_no_proxy = report_route(route, reachable, detail)
 
-    child_env = build_env(agent_name, port, drop_no_proxy=drop_no_proxy)
+    try:
+        child_env = build_env(
+            agent_name,
+            port,
+            drop_no_proxy=drop_no_proxy,
+            model=model,
+            local_llm_base=local_llm_base,
+        )
+    except TypeError:
+        child_env = build_env(agent_name, port, drop_no_proxy=drop_no_proxy)
+
     cmd = [binary_path, *agent_args]
 
     try:
@@ -252,7 +314,7 @@ def _print_agent_help(agent_name: str) -> None:
     """Print help information for running an agent."""
     print(
         f"usage: holon-coherence {agent_name} [--ephemeral] [--port PORT] "
-        "[--local-llm-base BASE] [--] [agent_args ...]\n"
+        "[--model MODEL] [--local-llm-base BASE] [--local-llm-endpoint ENDPOINT] [--] [agent_args ...]\n"
     )
     print(f"Run {agent_name} coding agent with automated background proxy and wire optimization.\n")
     print("positional arguments:")
@@ -260,10 +322,12 @@ def _print_agent_help(agent_name: str) -> None:
     print("options:")
     print("  --ephemeral           Stop and remove the proxy container when the agent exits")
     print(f"  --port PORT           Proxy listen port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)")
+    print("  --model MODEL         Model identifier to configure for the agent")
     print(
         "  --local-llm-base BASE Host-local model server (e.g. localhost:8081) to intercept\n"
-        f"                       and reroute via {GATEWAY_HOSTNAME} instead of bypassing the proxy\n"
+        f"                       and reroute via {GATEWAY_HOSTNAME} instead of bypassing the proxy"
     )
+    print("  --local-llm-endpoint ENDPOINT Alias for --local-llm-base\n")
     print("note:")
     print("  Use '--' to pass flags directly to the underlying agent (e.g. '-- --help').")
 
@@ -273,7 +337,7 @@ def _print_run_agent_help() -> None:
     agents_str = ", ".join(sorted(set(SUPPORTED_AGENTS)))
     print(
         "usage: holon-coherence run-agent <agent> [--ephemeral] [--port PORT] "
-        "[--local-llm-base BASE] [--] [agent_args ...]\n"
+        "[--model MODEL] [--local-llm-base BASE] [--local-llm-endpoint ENDPOINT] [--] [agent_args ...]\n"
     )
     print("Run a coding agent with automated background proxy and wire optimization.\n")
     print("positional arguments:")
@@ -282,9 +346,11 @@ def _print_run_agent_help() -> None:
     print("options:")
     print("  --ephemeral           Stop and remove the proxy container when the agent exits")
     print(f"  --port PORT           Proxy listen port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)")
+    print("  --model MODEL         Model identifier to configure for the agent")
     print(
         "  --local-llm-base BASE Host-local model server (e.g. localhost:8081) to intercept\n"
-        f"                       and reroute via {GATEWAY_HOSTNAME} instead of bypassing the proxy\n"
+        f"                       and reroute via {GATEWAY_HOSTNAME} instead of bypassing the proxy"
     )
+    print("  --local-llm-endpoint ENDPOINT Alias for --local-llm-base\n")
     print("note:")
     print("  Use '--' to pass flags directly to the underlying agent (e.g. '-- --help').")

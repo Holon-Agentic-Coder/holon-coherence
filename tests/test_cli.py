@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import stat
@@ -32,6 +33,7 @@ from holon_coherence.cli import (
     find_system_ca_bundle,
     get_active_web_token,
     get_or_create_merged_ca_bundle,
+    handle_metrics,
     host_local_container_args,
     host_local_covered,
     is_container_bound_to_port,
@@ -2341,3 +2343,169 @@ class TestWebTokenAndDashboardAuth:
         assert exc.value.code == 1
         captured = capsys.readouterr()
         assert "No active web dashboard session token found" in captured.out
+
+
+class TestCLIMetricsCommand:
+    """Tests for holon-coherence metrics command and status integration (Bean 0043)."""
+
+    def test_handle_metrics_live_formatted(self, capsys: pytest.CaptureFixture[str]) -> None:
+        mock_payload = json.dumps(
+            {
+                "total_turns": 5,
+                "total_requests": 10,
+                "cache_hits": 4,
+                "cache_misses": 6,
+                "cache_hit_rate": 0.4,
+                "tool_calls_pruned": 12,
+                "tokens_reduced": 350,
+                "chars_saved": 1400,
+                "avg_ttft_ms": 120.5,
+                "avg_decode_throughput_tps": 45.2,
+                "total_input_tokens": 1500,
+                "total_output_tokens": 800,
+                "total_cache_read_tokens": 600,
+            }
+        ).encode("utf-8")
+
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = mock_payload
+        mock_resp.__enter__.return_value = mock_resp
+
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            ret = handle_metrics(port=8080)
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "HOLON COHERENCE OPTIMIZATION METRICS" in out
+        assert "Tool Calls Saved / Pruned:  12" in out
+        assert "Tokens Reduced:              350" in out
+        assert "Cache Hit Rate:              40.0%" in out
+        assert "Average TTFT:" in out
+        assert "120.50 ms" in out
+        assert "http://127.0.0.1:8080/holon/" in out
+
+    def test_handle_metrics_live_json(self, capsys: pytest.CaptureFixture[str]) -> None:
+        payload = {"tool_calls_pruned": 8, "tokens_reduced": 200, "cache_hit_rate": 0.25}
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = json.dumps(payload).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            ret = handle_metrics(port=8080, json_output=True)
+        assert ret == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["tool_calls_pruned"] == 8
+        assert data["tokens_reduced"] == 200
+
+    def test_handle_metrics_offline_wire_log(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        jsonl = tmp_path / "transactions.jsonl"
+        records = [
+            {
+                "turn_id": 1,
+                "cache_action": "HIT",
+                "delta": {"tool_outputs_omitted": 2, "chars_saved": 400},
+                "response": {"usage": {"input_tokens": 100, "output_tokens": 50, "cache_read_input_tokens": 100}},
+                "timing": {"ttft_ms": 10.0},
+            },
+            {
+                "turn_id": 2,
+                "cache_action": "MISS",
+                "delta": {"tool_outputs_omitted": 3, "chars_saved": 800},
+                "response": {"usage": {"input_tokens": 200, "output_tokens": 100, "cache_read_input_tokens": 0}},
+                "timing": {"ttft_ms": 100.0, "total_ms": 1100.0},
+            },
+        ]
+        with open(jsonl, "w", encoding="utf-8") as f:
+            for r in records:
+                f.write(json.dumps(r) + "\n")
+
+        monkeypatch.setenv("WIRE_LOG_DIR", str(tmp_path))
+        with patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
+            ret = handle_metrics(json_output=True)
+        assert ret == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["source"] == "offline_wire_log"
+        assert data["tool_calls_pruned"] == 5
+        assert data["tokens_reduced"] == 300
+        assert data["cache_hits"] == 1
+        assert data["total_requests"] == 2
+        assert data["avg_decode_throughput_tps"] == 100.0
+
+    def test_metrics_cli_dispatch(self) -> None:
+        with (
+            patch("holon_coherence.cli.handle_metrics", return_value=0) as mock_handle,
+            pytest.raises(SystemExit) as exc,
+        ):
+            main(["metrics", "--json", "--port", "9999"])
+        assert exc.value.code == 0
+        assert mock_handle.call_count == 1
+        args = mock_handle.call_args[0][0]
+        assert args.json is True
+        assert args.port == 9999
+
+
+class TestLocalLlmRunnerFlagsAndEnvs:
+    """Tests for --model and local LLM runner flags/environments (Bean 0051)."""
+
+    def test_extract_runner_flags_model(self) -> None:
+        flags = extract_runner_flags(["--model", "qwen2.5-coder", "run.py"])
+        assert flags.model == "qwen2.5-coder"
+        assert "--model" in flags.agent_args
+        assert "qwen2.5-coder" in flags.agent_args
+        assert "run.py" in flags.agent_args
+
+    def test_extract_runner_flags_local_llm_endpoint(self) -> None:
+        flags = extract_runner_flags(["--local-llm-endpoint", "localhost:11434", "task.py"])
+        assert flags.local_llm_base == "localhost:11434"
+        assert flags.agent_args == ["task.py"]
+
+    def test_build_agent_env_claude_local(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HOLON_AGENT_KEY", "test-claude-key")
+        monkeypatch.delenv("USER", raising=False)
+        env = build_agent_env("claude", port=8080, model="claude-3-5-sonnet", local_llm_base="localhost:8081")
+        assert env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8080"
+        assert env["ANTHROPIC_AUTH_TOKEN"] == "test-claude-key"
+        assert env["ANTHROPIC_API_KEY"] == "test-claude-key"
+        assert env["ANTHROPIC_MODEL"] == "claude-3-5-sonnet"
+        assert env["ANTHROPIC_DISABLE_TELEMETRY"] == "1"
+        assert env["CLAUDE_SUPPRESS_FALLBACK"] == "1"
+        assert env["USER"] == "holon"
+
+    def test_build_agent_env_agy_local_gateway_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HOLON_AGENT_KEY", "test-agy-key")
+        monkeypatch.delenv("USER", raising=False)
+        env = build_agent_env("agy", port=8080, model="gemini-flash", local_llm_base="localhost:11434")
+        # Bean 0051: sets AGY_GATEWAY_URL with non-loopback alias (NOT GOOGLE_GEMINI_BASE_URL)
+        assert env["AGY_GATEWAY_URL"] == "http://127.0.0.1.nip.io:8080"
+        assert "GOOGLE_GEMINI_BASE_URL" not in env
+        assert env["AGY_MODEL"] == "gemini-flash"
+        assert env["GEMINI_API_KEY"] == "test-agy-key"
+        assert env["AGY_USER_TOKEN"] == "test-agy-key"
+        assert env["USER"] == "holon"
+
+    def test_build_agent_env_agy_local_dummy_credentials(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HOLON_AGENT_KEY", raising=False)
+        monkeypatch.delenv("USER", raising=False)
+        env = build_agent_env("agy", port=8080, model="gemini-flash", local_llm_base="localhost:11434")
+        assert env["AGY_GATEWAY_URL"] == "http://127.0.0.1.nip.io:8080"
+        assert env["GEMINI_API_KEY"] == "dummy-local-key"
+        assert env["AGY_USER_TOKEN"] == "dummy-local-key"
+        assert env["USER"] == "holon"
+
+    def test_build_agent_env_cloud_preservation(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HOLON_LOCAL_LLM_BASE", raising=False)
+        monkeypatch.setenv("HOLON_AGENT_KEY", "test-key")
+        # When local_llm_base is None, local override env vars must NOT be present
+        claude_env = build_agent_env("claude", port=8080)
+        assert "ANTHROPIC_BASE_URL" not in claude_env
+        assert "CLAUDE_SUPPRESS_FALLBACK" not in claude_env
+
+        agy_env = build_agent_env("agy", port=8080)
+        assert "AGY_GATEWAY_URL" not in agy_env
+        assert "AGY_MODEL" not in agy_env
