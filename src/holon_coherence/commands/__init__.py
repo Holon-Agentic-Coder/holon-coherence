@@ -30,6 +30,7 @@ from holon_coherence.commands.docker_ops import (
     is_container_running,
     stop_proxy_container,
 )
+from holon_coherence.commands.metrics import handle_metrics
 from holon_coherence.commands.runner import (
     NO_PROXY_HOSTS,
     build_proxy_env,
@@ -95,6 +96,7 @@ __all__ = [
     "handle_build",
     "handle_init_ca",
     "handle_logs",
+    "handle_metrics",
     "handle_run",
     "handle_start",
     "handle_status",

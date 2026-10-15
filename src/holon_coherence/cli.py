@@ -38,6 +38,7 @@ from holon_coherence.commands import (
     handle_build,
     handle_init_ca,
     handle_logs,
+    handle_metrics,
     handle_run,
     handle_start,
     handle_status,
@@ -95,6 +96,7 @@ __all__ = [
     "handle_build",
     "handle_init_ca",
     "handle_logs",
+    "handle_metrics",
     "handle_run",
     "handle_start",
     "handle_status",
@@ -132,15 +134,14 @@ def main(argv: list[str] | None = None) -> None:
             if flags.help_requested:
                 _print_agent_help(first)
                 sys.exit(0)
-            sys.exit(
-                run_agent(
-                    first,
-                    flags.agent_args,
-                    ephemeral=flags.ephemeral,
-                    port=flags.port,
-                    local_llm_base=flags.local_llm_base,
-                )
-            )
+            kwargs = {
+                "ephemeral": flags.ephemeral,
+                "port": flags.port,
+                "local_llm_base": flags.local_llm_base,
+            }
+            if flags.model is not None:
+                kwargs["model"] = flags.model
+            sys.exit(run_agent(first, flags.agent_args, **kwargs))
         elif first == "run-agent":
             if not argv[1:]:
                 _print_run_agent_help()
@@ -163,15 +164,14 @@ def main(argv: list[str] | None = None) -> None:
                     file=sys.stderr,
                 )
                 sys.exit(1)
-            sys.exit(
-                run_agent(
-                    agent_target,
-                    flags.agent_args[1:],
-                    ephemeral=flags.ephemeral,
-                    port=flags.port,
-                    local_llm_base=flags.local_llm_base,
-                )
-            )
+            kwargs = {
+                "ephemeral": flags.ephemeral,
+                "port": flags.port,
+                "local_llm_base": flags.local_llm_base,
+            }
+            if flags.model is not None:
+                kwargs["model"] = flags.model
+            sys.exit(run_agent(agent_target, flags.agent_args[1:], **kwargs))
 
     parser = argparse.ArgumentParser(
         prog="holon-coherence",
@@ -238,6 +238,16 @@ def main(argv: list[str] | None = None) -> None:
     subparsers.add_parser("web-token", help="Display active web dashboard authentication token")
     subparsers.add_parser("web-key", help="Alias for web-token")
 
+    # Metrics reporting
+    metrics_parser = subparsers.add_parser("metrics", help="Display cumulative optimization metrics")
+    metrics_parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help=f"Proxy listen port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)",
+    )
+    metrics_parser.add_argument("--json", action="store_true", help="Output metrics as raw JSON")
+
     # Run command with inline proxy properties
     run_parser = subparsers.add_parser(
         "run",
@@ -265,10 +275,22 @@ def main(argv: list[str] | None = None) -> None:
         "--port", type=int, default=None, help=f"Proxy port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)"
     )
     run_agent_parser.add_argument(
+        "--model",
+        default=None,
+        metavar="MODEL",
+        help="Model identifier to configure for the agent",
+    )
+    run_agent_parser.add_argument(
         "--local-llm-base",
         default=None,
         metavar="BASE",
         help="Host-local model server endpoint to intercept and reroute via the Docker host gateway",
+    )
+    run_agent_parser.add_argument(
+        "--local-llm-endpoint",
+        default=None,
+        metavar="ENDPOINT",
+        help="Alias for --local-llm-base",
     )
     run_agent_parser.add_argument("agent_args", nargs=argparse.REMAINDER, help="Arguments passed to the agent")
 
@@ -284,10 +306,22 @@ def main(argv: list[str] | None = None) -> None:
             "--port", type=int, default=None, help=f"Proxy port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)"
         )
         alias_parser.add_argument(
+            "--model",
+            default=None,
+            metavar="MODEL",
+            help="Model identifier to configure for the agent",
+        )
+        alias_parser.add_argument(
             "--local-llm-base",
             default=None,
             metavar="BASE",
             help="Host-local model server endpoint to intercept and reroute via the Docker host gateway",
+        )
+        alias_parser.add_argument(
+            "--local-llm-endpoint",
+            default=None,
+            metavar="ENDPOINT",
+            help="Alias for --local-llm-base",
         )
         alias_parser.add_argument("agent_args", nargs=argparse.REMAINDER, help="Arguments passed to the agent")
 
@@ -308,6 +342,9 @@ def main(argv: list[str] | None = None) -> None:
 
     elif args.command == "status":
         handle_status(args)
+
+    elif args.command == "metrics":
+        sys.exit(handle_metrics(args))
 
     elif args.command == "logs":
         handle_logs(args)

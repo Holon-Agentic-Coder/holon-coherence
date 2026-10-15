@@ -1,4 +1,5 @@
 I have launched `pytest -m "not integration_test"` in the workspace to verify the baseline test suite status and will review the results once complete.
+
 # Plan for I-1792039462-coherence-web-metrics-and-local-llm-runners
 
 - **Plan ID:** P-1792039477-antigravity-agent-gemini-3.8-flash-medium}
