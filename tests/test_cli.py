@@ -2496,7 +2496,14 @@ class TestCLIMetricsCommand:
                 "turn_id": 2,
                 "cache_action": "MISS",
                 "delta": {"tool_outputs_omitted": 3, "chars_saved": 800},
-                "response": {"usage": {"input_tokens": 200, "output_tokens": 100, "cache_read_input_tokens": 0}},
+                "response": {
+                    "usage": {
+                        "input_tokens": 200,
+                        "output_tokens": 100,
+                        "cache_read_input_tokens": 0,
+                        "reasoning_tokens": None,
+                    }
+                },
                 "timing": {"ttft_ms": 100.0, "total_ms": 1100.0},
             },
         ]
@@ -2515,6 +2522,7 @@ class TestCLIMetricsCommand:
         assert data["cache_hits"] == 1
         assert data["total_requests"] == 2
         assert data["avg_decode_throughput_tps"] == 100.0
+        assert data["total_reasoning_tokens"] == 0
 
     def test_handle_metrics_offline_fallback_holon_logs(
         self,

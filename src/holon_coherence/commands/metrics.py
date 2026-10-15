@@ -79,11 +79,11 @@ def _read_offline_metrics(wire_log_dir: str) -> dict[str, Any] | None:
                 if isinstance(resp, dict):
                     usage = resp.get("usage", {})
                     if isinstance(usage, dict):
-                        in_toks = usage.get("input_tokens", 0)
-                        out_toks = usage.get("output_tokens", 0)
-                        cache_read_toks = usage.get("cache_read_input_tokens", 0)
-                        cache_create_toks = usage.get("cache_creation_input_tokens", 0)
-                        reason_toks = usage.get("reasoning_tokens", 0) or usage.get("thinking_tokens", 0)
+                        in_toks = usage.get("input_tokens") or 0
+                        out_toks = usage.get("output_tokens") or 0
+                        cache_read_toks = usage.get("cache_read_input_tokens") or 0
+                        cache_create_toks = usage.get("cache_creation_input_tokens") or 0
+                        reason_toks = usage.get("reasoning_tokens") or usage.get("thinking_tokens") or 0
                         total_input_tokens += in_toks
                         total_output_tokens += out_toks
                         total_cache_read_tokens += cache_read_toks
