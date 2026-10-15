@@ -11,8 +11,26 @@ from typing import Any
 
 from holon_coherence.commands.docker_ops import CONTAINER_NAME, get_container_mapped_port
 from holon_coherence.commands.start import DEFAULT_PROXY_PORT
+from holon_coherence.metrics_math import (
+    average,
+    compute_decode_tps,
+    compute_prefill_tps,
+    compute_tail_prefill_tps,
+    positive_rate,
+    positive_seconds,
+)
 
 WIRE_LOG_DIR = os.getenv("WIRE_LOG_DIR", "todo/mitm_wire_logs")
+
+
+def _milliseconds_to_seconds(value: Any) -> float | None:
+    """Convert a wire-log millisecond reading to seconds, passing ``None`` through untouched."""
+    if value is None:
+        return None
+    try:
+        return float(value) / 1000.0
+    except (TypeError, ValueError):
+        return None
 
 
 def _read_offline_metrics(wire_log_dir: str) -> dict[str, Any] | None:
@@ -42,6 +60,9 @@ def _read_offline_metrics(wire_log_dir: str) -> dict[str, Any] | None:
     sum_tail_prefill_tps = 0.0
     count_tail_prefill = 0
     latest_tail_prefill_tps = 0.0
+    latest_decode_tps = 0.0
+    latest_ttft_ms = 0.0
+    latest_total_time_ms = 0.0
     seen_turn_ids: set[str | int] = set()
 
     try:
@@ -91,27 +112,54 @@ def _read_offline_metrics(wire_log_dir: str) -> dict[str, Any] | None:
                         total_reasoning_tokens += reason_toks
 
                 timing = record.get("timing", {})
-                if isinstance(timing, dict):
-                    ttft = timing.get("ttft_ms")
-                    total_ms = timing.get("total_ms")
-                    if ttft is not None and ttft > 0:
-                        sum_ttft_ms += float(ttft)
-                        count_ttft += 1
-                        ttft_sec = float(ttft) / 1000.0
-                        if in_toks > 0 and ttft_sec > 0:
-                            p_tps = in_toks / ttft_sec
-                            sum_prefill_throughput_tps += p_tps
-                            count_prefill += 1
-                            latest_prefill_tps = p_tps
-                            uncached_in = max(0, in_toks - cache_read_toks)
-                            tail_p_tps = uncached_in / ttft_sec
-                            sum_tail_prefill_tps += tail_p_tps
-                            count_tail_prefill += 1
-                            latest_tail_prefill_tps = tail_p_tps
-                    if total_ms is not None and ttft is not None and (total_ms - ttft) > 0 and out_toks > 0:
-                        gen_sec = (total_ms - ttft) / 1000.0
-                        sum_decode_throughput_tps += out_toks / gen_sec
-                        count_decode += 1
+                if not isinstance(timing, dict):
+                    timing = {}
+
+                ttft_sec = positive_seconds(_milliseconds_to_seconds(timing.get("ttft_ms")))
+                total_sec = positive_seconds(_milliseconds_to_seconds(timing.get("total_ms")))
+                if ttft_sec is not None:
+                    sum_ttft_ms += ttft_sec * 1000.0
+                    count_ttft += 1
+                    latest_ttft_ms = ttft_sec * 1000.0
+                if total_sec is not None:
+                    latest_total_time_ms = total_sec * 1000.0
+
+                # Prefill is prompt tokens over the measured TTFT. Records written by Bean 0097 and
+                # later carry the computed rate explicitly, so live and offline readings agree even
+                # when the two disagree with a naive re-derivation from rounded millisecond values.
+                prefill_tps = positive_rate(timing.get("prefill_tps")) or compute_prefill_tps(in_toks, ttft_sec)
+                if prefill_tps is not None:
+                    sum_prefill_throughput_tps += prefill_tps
+                    count_prefill += 1
+                    latest_prefill_tps = prefill_tps
+
+                uncached_in = max(0, in_toks - cache_read_toks)
+                tail_p_tps = positive_rate(timing.get("tail_prefill_tps")) or compute_tail_prefill_tps(
+                    uncached_in, ttft_sec
+                )
+                if tail_p_tps is not None:
+                    sum_tail_prefill_tps += tail_p_tps
+                    count_tail_prefill += 1
+                    latest_tail_prefill_tps = tail_p_tps
+
+                # Decode throughput only ever comes from a genuine streaming window. Post-0097
+                # records carry `streaming` plus the admitted `decode_tps`; legacy records have no
+                # flag, so they fall back to `total_ms - ttft_ms` which is admitted only when the
+                # window is physically plausible (>= 50ms), which is exactly what excludes the
+                # 1-2ms socket-parse windows that produced 34k-38k tok/s artefacts.
+                if "decode_tps" in timing:
+                    decode_tps = positive_rate(timing.get("decode_tps"))
+                else:
+                    legacy_window = (
+                        positive_seconds(total_sec - ttft_sec)
+                        if total_sec is not None and ttft_sec is not None
+                        else None
+                    )
+                    decode_tps = compute_decode_tps(out_toks, legacy_window, streaming=True)
+                if decode_tps is not None:
+                    sum_decode_throughput_tps += decode_tps
+                    count_decode += 1
+                    latest_decode_tps = decode_tps
 
     except Exception:
         return None
@@ -121,10 +169,10 @@ def _read_offline_metrics(wire_log_dir: str) -> dict[str, Any] | None:
 
     cache_hit_rate = (cache_hits / total_requests) if total_requests > 0 else 0.0
     provider_cache_hit_rate = (total_cache_read_tokens / total_input_tokens) if total_input_tokens > 0 else 0.0
-    avg_ttft_ms = (sum_ttft_ms / count_ttft) if count_ttft > 0 else 0.0
-    avg_decode_throughput_tps = (sum_decode_throughput_tps / count_decode) if count_decode > 0 else 0.0
-    avg_prefill_throughput_tps = (sum_prefill_throughput_tps / count_prefill) if count_prefill > 0 else 0.0
-    avg_tail_prefill_tps = (sum_tail_prefill_tps / count_tail_prefill) if count_tail_prefill > 0 else 0.0
+    avg_ttft_ms = average(sum_ttft_ms, count_ttft)
+    avg_decode_throughput_tps = average(sum_decode_throughput_tps, count_decode)
+    avg_prefill_throughput_tps = average(sum_prefill_throughput_tps, count_prefill)
+    avg_tail_prefill_tps = average(sum_tail_prefill_tps, count_tail_prefill)
     tokens_reduced = chars_saved // 4
 
     return {
@@ -141,10 +189,14 @@ def _read_offline_metrics(wire_log_dir: str) -> dict[str, Any] | None:
         "cache_control_injected": cache_control_injected,
         "avg_ttft_ms": round(avg_ttft_ms, 2),
         "avg_decode_throughput_tps": round(avg_decode_throughput_tps, 2),
+        "latest_decode_throughput_tps": round(latest_decode_tps, 2),
+        "decode_samples": count_decode,
         "avg_prefill_throughput_tps": round(avg_prefill_throughput_tps, 2),
         "latest_prefill_tps": round(latest_prefill_tps, 2),
         "avg_tail_prefill_tps": round(avg_tail_prefill_tps, 2),
         "latest_tail_prefill_tps": round(latest_tail_prefill_tps, 2),
+        "latest_ttft_ms": round(latest_ttft_ms, 2),
+        "latest_total_time_ms": round(latest_total_time_ms, 2),
         "total_input_tokens": total_input_tokens,
         "total_output_tokens": total_output_tokens,
         "total_cache_read_tokens": total_cache_read_tokens,
@@ -245,6 +297,8 @@ def handle_metrics(
     chars_saved = metrics.get("chars_saved", 0)
     avg_ttft = metrics.get("avg_ttft_ms", 0.0)
     avg_decode_tps = metrics.get("avg_decode_throughput_tps", 0.0)
+    latest_decode_tps = metrics.get("latest_decode_throughput_tps", 0.0)
+    decode_samples = metrics.get("decode_samples")
     avg_prefill_tps = metrics.get("avg_prefill_throughput_tps", 0.0)
     latest_prefill_tps = metrics.get("latest_prefill_tps", 0.0)
     avg_tail_prefill_tps = metrics.get("avg_tail_prefill_tps", 0.0)
@@ -273,7 +327,10 @@ def handle_metrics(
     print(f"  🚀 Prompt (Prefill) Speed:     {avg_prefill_tps:.2f} tokens/sec (Latest: {latest_prefill_tps:.2f} t/s)")
     if avg_tail_prefill_tps > 0:
         print(f"  ⚡ Tail Prefill Speed:        {avg_tail_prefill_tps:.2f} tokens/sec")
-    print(f"  🚀 Decode Throughput:          {avg_decode_tps:.2f} tokens/sec")
+    decode_suffix = f" (latest: {latest_decode_tps:.2f} t/s)" if latest_decode_tps else ""
+    if not decode_samples and avg_decode_tps == 0:
+        decode_suffix += "  [no streaming samples yet]"
+    print(f"  🚀 Decode Throughput:          {avg_decode_tps:.2f} tokens/sec{decode_suffix}")
     print("-" * 64)
     print(f"  📊 Total Turns:                {total_turns:,}")
     print(f"  🔄 Total Requests:             {total_requests:,} ({cache_hits:,} cached, {cache_misses:,} upstream)")

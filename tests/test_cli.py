@@ -9,6 +9,7 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -50,7 +51,9 @@ from holon_coherence.cli import (
     stop_proxy_container,
     wait_for_proxy_ready,
 )
+from holon_coherence.commands.metrics import _read_offline_metrics
 from holon_coherence.host_local import HOST_LOCAL_ENV_VAR, decode_targets
+from holon_coherence.mitm_addon import CumulativeMetrics
 
 
 class TestExtractRunnerFlags:
@@ -2685,3 +2688,263 @@ class TestLocalLlmRunnerFlagsAndEnvs:
         agy_env = build_agent_env("agy", port=8080)
         assert "AGY_GATEWAY_URL" not in agy_env
         assert "AGY_MODEL" not in agy_env
+
+
+class TestOfflineTelemetryThroughputBean0097:
+    """Offline wire-log throughput arithmetic must mirror the live proxy (Bean 0097)."""
+
+    @staticmethod
+    def _write_records(tmp_path: Path, records: list[dict[str, Any]]) -> str:
+        jsonl = tmp_path / "transactions.jsonl"
+        with open(jsonl, "w", encoding="utf-8") as handle:
+            for record in records:
+                handle.write(json.dumps(record) + "\n")
+        return str(tmp_path)
+
+    def test_legacy_non_streaming_window_below_floor_is_not_sampled(self, tmp_path: Path) -> None:
+        """A 1.5ms ``total - ttft`` window is socket parse time, not 1,000,000 tokens/sec."""
+        log_dir = self._write_records(
+            tmp_path,
+            [
+                {
+                    "turn_id": 1,
+                    "cache_action": "MISS",
+                    "delta": {},
+                    "response": {"usage": {"input_tokens": 1_200_000, "output_tokens": 1_500}},
+                    "timing": {"ttft_ms": 500.0, "total_ms": 501.5},
+                }
+            ],
+        )
+
+        data = _read_offline_metrics(log_dir)
+
+        assert data is not None
+        assert data["decode_samples"] == 0
+        assert data["avg_decode_throughput_tps"] == 0.0
+        assert data["latest_decode_throughput_tps"] == 0.0
+        # Prefill still uses the genuine TTFT: 1,200,000 tokens over 0.5s.
+        assert data["avg_prefill_throughput_tps"] == 2_400_000.0
+        assert data["avg_ttft_ms"] == 500.0
+
+    def test_legacy_plausible_window_is_still_admitted(self, tmp_path: Path) -> None:
+        """Pre-0097 logs keep contributing decode samples when the window is physically credible."""
+        log_dir = self._write_records(
+            tmp_path,
+            [
+                {
+                    "turn_id": 1,
+                    "cache_action": "MISS",
+                    "delta": {},
+                    "response": {"usage": {"input_tokens": 100, "output_tokens": 50}},
+                    "timing": {"ttft_ms": 200.0, "total_ms": 1200.0},
+                },
+                {
+                    "turn_id": 2,
+                    "cache_action": "MISS",
+                    "delta": {},
+                    "response": {"usage": {"input_tokens": 100, "output_tokens": 1500}},
+                    "timing": {"ttft_ms": 200.0, "total_ms": 201.0},
+                },
+            ],
+        )
+
+        data = _read_offline_metrics(log_dir)
+
+        assert data is not None
+        # Only the 1.0s window is admitted (50 tokens / 1.0s), so the 1,500,000 tok/s artefact never
+        # enters the average.
+        assert data["decode_samples"] == 1
+        assert data["avg_decode_throughput_tps"] == 50.0
+
+    def test_streaming_decode_rate_is_honoured_and_non_streaming_ignored(self, tmp_path: Path) -> None:
+        """Post-0097 records carry an explicit ``streaming`` flag plus the admitted rate."""
+        log_dir = self._write_records(
+            tmp_path,
+            [
+                {
+                    "turn_id": 1,
+                    "cache_action": "MISS",
+                    "delta": {},
+                    "response": {"usage": {"input_tokens": 1000, "output_tokens": 100}},
+                    "timing": {
+                        "ttft_ms": 500.0,
+                        "total_ms": 900.0,
+                        "streaming": True,
+                        "generation_ms": 400.0,
+                        "prefill_tps": 2000.0,
+                        "tail_prefill_tps": 2000.0,
+                        "decode_tps": 250.0,
+                    },
+                },
+                {
+                    "turn_id": 2,
+                    "cache_action": "MISS",
+                    "delta": {},
+                    "response": {"usage": {"input_tokens": 2000, "output_tokens": 200}},
+                    "timing": {
+                        "ttft_ms": 400.0,
+                        "total_ms": 401.0,
+                        "streaming": False,
+                        "generation_ms": None,
+                        "prefill_tps": 5000.0,
+                        "tail_prefill_tps": 5000.0,
+                        "decode_tps": None,
+                    },
+                },
+            ],
+        )
+
+        data = _read_offline_metrics(log_dir)
+
+        assert data is not None
+        assert data["decode_samples"] == 1
+        assert data["avg_decode_throughput_tps"] == 250.0
+        assert data["latest_decode_throughput_tps"] == 250.0
+        assert data["avg_prefill_throughput_tps"] == 3500.0
+        assert data["latest_prefill_tps"] == 5000.0
+        assert data["latest_ttft_ms"] == 400.0
+        assert data["latest_total_time_ms"] == 401.0
+
+    def test_unmeasured_prefill_rate_falls_back_to_recorded_ttft(self, tmp_path: Path) -> None:
+        """Records with ``prefill_tps: null`` still derive prefill speed from a real TTFT."""
+        log_dir = self._write_records(
+            tmp_path,
+            [
+                {
+                    "turn_id": 1,
+                    "cache_action": "MISS",
+                    "delta": {},
+                    "response": {"usage": {"input_tokens": 900, "output_tokens": 0, "cache_read_input_tokens": 300}},
+                    "timing": {"ttft_ms": 300.0, "total_ms": 300.0, "streaming": False, "prefill_tps": None},
+                }
+            ],
+        )
+
+        data = _read_offline_metrics(log_dir)
+
+        assert data is not None
+        assert data["avg_prefill_throughput_tps"] == 3000.0  # 900 / 0.3s
+        assert data["avg_tail_prefill_tps"] == 2000.0  # 600 uncached / 0.3s
+
+    def test_live_and_offline_metric_surfaces_agree(self, tmp_path: Path) -> None:
+        """The in-memory proxy and the offline parser must publish identical numbers."""
+        log_dir = self._write_records(
+            tmp_path,
+            [
+                {
+                    "turn_id": 1,
+                    "cache_action": "MISS",
+                    "delta": {"tool_outputs_omitted": 2, "chars_saved": 400},
+                    "response": {
+                        "usage": {
+                            "input_tokens": 1000,
+                            "output_tokens": 100,
+                            "cache_read_input_tokens": 200,
+                            "cache_creation_input_tokens": 50,
+                            "reasoning_tokens": 10,
+                        }
+                    },
+                    "timing": {
+                        "ttft_ms": 500.0,
+                        "total_ms": 900.0,
+                        "streaming": True,
+                        "generation_ms": 400.0,
+                        "prefill_tps": 2000.0,
+                        "tail_prefill_tps": 1600.0,
+                        "decode_tps": 250.0,
+                    },
+                },
+                {
+                    "turn_id": 2,
+                    "cache_action": "MISS",
+                    "delta": {"tool_outputs_omitted": 1, "chars_saved": 200},
+                    "response": {
+                        "usage": {
+                            "input_tokens": 2000,
+                            "output_tokens": 200,
+                            "cache_read_input_tokens": 1000,
+                            "cache_creation_input_tokens": 0,
+                            "reasoning_tokens": 0,
+                        }
+                    },
+                    "timing": {
+                        "ttft_ms": 400.0,
+                        "total_ms": 401.0,
+                        "streaming": False,
+                        "generation_ms": 1.0,
+                        "prefill_tps": 5000.0,
+                        "tail_prefill_tps": 2500.0,
+                        "decode_tps": None,
+                    },
+                },
+            ],
+        )
+
+        offline = _read_offline_metrics(log_dir)
+
+        live = CumulativeMetrics()
+        live.record_request()
+        live.record_request()
+        live.record_cleaner(
+            SimpleNamespace(
+                tool_outputs_omitted=3,
+                chars_saved=600,
+                turns_summarized=0,
+                cache_control_injected=0,
+            )
+        )
+        live.record_response(
+            input_tokens=1000,
+            output_tokens=100,
+            cache_read_tokens=200,
+            cache_creation_tokens=50,
+            reasoning_tokens=10,
+            ttft=0.5,
+            output_tps=250.0,
+            prefill_tps=2000.0,
+            tail_prefill_tps=1600.0,
+            total_time=0.9,
+        )
+        live.record_response(
+            input_tokens=2000,
+            output_tokens=200,
+            cache_read_tokens=1000,
+            cache_creation_tokens=0,
+            reasoning_tokens=0,
+            ttft=0.4,
+            output_tps=None,
+            prefill_tps=5000.0,
+            tail_prefill_tps=2500.0,
+            total_time=0.401,
+        )
+        live_dict = live.to_dict()
+
+        assert offline is not None
+        shared_keys = [
+            "total_requests",
+            "total_turns",
+            "cache_hits",
+            "cache_misses",
+            "cache_hit_rate",
+            "provider_cache_hit_rate",
+            "tool_calls_pruned",
+            "tokens_reduced",
+            "chars_saved",
+            "avg_ttft_ms",
+            "avg_decode_throughput_tps",
+            "latest_decode_throughput_tps",
+            "decode_samples",
+            "avg_prefill_throughput_tps",
+            "latest_prefill_tps",
+            "avg_tail_prefill_tps",
+            "latest_tail_prefill_tps",
+            "latest_ttft_ms",
+            "latest_total_time_ms",
+            "total_input_tokens",
+            "total_output_tokens",
+            "total_cache_read_tokens",
+            "total_cache_creation_tokens",
+            "total_reasoning_tokens",
+        ]
+        for key in shared_keys:
+            assert offline[key] == live_dict[key], f"{key}: offline={offline[key]} live={live_dict[key]}"
