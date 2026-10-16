@@ -163,9 +163,7 @@ class TestTraceLoading:
 class TestOfflineABEvaluation:
     """Tests for differential A/B evaluation mechanics."""
 
-    def test_evaluate_token_reduction_on_repetitive_tool_calls(
-        self, sample_trace_records: list[dict]
-    ) -> None:
+    def test_evaluate_token_reduction_on_repetitive_tool_calls(self, sample_trace_records: list[dict]) -> None:
         scorecard = evaluate_offline_ab_run(
             transactions=sample_trace_records,
             rounds=1,
@@ -212,11 +210,7 @@ class TestOfflineABEvaluation:
             {
                 "turn_id": "turn-bad",
                 "provider": "anthropic",
-                "raw_request": {
-                    "request": {
-                        "messages": [{"role": "user", "content": "Hello world"}]
-                    }
-                },
+                "raw_request": {"request": {"messages": [{"role": "user", "content": "Hello world"}]}},
             }
         ]
 
@@ -273,9 +267,7 @@ class TestScorecardPresentation:
 class TestABTestCLI:
     """Integration tests for the holon-coherence ab-test CLI command."""
 
-    def test_cli_ab_test_json_output(
-        self, jsonl_trace_file: Path, capsys: pytest.CaptureFixture
-    ) -> None:
+    def test_cli_ab_test_json_output(self, jsonl_trace_file: Path, capsys: pytest.CaptureFixture) -> None:
         with pytest.raises(SystemExit) as exc_info:
             main(["ab-test", "--trace-file", str(jsonl_trace_file), "--json"])
 
@@ -286,9 +278,7 @@ class TestABTestCLI:
         assert data["summary"]["total_turns"] == 2
         assert data["summary"]["tokens_reduced"] > 0
 
-    def test_cli_ab_test_human_table_output(
-        self, jsonl_trace_file: Path, capsys: pytest.CaptureFixture
-    ) -> None:
+    def test_cli_ab_test_human_table_output(self, jsonl_trace_file: Path, capsys: pytest.CaptureFixture) -> None:
         with pytest.raises(SystemExit) as exc_info:
             main(["ab-test", "-f", str(jsonl_trace_file)])
 
@@ -297,9 +287,7 @@ class TestABTestCLI:
         assert "HOLON COHERENCE A/B BENCHMARK SCORECARD" in captured.out
         assert "Semantic Parity Check" in captured.out
 
-    def test_cli_ab_test_pass_threshold(
-        self, jsonl_trace_file: Path, capsys: pytest.CaptureFixture
-    ) -> None:
+    def test_cli_ab_test_pass_threshold(self, jsonl_trace_file: Path, capsys: pytest.CaptureFixture) -> None:
         with pytest.raises(SystemExit) as exc_info:
             main(
                 [
@@ -313,9 +301,7 @@ class TestABTestCLI:
 
         assert exc_info.value.code == 0
 
-    def test_cli_ab_test_fail_threshold(
-        self, jsonl_trace_file: Path, capsys: pytest.CaptureFixture
-    ) -> None:
+    def test_cli_ab_test_fail_threshold(self, jsonl_trace_file: Path, capsys: pytest.CaptureFixture) -> None:
         with pytest.raises(SystemExit) as exc_info:
             main(
                 [
@@ -339,9 +325,7 @@ class TestABTestCLI:
         captured = capsys.readouterr()
         assert "Error loading trace transactions" in captured.err
 
-    def test_cli_invalid_threshold_value(
-        self, jsonl_trace_file: Path, capsys: pytest.CaptureFixture
-    ) -> None:
+    def test_cli_invalid_threshold_value(self, jsonl_trace_file: Path, capsys: pytest.CaptureFixture) -> None:
         with pytest.raises(SystemExit) as exc_info:
             main(["ab-test", "-f", str(jsonl_trace_file), "--fail-under-reduction", "invalid"])
 
