@@ -30,6 +30,15 @@ from holon_coherence.host_local import (
     targets_from_env,
 )
 from holon_coherence.hybrid_cache import HybridCacheStore
+from holon_coherence.metrics_math import (
+    UNMEASURED,
+    average,
+    compute_decode_tps,
+    compute_prefill_tps,
+    compute_tail_prefill_tps,
+    format_rate,
+    positive_seconds,
+)
 from holon_coherence.parsers import (
     TokenCounts,
     estimate_chars,
@@ -344,6 +353,113 @@ def derive_turn_id(
     return fallback_id
 
 
+@dataclass(frozen=True)
+class FlowTiming:
+    """Per-transaction timings in seconds, where ``None`` means *not measured* (Bean 0097).
+
+    Attributes:
+        ttft_sec: Request sent -> first token (first SSE chunk, or first payload for a buffered
+            reply). ``None`` when either endpoint timestamp is missing.
+        total_sec: Request sent -> transaction complete.
+        generation_sec: First SSE chunk -> last SSE chunk. Only populated for genuine streams; a
+            buffered reply has no generation window, so ``total_sec - ttft_sec`` (socket parse time)
+            must never be used as a stand-in.
+        streaming: True when the upstream reply was an SSE stream.
+    """
+
+    ttft_sec: float | None = None
+    total_sec: float | None = None
+    generation_sec: float | None = None
+    streaming: bool = False
+
+    def decode_reason(self) -> str:
+        """Human-readable explanation for an unmeasured decode throughput."""
+        if not self.streaming:
+            return "non-streaming"
+        if self.generation_sec is None:
+            return "no chunk window"
+        return f"stream window {self.generation_sec * 1000:.0f}ms below floor"
+
+
+def _wall_clock_seconds(*values: Any) -> float | None:
+    """Return the first usable epoch timestamp, or ``None``."""
+    for value in values:
+        if value is None or isinstance(value, bool):
+            continue
+        try:
+            stamp = float(value)
+        except (TypeError, ValueError):
+            continue
+        if stamp > 0:
+            return stamp
+    return None
+
+
+def resolve_flow_timing(flow: Any, completed_at: float | None = None) -> FlowTiming:
+    """Derive TTFT / total / generation seconds for one flow using a single clock domain.
+
+    Prefers the ``time.perf_counter()`` stamps the addon records in ``request()`` /
+    ``responseheaders()`` / the SSE chunk wrapper. When those are absent (resumed or replayed flows
+    whose request hook never fired) it falls back to mitmproxy's own wall-clock timestamps instead
+    of substituting ``now`` for a missing start -- that substitution is what produced
+    ``ttft == 0.0`` and the resulting ``0.00 tokens/sec`` prefill readings.
+
+    Args:
+        flow: mitmproxy flow (or test double) carrying the timing attributes.
+        completed_at: ``time.perf_counter()`` reading taken when the transaction finished.
+
+    Returns:
+        FlowTiming: Timings in seconds; every field that could not be measured is ``None``.
+    """
+    streaming = getattr(flow, "sse_chunks", None) is not None
+    if completed_at is None:
+        completed_at = time.perf_counter()
+
+    req_start = getattr(flow, "request_start_time", None)
+    if req_start is not None:
+        headers_time = getattr(flow, "response_headers_time", None)
+        first_chunk = getattr(flow, "first_chunk_time", None)
+        last_chunk = getattr(flow, "last_chunk_time", None)
+        end_time = last_chunk if (streaming and last_chunk is not None) else completed_at
+    else:
+        request = getattr(flow, "request", None)
+        response = getattr(flow, "response", None)
+        req_start = _wall_clock_seconds(getattr(request, "timestamp_start", None))
+        headers_time = _wall_clock_seconds(getattr(response, "timestamp_first_byte", None))
+        # A replayed flow exposes only byte-level markers, so first byte stands in for first token.
+        first_chunk = headers_time
+        end_time = _wall_clock_seconds(getattr(response, "timestamp_end", None))
+        last_chunk = end_time
+
+    ttft_sec: float | None = None
+    if req_start is not None:
+        first_token_time = first_chunk if first_chunk is not None else headers_time
+        if first_token_time is not None:
+            ttft_sec = positive_seconds(first_token_time - req_start)
+
+    total_sec: float | None = None
+    if req_start is not None and end_time is not None:
+        total_sec = positive_seconds(end_time - req_start)
+
+    generation_sec: float | None = None
+    if streaming:
+        # Both window endpoints must share ``first_chunk``'s clock domain. The perf_counter branch
+        # always resolves an ``end_time``; in the epoch fallback a missing ``response.timestamp_end``
+        # leaves the window unmeasured instead of subtracting an epoch first-chunk from a
+        # perf_counter completion.
+        if first_chunk is not None and end_time is not None:
+            generation_sec = positive_seconds(end_time - first_chunk)
+        elif total_sec is not None and ttft_sec is not None:
+            generation_sec = positive_seconds(total_sec - ttft_sec)
+
+    return FlowTiming(
+        ttft_sec=ttft_sec,
+        total_sec=total_sec,
+        generation_sec=generation_sec,
+        streaming=streaming,
+    )
+
+
 @dataclass
 class CumulativeMetrics:
     """Thread-safe cumulative metrics tracking context optimization and cache performance (Bean 0043)."""
@@ -366,6 +482,9 @@ class CumulativeMetrics:
     sum_tail_prefill_throughput_tps: float = 0.0
     count_tail_prefill: int = 0
     latest_tail_prefill_tps: float = 0.0
+    latest_decode_tps: float = 0.0
+    latest_ttft_ms: float = 0.0
+    latest_total_time_ms: float = 0.0
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     total_cache_read_tokens: int = 0
@@ -404,11 +523,17 @@ class CumulativeMetrics:
         cache_creation_tokens: int = 0,
         reasoning_tokens: int = 0,
         ttft: float | None = None,
-        output_tps: float = 0.0,
-        prefill_tps: float = 0.0,
-        tail_prefill_tps: float = 0.0,
+        output_tps: float | None = None,
+        prefill_tps: float | None = None,
+        tail_prefill_tps: float | None = None,
+        total_time: float | None = None,
     ) -> None:
-        """Records completed response metrics including token counts and timing."""
+        """Records completed response metrics including token counts and timing.
+
+        Throughput arguments use ``None`` for *not measured* (Bean 0097): a non-streaming reply or
+        a sub-floor streaming window must be omitted from the averages rather than entered as a
+        fabricated rate.
+        """
         with self._lock:
             self.total_turns += 1
             self.total_input_tokens += input_tokens
@@ -419,14 +544,19 @@ class CumulativeMetrics:
             if ttft is not None and ttft > 0:
                 self.sum_ttft_ms += ttft * 1000.0
                 self.count_ttft += 1
-            if output_tps > 0:
+            if ttft is not None and ttft > 0:
+                self.latest_ttft_ms = ttft * 1000.0
+            if total_time is not None and total_time > 0:
+                self.latest_total_time_ms = total_time * 1000.0
+            if output_tps is not None and output_tps > 0:
                 self.sum_decode_throughput_tps += output_tps
                 self.count_decode += 1
-            if prefill_tps > 0:
+                self.latest_decode_tps = output_tps
+            if prefill_tps is not None and prefill_tps > 0:
                 self.sum_prefill_throughput_tps += prefill_tps
                 self.count_prefill += 1
                 self.latest_prefill_tps = prefill_tps
-            if tail_prefill_tps > 0:
+            if tail_prefill_tps is not None and tail_prefill_tps > 0:
                 self.sum_tail_prefill_throughput_tps += tail_prefill_tps
                 self.count_tail_prefill += 1
                 self.latest_tail_prefill_tps = tail_prefill_tps
@@ -438,12 +568,11 @@ class CumulativeMetrics:
             provider_cache_hit_rate = (
                 (self.total_cache_read_tokens / self.total_input_tokens) if self.total_input_tokens > 0 else 0.0
             )
-            avg_ttft = (self.sum_ttft_ms / self.count_ttft) if self.count_ttft > 0 else 0.0
-            avg_tps = (self.sum_decode_throughput_tps / self.count_decode) if self.count_decode > 0 else 0.0
-            avg_prefill = (self.sum_prefill_throughput_tps / self.count_prefill) if self.count_prefill > 0 else 0.0
-            avg_tail_prefill = (
-                (self.sum_tail_prefill_throughput_tps / self.count_tail_prefill) if self.count_tail_prefill > 0 else 0.0
-            )
+            avg_ttft = average(self.sum_ttft_ms, self.count_ttft)
+            avg_tps = average(self.sum_decode_throughput_tps, self.count_decode)
+            avg_prefill = average(self.sum_prefill_throughput_tps, self.count_prefill)
+            avg_tail_prefill = average(self.sum_tail_prefill_throughput_tps, self.count_tail_prefill)
+            count_decode_samples = self.count_decode
             return {
                 "total_turns": self.total_turns,
                 "total_requests": self.total_requests,
@@ -458,10 +587,14 @@ class CumulativeMetrics:
                 "cache_control_injected": self.cache_control_injected,
                 "avg_ttft_ms": round(avg_ttft, 2),
                 "avg_decode_throughput_tps": round(avg_tps, 2),
+                "latest_decode_throughput_tps": round(self.latest_decode_tps, 2),
+                "decode_samples": count_decode_samples,
                 "avg_prefill_throughput_tps": round(avg_prefill, 2),
                 "latest_prefill_tps": round(self.latest_prefill_tps, 2),
                 "avg_tail_prefill_tps": round(avg_tail_prefill, 2),
                 "latest_tail_prefill_tps": round(self.latest_tail_prefill_tps, 2),
+                "latest_ttft_ms": round(self.latest_ttft_ms, 2),
+                "latest_total_time_ms": round(self.latest_total_time_ms, 2),
                 "total_input_tokens": self.total_input_tokens,
                 "total_output_tokens": self.total_output_tokens,
                 "total_cache_read_tokens": self.total_cache_read_tokens,
@@ -1170,7 +1303,7 @@ def render_dashboard_html() -> str:
         <div id="avg-ttft" class="card-val amber">0.0 ms</div>
         <div class="card-desc">
           Prefill: <span id="prefill-tps">0.0</span> t/s (latest: <span id="latest-prefill-tps">0.0</span>) |
-          Decode: <span id="decode-tps">0.0</span> t/s
+          Decode: <span id="decode-tps">0.0</span> t/s (latest: <span id="latest-decode-tps">0.0</span>)
         </div>
       </div>
     </div>
@@ -1193,6 +1326,10 @@ def render_dashboard_html() -> str:
         <div class="detail-item">
           <span class="detail-label">Tail Prefill Speed</span>
           <span id="tail-prefill-val" class="detail-value">0.0 tok/s</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Decode Samples (streaming only)</span>
+          <span id="decode-samples" class="detail-value">0</span>
         </div>
         <div class="detail-item">
           <span class="detail-label">Total Input Tokens</span>
@@ -1263,6 +1400,8 @@ def render_dashboard_html() -> str:
         const avgTtft = hasTtft ? data.avg_ttft_ms.toFixed(1) : "0.0";
         document.getElementById("avg-ttft").textContent = avgTtft + " ms";
         document.getElementById("decode-tps").textContent = (data.avg_decode_throughput_tps || 0).toFixed(1);
+        document.getElementById("latest-decode-tps").textContent = (data.latest_decode_throughput_tps || 0).toFixed(1);
+        document.getElementById("decode-samples").textContent = formatNumber(data.decode_samples);
 
         const prefillTps = (data.avg_prefill_throughput_tps || 0).toFixed(1);
         const latestPrefill = (data.latest_prefill_tps || 0).toFixed(1);
@@ -1627,6 +1766,10 @@ class MitmproxyAddon:
         is_sse: bool = False,
         ttft: float | None = None,
         total_time: float | None = None,
+        prefill_tps: float | None = None,
+        tail_prefill_tps: float | None = None,
+        decode_tps: float | None = None,
+        generation_time: float | None = None,
     ) -> None:
         if not is_wire_logging_enabled():
             return
@@ -1707,6 +1850,11 @@ class MitmproxyAddon:
                 "timing": {
                     "ttft_ms": round(ttft * 1000, 2) if ttft is not None else (0.0 if is_hit else None),
                     "total_ms": round(total_time * 1000, 2) if total_time is not None else 0.0,
+                    "streaming": bool(is_sse),
+                    "generation_ms": round(generation_time * 1000, 2) if generation_time is not None else None,
+                    "prefill_tps": round(prefill_tps, 2) if prefill_tps is not None else None,
+                    "tail_prefill_tps": round(tail_prefill_tps, 2) if tail_prefill_tps is not None else None,
+                    "decode_tps": round(decode_tps, 2) if decode_tps is not None else None,
                 },
             }
 
@@ -1914,6 +2062,7 @@ class MitmproxyAddon:
                         if chunk:
                             if getattr(flow, "first_chunk_time", None) is None:
                                 flow.first_chunk_time = time.perf_counter()
+                            flow.last_chunk_time = time.perf_counter()
                             if getattr(flow, "is_gemini_bridged", False):
                                 try:
                                     chunk_text = chunk.decode("utf-8", errors="ignore")
@@ -1984,27 +2133,19 @@ class MitmproxyAddon:
                     cache_creation_tokens = getattr(token_counts, "cache_creation_tokens", 0)
                     reasoning_tokens = getattr(token_counts, "reasoning_tokens", 0)
 
-                    # Compute timing metrics
-                    req_start = getattr(flow, "request_start_time", None)
-                    resp_headers_time = getattr(flow, "response_headers_time", None)
-                    first_chunk_time = getattr(flow, "first_chunk_time", None)
-
+                    # Compute timing from one clock domain; a missing stamp means "not measured"
+                    # and must never be replaced by `now`, which is what yielded ttft == 0.0 and the
+                    # 0.00 tokens/sec prefill readings (Bean 0097).
                     now = time.perf_counter()
-                    if req_start is None:
-                        req_start = now
-                    if resp_headers_time is None:
-                        resp_headers_time = now
-
-                    ttfb = max(0.0, resp_headers_time - req_start)
-                    ttft = max(0.0, first_chunk_time - req_start) if first_chunk_time is not None else ttfb
-
-                    total_time = max(0.0, now - req_start)
-                    generation_time = max(0.0, total_time - ttft)
+                    timing = resolve_flow_timing(flow, completed_at=now)
+                    ttft = timing.ttft_sec
+                    total_time = timing.total_sec
+                    generation_time = timing.generation_sec
 
                     uncached_input_tokens = max(0, input_tokens - cache_read_tokens)
-                    prefill_tps = input_tokens / ttft if ttft > 0 else 0.0
-                    tail_prefill_tps = uncached_input_tokens / ttft if ttft > 0 else 0.0
-                    output_tps = output_tokens / generation_time if generation_time > 0 else 0.0
+                    prefill_tps = compute_prefill_tps(input_tokens, ttft)
+                    tail_prefill_tps = compute_tail_prefill_tps(uncached_input_tokens, ttft)
+                    output_tps = compute_decode_tps(output_tokens, generation_time, streaming=timing.streaming)
                     hit_rate = self.cache_hits / self.total_requests if self.total_requests > 0 else 0.0
 
                     # Inject telemetry headers on cache miss
@@ -2015,20 +2156,33 @@ class MitmproxyAddon:
                         and hasattr(flow.response.headers, "__setitem__")
                     ):
                         flow.response.headers["X-Holon-Cache-Hit-Rate"] = f"{hit_rate:.4f}"
-                        flow.response.headers["X-Holon-TTFT-Ms"] = f"{ttft * 1000:.2f}"
-                        flow.response.headers["X-Holon-Prefill-TPS"] = f"{prefill_tps:.4f}"
-                        flow.response.headers["X-Holon-Tail-Prefill-TPS"] = f"{tail_prefill_tps:.4f}"
-                        flow.response.headers["X-Holon-Decode-Time-Sec"] = f"{generation_time:.3f}"
-                        flow.response.headers["X-Holon-Output-TPS"] = f"{output_tps:.4f}"
-                        flow.response.headers["X-Holon-Total-Time-Ms"] = f"{total_time * 1000:.2f}"
+                        flow.response.headers["X-Holon-Streaming"] = "true" if timing.streaming else "false"
+                        flow.response.headers["X-Holon-TTFT-Ms"] = (
+                            f"{ttft * 1000:.2f}" if ttft is not None else UNMEASURED
+                        )
+                        flow.response.headers["X-Holon-Prefill-TPS"] = format_rate(prefill_tps, 4)
+                        flow.response.headers["X-Holon-Tail-Prefill-TPS"] = format_rate(tail_prefill_tps, 4)
+                        flow.response.headers["X-Holon-Decode-Time-Sec"] = (
+                            f"{generation_time:.3f}" if generation_time is not None else UNMEASURED
+                        )
+                        flow.response.headers["X-Holon-Output-TPS"] = format_rate(output_tps, 4)
+                        flow.response.headers["X-Holon-Total-Time-Ms"] = (
+                            f"{total_time * 1000:.2f}" if total_time is not None else UNMEASURED
+                        )
 
+                    ttft_label = f"{ttft * 1000:.1f}ms" if ttft is not None else UNMEASURED
+                    total_label = f"{total_time * 1000:.1f}ms" if total_time is not None else UNMEASURED
+                    if output_tps is not None and generation_time is not None:
+                        output_label = f"{output_tps:.2f} t/s ({output_tokens} tok in {generation_time:.2f}s)"
+                    else:
+                        output_label = f"n/a [{timing.decode_reason()}] ({output_tokens} tok)"
                     log_msg = (
                         f"📊 [TELEMETRY] Provider: {provider.upper()} | "
                         f"Cache: MISS (Hit Rate: {hit_rate * 100:.1f}%) | "
-                        f"TTFT: {ttft * 1000:.1f}ms | "
-                        f"Prefill: {prefill_tps:.2f} t/s ({input_tokens} tok) | "
-                        f"Output: {output_tps:.2f} t/s ({output_tokens} tok in {generation_time:.2f}s) | "
-                        f"Total: {total_time * 1000:.1f}ms"
+                        f"TTFT: {ttft_label} | "
+                        f"Prefill: {format_rate(prefill_tps)} t/s ({input_tokens} tok) | "
+                        f"Output: {output_label} | "
+                        f"Total: {total_label}"
                     )
                     log_telemetry(log_msg)
 
@@ -2041,6 +2195,10 @@ class MitmproxyAddon:
                         is_sse=is_sse,
                         ttft=ttft,
                         total_time=total_time,
+                        prefill_tps=prefill_tps,
+                        tail_prefill_tps=tail_prefill_tps,
+                        decode_tps=output_tps,
+                        generation_time=generation_time,
                     )
 
                     # Update in-memory cumulative optimization metrics
@@ -2054,6 +2212,7 @@ class MitmproxyAddon:
                         output_tps=output_tps,
                         prefill_tps=prefill_tps,
                         tail_prefill_tps=tail_prefill_tps,
+                        total_time=total_time,
                     )
             except json.JSONDecodeError as exc:
                 logger.debug("Non-JSON request/response body for endpoint %s: %s", url, exc)
@@ -2104,9 +2263,9 @@ class MitmproxyAddon:
                     cache_creation_tokens=0,
                     reasoning_tokens=0,
                     ttft=None,
-                    output_tps=0.0,
-                    prefill_tps=0.0,
-                    tail_prefill_tps=0.0,
+                    output_tps=None,
+                    prefill_tps=None,
+                    tail_prefill_tps=None,
                 )
             except Exception as exc:
                 logger.debug("Failed to record non-200 wire transaction: %s", exc)

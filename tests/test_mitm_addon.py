@@ -3,17 +3,31 @@
 from __future__ import annotations
 
 import json
+import time
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 
+from holon_coherence.metrics_math import (
+    MIN_STREAMING_WINDOW_SEC,
+    UNMEASURED,
+    compute_decode_tps,
+    compute_prefill_tps,
+    compute_tail_prefill_tps,
+    format_rate,
+    positive_rate,
+    positive_seconds,
+)
 from holon_coherence.mitm_addon import (
     CumulativeMetrics,
     MitmproxyAddon,
+    flush_wire_logs,
     is_local_target,
     normalize_anthropic_request,
     render_dashboard_html,
+    resolve_flow_timing,
     translate_gemini_to_openai_request,
     translate_openai_sse_chunk_to_gemini,
     translate_openai_to_gemini_response,
@@ -592,3 +606,267 @@ class TestGeminiOpenAIBridge:
         part = cand["content"]["parts"][0]
         assert part["functionCall"]["name"] == "run_command"
         assert part["functionCall"]["args"] == {"cmd": "ls"}
+
+
+class TestTelemetryThroughputBean0097:
+    """Prefill / decode throughput arithmetic, guards and *unmeasured* semantics (Bean 0097)."""
+
+    SSE_BODY = (
+        'data: {"choices":[{"delta":{"content":"he"}}]}\n\n'
+        'data: {"choices":[{"delta":{"content":"llo"},"finish_reason":"stop"}],'
+        '"usage":{"prompt_tokens":1000,"completion_tokens":100}}\n\n'
+        "data: [DONE]\n\n"
+    )
+    JSON_BODY = json.dumps(
+        {
+            "choices": [{"message": {"content": "hello"}}],
+            "usage": {"prompt_tokens": 1_200_000, "completion_tokens": 1500},
+        }
+    )
+    REQUEST_BODY = json.dumps({"messages": [{"role": "user", "content": "hi"}]})
+
+    def _addon(self, tmp_path: Any) -> MitmproxyAddon:
+        return MitmproxyAddon(cache_dir=str(tmp_path / "cache"), wire_log_dir=str(tmp_path / "logs"))
+
+    def _flow(self, *, body: str, sse: bool) -> DummyFlow:
+        response = DummyResponse(
+            status_code=200,
+            headers={"Content-Type": "text/event-stream"} if sse else {"Content-Type": "application/json"},
+            text="" if sse else body,
+        )
+        flow = DummyFlow(
+            request=DummyRequest(
+                url="https://api.openai.com/v1/chat/completions",
+                path="/v1/chat/completions",
+                host="api.openai.com",
+                text=self.REQUEST_BODY,
+            ),
+            response=response,
+        )
+        flow.provider = "openai"
+        if sse:
+            flow.sse_chunks = [body.encode("utf-8")]
+        return flow
+
+    def test_genuine_stream_yields_prefill_and_decode(self, tmp_path: Path) -> None:
+        addon = self._addon(tmp_path)
+        flow = self._flow(body=self.SSE_BODY, sse=True)
+        now = time.perf_counter()
+        flow.request_start_time = now - 1.0
+        flow.response_headers_time = now - 0.5
+        flow.first_chunk_time = now - 0.5
+        flow.last_chunk_time = now - 0.1
+        addon.response(flow)
+
+        snapshot = addon.metrics.to_dict()
+        assert snapshot["total_input_tokens"] == 1000
+        assert snapshot["total_output_tokens"] == 100
+        assert snapshot["avg_ttft_ms"] == 500.0
+        assert snapshot["avg_prefill_throughput_tps"] == 2000.0  # 1000 tok / 0.5s
+        assert snapshot["avg_decode_throughput_tps"] == 250.0  # 100 tok / 0.4s window
+        assert snapshot["latest_decode_throughput_tps"] == 250.0
+        assert snapshot["decode_samples"] == 1
+        assert snapshot["latest_total_time_ms"] == 900.0
+
+        headers = flow.response.headers
+        assert headers["X-Holon-Streaming"] == "true"
+        assert headers["X-Holon-TTFT-Ms"] == "500.00"
+        assert headers["X-Holon-Prefill-TPS"] == "2000.0000"
+        assert headers["X-Holon-Output-TPS"] == "250.0000"
+        assert headers["X-Holon-Decode-Time-Sec"] == "0.400"
+
+    def test_non_streaming_reply_never_samples_decode(self, tmp_path: Path) -> None:
+        """`total - ttft` is socket parse time for a buffered reply, so decode stays unmeasured."""
+        addon = self._addon(tmp_path)
+        flow = self._flow(body=self.JSON_BODY, sse=False)
+        now = time.perf_counter()
+        flow.request_start_time = now - 1.0
+        flow.response_headers_time = now - 0.4
+        addon.response(flow)
+
+        snapshot = addon.metrics.to_dict()
+        assert snapshot["total_input_tokens"] == 1_200_000
+        assert snapshot["avg_prefill_throughput_tps"] == 2_000_000.0  # 1.2M tok / 0.6s
+        assert snapshot["decode_samples"] == 0
+        assert snapshot["avg_decode_throughput_tps"] == 0.0
+        assert snapshot["latest_decode_throughput_tps"] == 0.0
+
+        headers = flow.response.headers
+        assert headers["X-Holon-Streaming"] == "false"
+        assert headers["X-Holon-Output-TPS"] == UNMEASURED
+        assert headers["X-Holon-Decode-Time-Sec"] == UNMEASURED
+
+    def test_buffered_stream_burst_below_floor_is_unmeasured(self, tmp_path: Path) -> None:
+        """A stream that lands in one 2ms burst is a buffering artefact, not 50,000 tok/s."""
+        addon = self._addon(tmp_path)
+        flow = self._flow(body=self.SSE_BODY, sse=True)
+        now = time.perf_counter()
+        flow.request_start_time = now - 0.52
+        flow.response_headers_time = now - 0.02
+        flow.first_chunk_time = now - 0.02
+        flow.last_chunk_time = now - 0.018
+        addon.response(flow)
+
+        snapshot = addon.metrics.to_dict()
+        assert snapshot["decode_samples"] == 0
+        assert snapshot["avg_decode_throughput_tps"] == 0.0
+        assert snapshot["avg_prefill_throughput_tps"] == 2000.0  # 1000 tok / 0.5s TTFT
+        assert flow.response.headers["X-Holon-Output-TPS"] == UNMEASURED
+
+    def test_missing_start_timestamp_is_unmeasured_not_zero(self, tmp_path: Path) -> None:
+        """The reported `0.00 tokens/sec` next to 1.2M prompt tokens can no longer be fabricated."""
+        addon = self._addon(tmp_path)
+        flow = self._flow(body=self.JSON_BODY, sse=False)
+        addon.response(flow)
+
+        snapshot = addon.metrics.to_dict()
+        assert snapshot["total_input_tokens"] == 1_200_000
+        assert snapshot["avg_prefill_throughput_tps"] == 0.0
+        assert snapshot["avg_ttft_ms"] == 0.0
+        assert flow.response.headers["X-Holon-Prefill-TPS"] == UNMEASURED
+        assert flow.response.headers["X-Holon-TTFT-Ms"] == UNMEASURED
+        assert flow.response.headers["X-Holon-Total-Time-Ms"] == UNMEASURED
+
+    def test_wall_clock_timestamps_recover_prefill(self, tmp_path: Path) -> None:
+        """When the request hook never stamped the flow, mitmproxy timestamps supply real timings."""
+        addon = self._addon(tmp_path)
+        flow = self._flow(body=self.JSON_BODY, sse=False)
+        flow.request.timestamp_start = 1000.0
+        flow.response.timestamp_first_byte = 1000.5
+        flow.response.timestamp_end = 1001.5
+        addon.response(flow)
+
+        snapshot = addon.metrics.to_dict()
+        assert snapshot["avg_ttft_ms"] == 500.0
+        assert snapshot["avg_prefill_throughput_tps"] == 2_400_000.0
+        assert snapshot["latest_total_time_ms"] == 1500.0
+        assert snapshot["decode_samples"] == 0
+
+    def test_wire_log_publishes_streaming_timing(self, tmp_path: Path) -> None:
+        addon = self._addon(tmp_path)
+        flow = self._flow(body=self.SSE_BODY, sse=True)
+        now = time.perf_counter()
+        flow.request_start_time = now - 1.0
+        flow.response_headers_time = now - 0.5
+        flow.first_chunk_time = now - 0.5
+        flow.last_chunk_time = now - 0.1
+        addon.response(flow)
+        flush_wire_logs()
+
+        with open(tmp_path / "logs" / "transactions.jsonl", encoding="utf-8") as handle:
+            record = json.loads(handle.readlines()[-1])
+
+        assert record["timing"] == {
+            "ttft_ms": 500.0,
+            "total_ms": 900.0,
+            "streaming": True,
+            "generation_ms": 400.0,
+            "prefill_tps": 2000.0,
+            "tail_prefill_tps": 2000.0,
+            "decode_tps": 250.0,
+        }
+
+    def test_cumulative_metrics_ignores_unmeasured_rates(self) -> None:
+        metrics = CumulativeMetrics()
+        metrics.record_response(input_tokens=100, output_tokens=50, ttft=None, output_tps=None, prefill_tps=None)
+        snapshot = metrics.to_dict()
+        assert snapshot["avg_prefill_throughput_tps"] == 0.0
+        assert snapshot["avg_decode_throughput_tps"] == 0.0
+        assert snapshot["decode_samples"] == 0
+        assert snapshot["latest_decode_throughput_tps"] == 0.0
+        assert snapshot["latest_ttft_ms"] == 0.0
+
+        metrics.record_response(
+            input_tokens=100, output_tokens=50, ttft=0.25, output_tps=200.0, prefill_tps=400.0, total_time=0.5
+        )
+        snapshot = metrics.to_dict()
+        assert snapshot["decode_samples"] == 1
+        assert snapshot["avg_decode_throughput_tps"] == 200.0
+        assert snapshot["latest_decode_throughput_tps"] == 200.0
+        assert snapshot["avg_prefill_throughput_tps"] == 400.0
+        assert snapshot["latest_ttft_ms"] == 250.0
+        assert snapshot["latest_total_time_ms"] == 500.0
+
+    def test_non_200_response_enters_no_rate_samples(self, tmp_path: Path) -> None:
+        """An upstream error is recorded as *not measured* (`None`), never as a fabricated 0.0 rate."""
+        addon = self._addon(tmp_path)
+        flow = self._flow(body='{"error":"rate_limited"}', sse=False)
+        flow.response.status_code = 429
+        flow.request_start_time = time.perf_counter() - 0.05
+        addon.response(flow)
+
+        snapshot = addon.metrics.to_dict()
+        assert snapshot["total_turns"] == 1
+        assert addon.metrics.count_ttft == 0
+        assert addon.metrics.count_prefill == 0
+        assert addon.metrics.count_tail_prefill == 0
+        assert addon.metrics.count_decode == 0
+        assert snapshot["decode_samples"] == 0
+        assert snapshot["avg_decode_throughput_tps"] == 0.0
+        assert snapshot["avg_prefill_throughput_tps"] == 0.0
+        assert snapshot["avg_ttft_ms"] == 0.0
+
+    def test_resolve_flow_timing_marks_buffered_reply_without_generation(self) -> None:
+        now = time.perf_counter()
+        flow = DummyFlow()
+        flow.request_start_time = now - 1.0
+        flow.response_headers_time = now - 0.2
+        timing = resolve_flow_timing(flow, completed_at=now)
+        assert timing.streaming is False
+        assert timing.generation_sec is None
+        assert timing.ttft_sec == pytest.approx(0.8, abs=0.01)
+        assert timing.decode_reason() == "non-streaming"
+
+    def test_resolve_flow_timing_reports_sub_floor_window_reason(self) -> None:
+        now = time.perf_counter()
+        flow = DummyFlow()
+        flow.sse_chunks = [b"data: x\n\n"]
+        flow.request_start_time = now - 1.0
+        flow.response_headers_time = now - 0.2
+        flow.first_chunk_time = now - 0.2
+        flow.last_chunk_time = now - 0.199
+        timing = resolve_flow_timing(flow, completed_at=now)
+        assert timing.streaming is True
+        assert "below floor" in timing.decode_reason()
+
+    def test_resolve_flow_timing_epoch_fallback_requires_end_time(self) -> None:
+        """A replayed stream without `response.timestamp_end` cannot close an epoch window with perf_counter."""
+        flow = DummyFlow()
+        flow.sse_chunks = [b"data: x\n\n"]
+        flow.request.timestamp_start = 0.5
+        flow.response.timestamp_first_byte = 1.0
+        timing = resolve_flow_timing(flow, completed_at=10.5)
+
+        assert timing.streaming is True
+        assert timing.ttft_sec == pytest.approx(0.5)
+        assert timing.total_sec is None
+        assert timing.generation_sec is None
+        assert timing.decode_reason() == "no chunk window"
+
+    def test_metrics_math_guards(self) -> None:
+        assert compute_prefill_tps(1000, 0.5) == 2000.0
+        assert compute_prefill_tps(1000, 0.0) is None
+        assert compute_prefill_tps(1000, None) is None
+        assert compute_prefill_tps(1000, -1.0) is None
+        assert compute_prefill_tps(1000, float("nan")) is None
+        assert compute_prefill_tps(0, 0.5) is None
+        assert compute_prefill_tps(None, 0.5) is None
+
+        assert compute_tail_prefill_tps(0, 0.5) is None
+        assert compute_tail_prefill_tps(600, 0.3) == pytest.approx(2000.0)
+
+        assert compute_decode_tps(100, MIN_STREAMING_WINDOW_SEC, streaming=True) == 2000.0
+        assert compute_decode_tps(100, MIN_STREAMING_WINDOW_SEC - 0.001, streaming=True) is None
+        assert compute_decode_tps(100, 30.0, streaming=False) is None
+        assert compute_decode_tps(0, 1.0, streaming=True) is None
+        assert compute_decode_tps(100, None, streaming=True) is None
+
+        assert positive_seconds(0.1) == 0.1
+        assert positive_seconds(0) is None
+        assert positive_seconds(True) is None
+        assert positive_seconds("nope") is None
+        assert positive_seconds(float("inf")) is None
+        assert positive_rate(12.5) == 12.5
+        assert positive_rate(None) is None
+        assert format_rate(None) == UNMEASURED
+        assert format_rate(12.3456, 2) == "12.35"
