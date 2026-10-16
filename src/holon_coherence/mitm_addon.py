@@ -426,13 +426,10 @@ def resolve_flow_timing(flow: Any, completed_at: float | None = None) -> FlowTim
         response = getattr(flow, "response", None)
         req_start = _wall_clock_seconds(getattr(request, "timestamp_start", None))
         headers_time = _wall_clock_seconds(getattr(response, "timestamp_first_byte", None))
+        # A replayed flow exposes only byte-level markers, so first byte stands in for first token.
         first_chunk = headers_time
         end_time = _wall_clock_seconds(getattr(response, "timestamp_end", None))
         last_chunk = end_time
-        if streaming and headers_time is not None and end_time is not None:
-            # A stream replayed through mitmproxy timestamps only exposes byte-level markers, so
-            # treat first byte as first token and keep the window only when it looks like streaming.
-            first_chunk = headers_time
 
     ttft_sec: float | None = None
     if req_start is not None:

@@ -69,6 +69,7 @@ Compute performance metrics and inject standardized response headers into `flow.
 
 - `X-Holon-TTFT-Ms`: Time-to-first-token in milliseconds.
 - `X-Holon-Prefill-TPS`: Prompt processing speed (tokens/sec).
+- `X-Holon-Tail-Prefill-TPS`: Prefill speed (tokens/sec) over uncached prompt tokens only.
 - `X-Holon-Output-TPS`: Generation speed (tokens/sec), derived only from a genuine SSE chunk window.
 - `X-Holon-Decode-Time-Sec`: Generation duration in seconds.
 - `X-Holon-Total-Time-Ms`: Total end-to-end request duration in milliseconds.
