@@ -1,5 +1,13 @@
 """CLI command implementations and dispatchers for Holon Coherence."""
 
+from holon_coherence.commands.ab_test import (
+    ABComparisonScorecard,
+    ABRunConfig,
+    ABTurnMetrics,
+    evaluate_offline_ab_run,
+    handle_ab_test,
+    load_trace_transactions,
+)
 from holon_coherence.commands.agents import (
     AGENT_BINARY_MAP,
     SUPPORTED_AGENTS,
@@ -78,6 +86,9 @@ __all__ = [
     "SUPPORTED_AGENTS",
     "WEB_TOKEN_PATH",
     "_CONTAINER_GATEWAY_PROBE",
+    "ABComparisonScorecard",
+    "ABRunConfig",
+    "ABTurnMetrics",
     "LocalLlmRoute",
     "RunnerFlags",
     "_print_agent_help",
@@ -89,12 +100,14 @@ __all__ = [
     "docker_host_alias_args",
     "ensure_docker_image",
     "ensure_proxy_running",
+    "evaluate_offline_ab_run",
     "execute_interactive_process",
     "extract_runner_flags",
     "find_available_port",
     "find_system_ca_bundle",
     "get_active_web_token",
     "get_or_create_merged_ca_bundle",
+    "handle_ab_test",
     "handle_build",
     "handle_init_ca",
     "handle_logs",
@@ -110,6 +123,7 @@ __all__ = [
     "is_container_running",
     "is_in_container",
     "is_port_in_use",
+    "load_trace_transactions",
     "merge_no_proxy_values",
     "plan_local_llm_route",
     "probe_host_local_reachable",

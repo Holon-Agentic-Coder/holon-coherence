@@ -36,6 +36,7 @@ from holon_coherence.commands import (
     find_system_ca_bundle,
     get_active_web_token,
     get_or_create_merged_ca_bundle,
+    handle_ab_test,
     handle_build,
     handle_init_ca,
     handle_logs,
@@ -95,6 +96,7 @@ __all__ = [
     "generate_root_ca",
     "get_active_web_token",
     "get_or_create_merged_ca_bundle",
+    "handle_ab_test",
     "handle_build",
     "handle_init_ca",
     "handle_logs",
@@ -250,6 +252,53 @@ def main(argv: list[str] | None = None) -> None:
     )
     metrics_parser.add_argument("--json", action="store_true", help="Output metrics as raw JSON")
 
+    # A/B testing suite
+    ab_parser = subparsers.add_parser(
+        "ab-test",
+        help="Run A/B benchmark comparing baseline vs optimized runs on trace transactions",
+    )
+    ab_parser.add_argument(
+        "--trace-file",
+        "-f",
+        required=True,
+        help="Path to authentic trace transactions (.jsonl or .json) file",
+    )
+    ab_parser.add_argument(
+        "--rounds",
+        "-n",
+        type=int,
+        default=1,
+        help="Number of evaluation rounds to run (default: 1)",
+    )
+    ab_parser.add_argument(
+        "--fail-under-reduction",
+        type=float,
+        default=None,
+        help="Enforce minimum token reduction percentage gate (e.g. 15.0 for 15%%)",
+    )
+    ab_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output raw JSON comparison scorecard",
+    )
+    ab_parser.add_argument(
+        "--baseline-port",
+        type=int,
+        default=None,
+        help="Baseline proxy port for online comparison",
+    )
+    ab_parser.add_argument(
+        "--optimized-port",
+        type=int,
+        default=None,
+        help="Optimized proxy port for online comparison",
+    )
+    ab_parser.add_argument(
+        "--passive-mode",
+        action="store_true",
+        help="Run in passive observation mode",
+    )
+
     # Run command with inline proxy properties
     run_parser = subparsers.add_parser(
         "run",
@@ -347,6 +396,9 @@ def main(argv: list[str] | None = None) -> None:
 
     elif args.command == "metrics":
         sys.exit(handle_metrics(args))
+
+    elif args.command == "ab-test":
+        sys.exit(handle_ab_test(args))
 
     elif args.command == "logs":
         handle_logs(args)
