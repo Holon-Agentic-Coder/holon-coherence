@@ -270,6 +270,164 @@ class TestHolonCoherence(unittest.TestCase):
         self.assertEqual(scrubbed_h["authorization"], "[REDACTED]")
         self.assertEqual(scrubbed_h["content-type"], "application/json")
 
+    def test_active_optimization_default(self):
+        from unittest.mock import patch
+
+        from holon_coherence.mitm_addon import is_passive_monitoring
+
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(is_passive_monitoring())
+
+        with patch.dict(os.environ, {"HOLON_PASSIVE_MONITORING": "1"}, clear=True):
+            self.assertTrue(is_passive_monitoring())
+
+        with patch.dict(os.environ, {"COHERENCE_TOKEN_REDUCTION": "0"}, clear=True):
+            self.assertTrue(is_passive_monitoring())
+
+        with patch.dict(os.environ, {"COHERENCE_TOKEN_REDUCTION": "1", "HOLON_PASSIVE_MONITORING": "0"}, clear=True):
+            self.assertFalse(is_passive_monitoring())
+
+    def test_session_wide_tool_deduplication_anthropic(self):
+        cleaner = JSONContextCleaner(enable_deduplication=True, max_turns=60)
+        status_line = "On branch main\nYour branch is up to date with 'origin/main'.\nnothing to commit\n"
+        large_status_output = status_line * 10
+        messages = [{"role": "user", "content": "Start session"}]
+
+        # Create a 24-turn conversation simulating repetitive git status runs across turns
+        for i in range(1, 23, 2):
+            messages.append({"role": "assistant", "content": f"Running step {i}"})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": f"tool_use_{i}",
+                            "content": large_status_output,
+                        }
+                    ],
+                }
+            )
+        messages.append({"role": "assistant", "content": "Final step"})
+
+        payload = {"messages": messages}
+        res = cleaner.process_payload_with_stats(payload, provider="anthropic")
+        # Tool outputs in older turns (from turn 4 onwards up to turn 20) should be deduplicated
+        self.assertGreaterEqual(res.tool_outputs_omitted, 5)
+        self.assertGreater(res.chars_saved, 1000)
+
+        # Invariant: tool_use_id and tool_result structure must be preserved
+        cleaned_msgs = res.payload["messages"]
+        for msg in cleaned_msgs:
+            if isinstance(msg.get("content"), list):
+                for block in msg["content"]:
+                    if block.get("type") == "tool_result":
+                        self.assertIn("tool_use_id", block)
+                        self.assertTrue(block["tool_use_id"].startswith("tool_use_"))
+
+    def test_session_wide_tool_deduplication_openai(self):
+        cleaner = JSONContextCleaner(enable_deduplication=True, max_turns=60)
+        build_line = "Compiling src/core.rs...\nFinished release [optimized] target(s) in 2.34s\n"
+        build_log = build_line * 10
+        messages = [{"role": "user", "content": "Execute build"}]
+
+        for i in range(1, 21, 2):
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{"id": f"call_{i}", "type": "function", "function": {"name": "run_build"}}],
+                }
+            )
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": f"call_{i}",
+                    "content": build_log,
+                }
+            )
+        messages.append({"role": "assistant", "content": "All builds complete."})
+
+        payload = {"messages": messages}
+        res = cleaner.process_payload_with_stats(payload, provider="openai")
+        self.assertGreaterEqual(res.tool_outputs_omitted, 5)
+
+        cleaned_msgs = res.payload["messages"]
+        for msg in cleaned_msgs:
+            if msg.get("role") == "tool":
+                self.assertIn("tool_call_id", msg)
+                self.assertTrue(msg["tool_call_id"].startswith("call_"))
+
+    def test_session_wide_tool_deduplication_gemini(self):
+        cleaner = JSONContextCleaner(enable_deduplication=True, max_turns=60)
+        dir_listing = {"files": [f"file_{k}.py" for k in range(50)], "status": "ok"}
+        contents = [{"role": "user", "parts": [{"text": "List files"}]}]
+
+        for _i in range(1, 19, 2):
+            contents.append({"role": "model", "parts": [{"functionCall": {"name": "list_files"}}]})
+            contents.append(
+                {
+                    "role": "function",
+                    "parts": [
+                        {
+                            "functionResponse": {
+                                "name": "list_files",
+                                "response": dir_listing,
+                            }
+                        }
+                    ],
+                }
+            )
+        contents.append({"role": "model", "parts": [{"text": "Done."}]})
+
+        payload = {"contents": contents}
+        res = cleaner.process_payload_with_stats(payload, provider="gemini")
+        self.assertGreaterEqual(res.tool_outputs_omitted, 5)
+
+        # Invariant: functionResponse name is preserved
+        cleaned_contents = res.payload["contents"]
+        for turn in cleaned_contents:
+            for part in turn.get("parts", []):
+                if "functionResponse" in part:
+                    self.assertEqual(part["functionResponse"]["name"], "list_files")
+
+    def test_throughput_metric_aliases(self):
+        from holon_coherence.metrics_math import (
+            compute_decode_speed,
+            compute_decode_throughput,
+            compute_decode_tps,
+            compute_prefill_throughput,
+            compute_prefill_tps,
+            compute_prompt_prefill_speed,
+            compute_tail_prefill_speed,
+            compute_tail_prefill_throughput,
+            compute_tail_prefill_tps,
+        )
+
+        # Prefill throughput
+        val1 = compute_prefill_tps(1000, 2.0)
+        val2 = compute_prefill_throughput(1000, 2.0)
+        val3 = compute_prompt_prefill_speed(1000, 2.0)
+        self.assertEqual(val1, 500.0)
+        self.assertEqual(val2, 500.0)
+        self.assertEqual(val3, 500.0)
+
+        # Tail prefill throughput
+        tval1 = compute_tail_prefill_tps(200, 1.0)
+        tval2 = compute_tail_prefill_throughput(200, 1.0)
+        tval3 = compute_tail_prefill_speed(200, 1.0)
+        self.assertEqual(tval1, 200.0)
+        self.assertEqual(tval2, 200.0)
+        self.assertEqual(tval3, 200.0)
+
+        # Decode throughput
+        dval1 = compute_decode_tps(120, 2.0, streaming=True)
+        dval2 = compute_decode_throughput(120, 2.0, streaming=True)
+        dval3 = compute_decode_speed(120, 2.0, streaming=True)
+        self.assertEqual(dval1, 60.0)
+        self.assertEqual(dval2, 60.0)
+        self.assertEqual(dval3, 60.0)
+
 
 if __name__ == "__main__":
     unittest.main()

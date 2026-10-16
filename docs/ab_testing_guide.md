@@ -51,7 +51,7 @@ Use the `holon-coherence ab-test` command across four flexible execution modes:
 
 ### 1. Live Workload Interception (`--command` / `-c`)
 
-Execute an authentic agent command twice through the proxy. Pass 1 runs in passive monitoring mode (Variant A: baseline control) where all LLM requests are forwarded unmodified. Pass 2 runs in active optimization mode (Variant B: optimized treatment) with context deduplication and prompt caching. All network calls are intercepted in real time with genuine upstream provider TTFT and token usage:
+Execute an authentic agent command twice through the proxy. Pass 1 runs in passive monitoring mode (Variant A: baseline control, opt-in via `--passive`, `HOLON_PASSIVE_MONITORING=1`, or `X-Holon-Mode: baseline` header) where all LLM requests are forwarded unmodified. Pass 2 runs in active optimization mode (Variant B: optimized treatment, active by default) with session-wide context deduplication and prompt caching. All network calls are intercepted in real time with genuine upstream provider TTFT and token usage:
 
 ```bash
 # Run real coding agent workload through proxy twice for authentic A/B evaluation
@@ -123,6 +123,7 @@ When executed without `--json`, `holon-coherence ab-test` outputs a formatted co
   🎯 Cache Hit Rate:              33.3% (4 hits / 12 turns)
 --------------------------------------------------------------------
   ⏱️  Baseline TTFT (Recorded):    1420.5ms (Variant B: offline evaluation)
+  🚀 Decode Throughput:           Baseline: 62.4 t/s | Optimized: 63.1 t/s
   🔍 Semantic Parity Check:       ✅ PASSED (100% Structural Equivalence)
 --------------------------------------------------------------------
   🎯 CI Reduction Gate:           ✅ PASSED (Observed: 26.28% | Required: >=15.00%)
@@ -138,10 +139,11 @@ When executed without `--json`, `holon-coherence ab-test` outputs a formatted co
 | **Optimized Input Tokens**   | Net prompt tokens submitted to upstream LLMs after deduplication and pruning.                                       |
 | **Net Tokens Reduced**       | Total tokens saved (`Baseline - Optimized`) and percentage reduction.                                               |
 | **Characters Saved**         | Raw payload string reduction in bytes/characters.                                                                   |
-| **Tool Calls Pruned**        | Number of redundant historical tool outputs (`view_file`, `cat`, etc.) omitted.                                     |
+| **Tool Calls Pruned**        | Number of redundant historical tool outputs (`view_file`, `cat`, etc.) omitted across multi-turn sessions.          |
 | **Prompt Cache Breakpoints** | Count of provider-specific prompt cache control breakpoints injected.                                               |
 | **Cache Hit Rate**           | Ratio of requests short-circuited by exact/semantic local cache hits.                                               |
 | **TTFT Telemetry**           | Time To First Token recorded in authentic wire traces (never synthetically fabricated in offline mode per Rule 10). |
+| **Decode Throughput**        | Token generation throughput (tokens/sec) measured across authentic streaming responses.                             |
 | **Semantic Parity Check**    | Verifies that message order, roles, and schema invariants remain 100% intact.                                       |
 | **CI Reduction Gate**        | Evaluates whether `--fail-under-reduction` criteria was satisfied.                                                  |
 

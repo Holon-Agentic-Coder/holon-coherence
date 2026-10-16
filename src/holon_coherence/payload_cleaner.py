@@ -14,7 +14,8 @@ _SECRET_DICT_KEY_PATTERN = re.compile(
     r"(?i)^(?:auth|credential|credentials|password|passwd|api[-_]?key|apikey|api[-_]?token|auth[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|secret[-_]?key|secret|private[-_]?key|client[-_]?secret|session[-_]?token)$"
 )
 
-_RECENT_TURNS_TO_KEEP = 6
+_DEFAULT_RECENT_TURNS_TO_KEEP = 10
+_RECENT_TURNS_TO_KEEP = _DEFAULT_RECENT_TURNS_TO_KEEP
 """Number of recent conversation turns preserved verbatim at the end of the history during summarization."""
 
 
@@ -39,10 +40,13 @@ class JSONContextCleaner:
         self,
         enable_deduplication: bool = True,
         enable_prompt_caching: bool = True,
-        max_turns: int = 30,
+        max_turns: int = 50,
+        recent_turns_to_keep: int = _DEFAULT_RECENT_TURNS_TO_KEEP,
     ):
         self.enable_deduplication = enable_deduplication
         self.enable_prompt_caching = enable_prompt_caching
+        self.max_turns = max_turns
+        self.recent_turns_to_keep = recent_turns_to_keep
         self.max_turns = max_turns
 
     def process_payload(self, payload: dict[str, Any], provider: str = "anthropic") -> dict[str, Any]:
@@ -159,7 +163,7 @@ class JSONContextCleaner:
                             if content_hash in seen_content_hashes and is_older_turn:
                                 prev_turn, prev_res = seen_content_hashes[content_hash]
                                 item_copy["content"] = (
-                                    f"[Omitted: Tool result content is identical to Turn {prev_turn} ({prev_res})]"
+                                    f"[Tool output omitted: identical output matches Turn {prev_turn} ({prev_res})]"
                                 )
                                 if stats is not None:
                                     stats["tool_outputs_omitted"] += 1
@@ -175,7 +179,7 @@ class JSONContextCleaner:
                                 if content_hash in seen_content_hashes and is_older_turn:
                                     prev_turn, prev_res = seen_content_hashes[content_hash]
                                     item_copy["content"] = (
-                                        f"[Omitted: Tool result content is identical to Turn {prev_turn} ({prev_res})]"
+                                        f"[Tool output omitted: identical output matches Turn {prev_turn} ({prev_res})]"
                                     )
                                     if stats is not None:
                                         stats["tool_outputs_omitted"] += 1
@@ -191,7 +195,7 @@ class JSONContextCleaner:
                             if content_hash in seen_content_hashes and is_older_turn:
                                 prev_turn, prev_res = seen_content_hashes[content_hash]
                                 item_copy["text"] = (
-                                    f"[Omitted: Message content is identical to Turn {prev_turn} ({prev_res})]"
+                                    f"[Tool output omitted: identical output matches Turn {prev_turn} ({prev_res})]"
                                 )
                                 if stats is not None:
                                     stats["tool_outputs_omitted"] += 1
@@ -208,7 +212,9 @@ class JSONContextCleaner:
                 content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
                 if content_hash in seen_content_hashes and is_older_turn:
                     prev_turn, prev_res = seen_content_hashes[content_hash]
-                    msg_copy["content"] = f"[Omitted: Message content is identical to Turn {prev_turn} ({prev_res})]"
+                    msg_copy["content"] = (
+                        f"[Tool output omitted: identical output matches Turn {prev_turn} ({prev_res})]"
+                    )
                     if stats is not None:
                         stats["tool_outputs_omitted"] += 1
                 else:
@@ -239,7 +245,7 @@ class JSONContextCleaner:
     def _summarize_anthropic_history(
         self, messages: list[dict[str, Any]], stats: dict[str, int] | None = None
     ) -> list[dict[str, Any]]:
-        target_idx = len(messages) - _RECENT_TURNS_TO_KEEP
+        target_idx = len(messages) - self.recent_turns_to_keep
         suffix_idx = None
         for i in range(target_idx, 0, -1):
             if self._is_clean_user_message(messages[i], "anthropic"):
@@ -425,13 +431,25 @@ class JSONContextCleaner:
                 continue
             msg_copy = copy.deepcopy(msg)
             is_older_turn = turn_idx < (turn_count - 2)
+            role = msg_copy.get("role")
             content = msg_copy.get("content", "")
 
-            if isinstance(content, str) and len(content) > 200:
+            # Tool result in OpenAI format (role: "tool", tool_call_id: "...")
+            if role == "tool" and isinstance(content, str) and len(content) > 100:
+                content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                tool_res_id = msg_copy.get("tool_call_id", f"tool_result_{turn_idx}")
+                if content_hash in seen_content_hashes and is_older_turn:
+                    prev_turn, _prev_res = seen_content_hashes[content_hash]
+                    msg_copy["content"] = f"[Tool output omitted: identical output matches Turn {prev_turn}]"
+                    if stats is not None:
+                        stats["tool_outputs_omitted"] += 1
+                else:
+                    seen_content_hashes[content_hash] = (turn_idx, tool_res_id)
+            elif isinstance(content, str) and len(content) > 200:
                 content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
                 if content_hash in seen_content_hashes and is_older_turn:
-                    prev_turn, prev_res = seen_content_hashes[content_hash]
-                    msg_copy["content"] = f"[Omitted: Message content is identical to Turn {prev_turn} ({prev_res})]"
+                    prev_turn, _prev_res = seen_content_hashes[content_hash]
+                    msg_copy["content"] = f"[Tool output omitted: identical output matches Turn {prev_turn}]"
                     if stats is not None:
                         stats["tool_outputs_omitted"] += 1
                 else:
@@ -451,7 +469,7 @@ class JSONContextCleaner:
                 )
                 else 1
             )
-            target_idx = max(prefix_len + 1, len(cleaned_messages) - _RECENT_TURNS_TO_KEEP)
+            target_idx = max(prefix_len + 1, len(cleaned_messages) - self.recent_turns_to_keep)
             suffix_idx = None
             # Search forward first from target_idx to find clean user message that leaves middle turns to summarize
             for i in range(target_idx, len(cleaned_messages)):
@@ -510,16 +528,36 @@ class JSONContextCleaner:
                         cleaned_parts.append(part)
                         continue
                     part_copy = copy.deepcopy(part)
-                    text = part_copy.get("text", "")
-                    if isinstance(text, str) and len(text) > 200:
-                        text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
-                        if text_hash in seen_content_hashes and is_older_turn:
-                            prev_turn, prev_res = seen_content_hashes[text_hash]
-                            part_copy["text"] = f"[Omitted: Content is identical to Turn {prev_turn} ({prev_res})]"
-                            if stats is not None:
-                                stats["tool_outputs_omitted"] += 1
-                        else:
-                            seen_content_hashes[text_hash] = (turn_idx, f"turn_{turn_idx}")
+                    # Tool response in Gemini format (functionResponse)
+                    if "functionResponse" in part_copy and isinstance(part_copy["functionResponse"], dict):
+                        func_resp = part_copy["functionResponse"]
+                        resp_data = func_resp.get("response", {})
+                        func_name = func_resp.get("name", f"func_{turn_idx}")
+                        serialized = (
+                            json.dumps(resp_data, sort_keys=True) if isinstance(resp_data, dict) else str(resp_data)
+                        )
+                        if len(serialized) > 100:
+                            content_hash = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+                            if content_hash in seen_content_hashes and is_older_turn:
+                                prev_turn, _prev_res = seen_content_hashes[content_hash]
+                                func_resp["response"] = {
+                                    "content": f"[Tool output omitted: identical output matches Turn {prev_turn}]"
+                                }
+                                if stats is not None:
+                                    stats["tool_outputs_omitted"] += 1
+                            else:
+                                seen_content_hashes[content_hash] = (turn_idx, func_name)
+                    else:
+                        text = part_copy.get("text", "")
+                        if isinstance(text, str) and len(text) > 100:
+                            text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                            if text_hash in seen_content_hashes and is_older_turn:
+                                prev_turn, _prev_res = seen_content_hashes[text_hash]
+                                part_copy["text"] = f"[Tool output omitted: identical output matches Turn {prev_turn}]"
+                                if stats is not None:
+                                    stats["tool_outputs_omitted"] += 1
+                            else:
+                                seen_content_hashes[text_hash] = (turn_idx, f"turn_{turn_idx}")
 
                     cleaned_parts.append(part_copy)
 
@@ -527,7 +565,7 @@ class JSONContextCleaner:
             cleaned_contents.append(turn_copy)
 
         if len(cleaned_contents) > self.max_turns:
-            target_idx = len(cleaned_contents) - _RECENT_TURNS_TO_KEEP
+            target_idx = len(cleaned_contents) - self.recent_turns_to_keep
             suffix_idx = None
             for i in range(target_idx, 0, -1):
                 if self._is_clean_user_message(cleaned_contents[i], "gemini"):

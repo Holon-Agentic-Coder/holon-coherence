@@ -2620,9 +2620,9 @@ class TestCLIMetricsCommand:
             ret = handle_metrics(port=8080)
         assert ret == 0
         out = capsys.readouterr().out
-        assert "Prompt (Prefill) Speed:     650.00 tokens/sec" in out
+        assert "Prefill Throughput:         650.00 tokens/sec" in out
         assert "Latest: 700.00 t/s" in out
-        assert "Tail Prefill Speed:        200.00 tokens/sec" in out
+        assert "Tail Prefill Throughput:    200.00 tokens/sec" in out
         assert "Decode Throughput:          60.00 tokens/sec" in out
         assert "Cache Hit Rate:              40.0%" in out
         assert "75.0% KV hit" in out

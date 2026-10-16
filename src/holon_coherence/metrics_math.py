@@ -65,7 +65,7 @@ def to_int(value: Any) -> int:
 
 
 def compute_prefill_tps(input_tokens: Any, ttft_sec: Any) -> float | None:
-    """Prompt processing speed: prompt tokens divided by time-to-first-token.
+    """Prefill throughput: prompt tokens divided by time-to-first-token.
 
     Args:
         input_tokens: Prompt tokens charged by the provider (including cached prefix tokens).
@@ -81,8 +81,13 @@ def compute_prefill_tps(input_tokens: Any, ttft_sec: Any) -> float | None:
     return tokens / ttft
 
 
+# Backward-compatible and standardized vocabulary aliases
+compute_prefill_throughput = compute_prefill_tps
+compute_prompt_prefill_speed = compute_prefill_tps
+
+
 def compute_tail_prefill_tps(uncached_input_tokens: Any, ttft_sec: Any) -> float | None:
-    """Prefill speed attributable to *uncached* prompt tokens only (the real prefill work).
+    """Tail prefill throughput attributable to *uncached* prompt tokens only (the real prefill work).
 
     Returns ``None`` when the prompt was served entirely from the provider KV cache, because zero
     uncached tokens processed in positive time is a genuine ``0`` rate that must not be averaged in
@@ -95,8 +100,13 @@ def compute_tail_prefill_tps(uncached_input_tokens: Any, ttft_sec: Any) -> float
     return tokens / ttft
 
 
+# Backward-compatible and standardized vocabulary aliases
+compute_tail_prefill_throughput = compute_tail_prefill_tps
+compute_tail_prefill_speed = compute_tail_prefill_tps
+
+
 def compute_decode_tps(output_tokens: Any, generation_sec: Any, streaming: bool = False) -> float | None:
-    """Decode (generation) speed, computed only from a genuine streaming window.
+    """Decode throughput, computed only from a genuine streaming window.
 
     Args:
         output_tokens: Completion tokens reported by the provider.
@@ -115,6 +125,11 @@ def compute_decode_tps(output_tokens: Any, generation_sec: Any, streaming: bool 
     if tokens <= 0 or window is None or window < MIN_STREAMING_WINDOW_SEC:
         return None
     return tokens / window
+
+
+# Backward-compatible and standardized vocabulary aliases
+compute_decode_throughput = compute_decode_tps
+compute_decode_speed = compute_decode_tps
 
 
 def positive_rate(value: Any) -> float | None:

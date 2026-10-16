@@ -221,6 +221,11 @@ def main(argv: list[str] | None = None) -> None:
     start_parser.add_argument(
         "--image", default="holon-coherence:latest", help="Docker image tag (default: holon-coherence:latest)"
     )
+    start_parser.add_argument(
+        "--passive",
+        action="store_true",
+        help="Run proxy in passive monitoring mode (baseline/logging only, no active optimization)",
+    )
     start_parser.add_argument("--build", action="store_true", help="Rebuild Docker image before starting")
 
     # Stop proxy container

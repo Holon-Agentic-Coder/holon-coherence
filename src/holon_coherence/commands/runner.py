@@ -54,6 +54,8 @@ def build_proxy_env(
         merged_no_proxy = ",".join(entry for entry in parse_no_proxy(merged_no_proxy) if entry.lower() not in dropped)
     env["NO_PROXY"] = merged_no_proxy
     env["no_proxy"] = merged_no_proxy
+    env["COHERENCE_TOKEN_REDUCTION"] = os.environ.get("COHERENCE_TOKEN_REDUCTION", "1")
+    env["HOLON_PASSIVE_MONITORING"] = os.environ.get("HOLON_PASSIVE_MONITORING", "0")
 
     # Certificate bundle resolution
     if ca_cert_path is None:
