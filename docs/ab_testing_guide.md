@@ -98,9 +98,10 @@ When executed without `--json`, `holon-coherence ab-test` outputs a formatted co
   🎯 Net Tokens Reduced:          22,140 (26.28% reduction)
   💾 Characters Saved:            88,560 (26.28%)
   🔧 Tool Calls Pruned / Omitted: 6
+  🏷️  Prompt Cache Breakpoints:   12 injected
+  🎯 Cache Hit Rate:              33.3% (4 hits / 12 turns)
 --------------------------------------------------------------------
-  ⏱️  Avg TTFT:                   Baseline: 1420.5ms | Optimized: 1207.4ms
-  ⚡ TTFT Delta:                  -213.1ms
+  ⏱️  Baseline TTFT (Recorded):    1420.5ms (Variant B: offline evaluation)
   🔍 Semantic Parity Check:       ✅ PASSED (100% Structural Equivalence)
 --------------------------------------------------------------------
   🎯 CI Reduction Gate:           ✅ PASSED (Observed: 26.28% | Required: >=15.00%)
@@ -109,17 +110,19 @@ When executed without `--json`, `holon-coherence ab-test` outputs a formatted co
 
 ### Scorecard Metric Definitions
 
-| Metric                     | Description                                                                     |
-| :------------------------- | :------------------------------------------------------------------------------ |
-| **Total Evaluated Turns**  | Number of unique request/response turns evaluated across all rounds.            |
-| **Baseline Input Tokens**  | Authentic prompt tokens submitted by the client before optimization.            |
-| **Optimized Input Tokens** | Net prompt tokens submitted to upstream LLMs after deduplication and pruning.   |
-| **Net Tokens Reduced**     | Total tokens saved (`Baseline - Optimized`) and percentage reduction.           |
-| **Characters Saved**       | Raw payload string reduction in bytes/characters.                               |
-| **Tool Calls Pruned**      | Number of redundant historical tool outputs (`view_file`, `cat`, etc.) omitted. |
-| **Avg TTFT & Delta**       | Time To First Token difference resulting from smaller prefill context windows.  |
-| **Semantic Parity Check**  | Verifies that message order, roles, and schema invariants remain 100% intact.   |
-| **CI Reduction Gate**      | Evaluates whether `--fail-under-reduction` criteria was satisfied.              |
+| Metric                       | Description                                                                                                         |
+| :--------------------------- | :------------------------------------------------------------------------------------------------------------------ |
+| **Total Evaluated Turns**    | Number of unique request/response turns evaluated across all rounds.                                                |
+| **Baseline Input Tokens**    | Authentic prompt tokens submitted by the client before optimization.                                                |
+| **Optimized Input Tokens**   | Net prompt tokens submitted to upstream LLMs after deduplication and pruning.                                       |
+| **Net Tokens Reduced**       | Total tokens saved (`Baseline - Optimized`) and percentage reduction.                                               |
+| **Characters Saved**         | Raw payload string reduction in bytes/characters.                                                                   |
+| **Tool Calls Pruned**        | Number of redundant historical tool outputs (`view_file`, `cat`, etc.) omitted.                                     |
+| **Prompt Cache Breakpoints** | Count of provider-specific prompt cache control breakpoints injected.                                               |
+| **Cache Hit Rate**           | Ratio of requests short-circuited by exact/semantic local cache hits.                                               |
+| **TTFT Telemetry**           | Time To First Token recorded in authentic wire traces (never synthetically fabricated in offline mode per Rule 10). |
+| **Semantic Parity Check**    | Verifies that message order, roles, and schema invariants remain 100% intact.                                       |
+| **CI Reduction Gate**        | Evaluates whether `--fail-under-reduction` criteria was satisfied.                                                  |
 
 ---
 

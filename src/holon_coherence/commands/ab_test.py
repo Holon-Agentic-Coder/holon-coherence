@@ -22,9 +22,6 @@ class ABRunConfig:
 
     trace_file: str
     rounds: int = 1
-    baseline_port: int | None = None
-    optimized_port: int | None = None
-    passive_mode: bool = False
     fail_under_reduction: float | None = None
     output_json: bool = False
     timeout: float = 30.0
@@ -44,6 +41,7 @@ class ABTurnMetrics:
     optimized_chars: int
     chars_saved: int
     tool_calls_pruned: int
+    cache_control_injected: int
     semantic_parity: bool
     baseline_ttft_ms: float | None = None
     optimized_ttft_ms: float | None = None
@@ -64,6 +62,9 @@ class ABComparisonScorecard:
     chars_saved: int = 0
     char_reduction_pct: float = 0.0
     tool_calls_pruned: int = 0
+    cache_control_injected: int = 0
+    cache_hits: int = 0
+    cache_hit_rate: float = 0.0
     baseline_ttft_ms: float | None = None
     optimized_ttft_ms: float | None = None
     ttft_delta_ms: float | None = None
@@ -89,6 +90,9 @@ class ABComparisonScorecard:
                 "chars_saved": self.chars_saved,
                 "char_reduction_pct": round(self.char_reduction_pct, 2),
                 "tool_calls_pruned": self.tool_calls_pruned,
+                "cache_control_injected": self.cache_control_injected,
+                "cache_hits": self.cache_hits,
+                "cache_hit_rate": round(self.cache_hit_rate, 2),
                 "baseline_ttft_ms": round(self.baseline_ttft_ms, 2) if self.baseline_ttft_ms is not None else None,
                 "optimized_ttft_ms": round(self.optimized_ttft_ms, 2) if self.optimized_ttft_ms is not None else None,
                 "ttft_delta_ms": round(self.ttft_delta_ms, 2) if self.ttft_delta_ms is not None else None,
@@ -120,8 +124,14 @@ class ABComparisonScorecard:
             f"  🎯 Net Tokens Reduced:          {self.tokens_reduced:,} ({self.token_reduction_pct:.2f}% reduction)",
             f"  💾 Characters Saved:            {self.chars_saved:,} ({self.char_reduction_pct:.2f}%)",
             f"  🔧 Tool Calls Pruned / Omitted: {self.tool_calls_pruned}",
-            thin_sep,
+            f"  🏷️  Prompt Cache Breakpoints:   {self.cache_control_injected} injected",
         ]
+
+        if self.cache_hits > 0:
+            hit_str = f"{self.cache_hits} hits / {self.total_turns} turns"
+            lines.append(f"  🎯 Cache Hit Rate:              {self.cache_hit_rate:.1f}% ({hit_str})")
+
+        lines.append(thin_sep)
 
         if self.baseline_ttft_ms is not None and self.optimized_ttft_ms is not None:
             delta_sign = "-" if (self.ttft_delta_ms or 0) <= 0 else "+"
@@ -134,6 +144,9 @@ class ABComparisonScorecard:
                     f"  ⚡ TTFT Delta:                  {delta_sign}{abs_delta:.1f}ms",
                 ]
             )
+        elif self.baseline_ttft_ms is not None:
+            base_ms = f"{self.baseline_ttft_ms:.1f}ms"
+            lines.append(f"  ⏱️  Baseline TTFT (Recorded):    {base_ms} (Variant B: offline evaluation)")
 
         if self.baseline_decode_tps is not None and self.optimized_decode_tps is not None:
             base_tps = f"{self.baseline_decode_tps:.1f} t/s"
@@ -170,7 +183,7 @@ def load_trace_transactions(file_path: str) -> list[dict[str, Any]]:
         raise FileNotFoundError(f"Trace file not found: {file_path}")
 
     transactions: list[dict[str, Any]] = []
-    with open(file_path, encoding="utf-8") as f:
+    with open(file_path, encoding="utf-8-sig") as f:
         # Check first non-whitespace character
         pos = f.tell()
         first_char = ""
@@ -232,8 +245,9 @@ def evaluate_offline_ab_run(
     total_baseline_chars = 0
     total_optimized_chars = 0
     total_tool_calls_pruned = 0
+    total_cache_control_injected = 0
+    total_cache_hits = 0
     ttft_baseline_samples: list[float] = []
-    ttft_optimized_samples: list[float] = []
     all_parity = True
 
     for round_num in range(1, rounds + 1):
@@ -277,28 +291,44 @@ def evaluate_offline_ab_run(
             chars_saved = max(0, baseline_chars - optimized_chars)
 
             # Check semantic parity
-            # Variant B must preserve all essential structural keys and not corrupt function call signatures
+            # Variant B must preserve all essential structural keys, messages, and roles
             parity = True
-            if "messages" in payload_data and "messages" in optimized_payload:
-                orig_msgs = payload_data["messages"]
-                opt_msgs = optimized_payload["messages"]
-                if not opt_msgs and orig_msgs:
+            if "messages" in payload_data:
+                if "messages" not in optimized_payload:
                     parity = False
+                else:
+                    orig_msgs = payload_data["messages"]
+                    opt_msgs = optimized_payload["messages"]
+                    if bool(orig_msgs) != bool(opt_msgs):
+                        parity = False
+                    elif isinstance(orig_msgs, list) and isinstance(opt_msgs, list) and orig_msgs and opt_msgs:
+                        # Verify the current active turn role is preserved
+                        last_orig = orig_msgs[-1]
+                        last_opt = opt_msgs[-1]
+                        if (
+                            isinstance(last_orig, dict)
+                            and isinstance(last_opt, dict)
+                            and last_orig.get("role") != last_opt.get("role")
+                        ):
+                            parity = False
+            elif "contents" in payload_data and "contents" not in optimized_payload:
+                parity = False
 
             if not parity:
                 all_parity = False
 
-            # Extract timing if present
+            # Extract recorded baseline timing if present
             ttft_val = None
             if isinstance(timing, dict) and "ttft_ms" in timing:
                 try:
                     ttft_val = float(timing["ttft_ms"])
                     ttft_baseline_samples.append(ttft_val)
-                    # Optimized TTFT is typically reduced or equal due to lower prefill volume
-                    opt_ttft = ttft_val * (0.85 if reduction_pct > 20 else 1.0)
-                    ttft_optimized_samples.append(opt_ttft)
                 except (ValueError, TypeError):
                     pass
+
+            cache_action = str(tx.get("cache_action") or tx.get("cache_status") or "").upper()
+            if cache_action == "HIT":
+                total_cache_hits += 1
 
             turn_metric = ABTurnMetrics(
                 turn_id=turn_id,
@@ -311,9 +341,10 @@ def evaluate_offline_ab_run(
                 optimized_chars=optimized_chars,
                 chars_saved=chars_saved,
                 tool_calls_pruned=clean_res.tool_outputs_omitted,
+                cache_control_injected=clean_res.cache_control_injected,
                 semantic_parity=parity,
                 baseline_ttft_ms=ttft_val,
-                optimized_ttft_ms=ttft_val * 0.85 if ttft_val is not None else None,
+                optimized_ttft_ms=None,  # Rule 10: Zero synthetic TTFT in offline replay
             )
 
             all_turns.append(turn_metric)
@@ -322,6 +353,7 @@ def evaluate_offline_ab_run(
             total_baseline_chars += baseline_chars
             total_optimized_chars += optimized_chars
             total_tool_calls_pruned += clean_res.tool_outputs_omitted
+            total_cache_control_injected += clean_res.cache_control_injected
 
     scorecard.total_turns = len(all_turns)
     scorecard.baseline_input_tokens = total_baseline_tokens
@@ -337,15 +369,16 @@ def evaluate_offline_ab_run(
         (scorecard.chars_saved / total_baseline_chars * 100.0) if total_baseline_chars > 0 else 0.0
     )
     scorecard.tool_calls_pruned = total_tool_calls_pruned
+    scorecard.cache_control_injected = total_cache_control_injected
+    scorecard.cache_hits = total_cache_hits
+    scorecard.cache_hit_rate = (total_cache_hits / len(all_turns) * 100.0) if all_turns else 0.0
     scorecard.semantic_parity_verified = all_parity
     scorecard.turn_details = all_turns
 
     if ttft_baseline_samples:
         scorecard.baseline_ttft_ms = sum(ttft_baseline_samples) / len(ttft_baseline_samples)
-    if ttft_optimized_samples:
-        scorecard.optimized_ttft_ms = sum(ttft_optimized_samples) / len(ttft_optimized_samples)
-    if scorecard.baseline_ttft_ms is not None and scorecard.optimized_ttft_ms is not None:
-        scorecard.ttft_delta_ms = scorecard.optimized_ttft_ms - scorecard.baseline_ttft_ms
+    scorecard.optimized_ttft_ms = None
+    scorecard.ttft_delta_ms = None
 
     if fail_under_reduction is not None:
         scorecard.passed_threshold = scorecard.token_reduction_pct >= fail_under_reduction
@@ -362,12 +395,6 @@ def handle_ab_test(args: argparse.Namespace) -> int:
         print("Error: --trace-file (-f) is required for ab-test.", file=sys.stderr)
         return 1
 
-    try:
-        transactions = load_trace_transactions(trace_path)
-    except Exception as exc:
-        print(f"Error loading trace transactions: {exc}", file=sys.stderr)
-        return 1
-
     rounds = safe_int(getattr(args, "rounds", 1), default=1)
     fail_under = getattr(args, "fail_under_reduction", None)
     if fail_under is not None:
@@ -377,13 +404,26 @@ def handle_ab_test(args: argparse.Namespace) -> int:
             print("Error: --fail-under-reduction must be a valid float (e.g. 15.0).", file=sys.stderr)
             return 1
 
-    scorecard = evaluate_offline_ab_run(
-        transactions=transactions,
+    config = ABRunConfig(
+        trace_file=trace_path,
         rounds=max(1, rounds),
         fail_under_reduction=fail_under,
+        output_json=bool(getattr(args, "json", False)),
     )
 
-    if getattr(args, "json", False):
+    try:
+        transactions = load_trace_transactions(config.trace_file)
+    except Exception as exc:
+        print(f"Error loading trace transactions: {exc}", file=sys.stderr)
+        return 1
+
+    scorecard = evaluate_offline_ab_run(
+        transactions=transactions,
+        rounds=config.rounds,
+        fail_under_reduction=config.fail_under_reduction,
+    )
+
+    if config.output_json:
         print(json.dumps(scorecard.to_dict(), indent=2))
     else:
         print(scorecard.render_table())
@@ -391,7 +431,7 @@ def handle_ab_test(args: argparse.Namespace) -> int:
     if not scorecard.passed_threshold:
         print(
             f"\n❌ A/B Test Failed: Reduction {scorecard.token_reduction_pct:.2f}% "
-            f"is below required threshold {fail_under:.2f}%.",
+            f"is below required threshold {config.fail_under_reduction:.2f}%.",
             file=sys.stderr,
         )
         return 1

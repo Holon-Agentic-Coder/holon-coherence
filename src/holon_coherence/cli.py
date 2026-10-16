@@ -281,23 +281,6 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Output raw JSON comparison scorecard",
     )
-    ab_parser.add_argument(
-        "--baseline-port",
-        type=int,
-        default=None,
-        help="Baseline proxy port for online comparison",
-    )
-    ab_parser.add_argument(
-        "--optimized-port",
-        type=int,
-        default=None,
-        help="Optimized proxy port for online comparison",
-    )
-    ab_parser.add_argument(
-        "--passive-mode",
-        action="store_true",
-        help="Run in passive observation mode",
-    )
 
     # Run command with inline proxy properties
     run_parser = subparsers.add_parser(

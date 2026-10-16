@@ -28,6 +28,7 @@ def sample_trace_records() -> list[dict]:
         {
             "turn_id": "turn-1",
             "provider": "anthropic",
+            "cache_action": "MISS",
             "raw_request": {
                 "request": {
                     "messages": [
@@ -59,6 +60,7 @@ def sample_trace_records() -> list[dict]:
         {
             "turn_id": "turn-2",
             "provider": "anthropic",
+            "cache_action": "HIT",
             "raw_request": {
                 "request": {
                     "messages": [
@@ -137,6 +139,14 @@ class TestTraceLoading:
         assert len(records) == 2
         assert records[0]["turn_id"] == "turn-1"
 
+    def test_load_json_array_with_utf8_bom(self, tmp_path: Path, sample_trace_records: list[dict]) -> None:
+        trace_path = tmp_path / "transactions_bom.json"
+        with open(trace_path, "w", encoding="utf-8-sig") as f:
+            json.dump(sample_trace_records, f)
+        records = load_trace_transactions(str(trace_path))
+        assert len(records) == 2
+        assert records[0]["turn_id"] == "turn-1"
+
     def test_load_jsonl_with_blank_lines_and_comments(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "mixed.jsonl"
         with open(trace_path, "w", encoding="utf-8") as f:
@@ -179,8 +189,12 @@ class TestOfflineABEvaluation:
         assert scorecard.semantic_parity_verified is True
         assert scorecard.passed_threshold is True
         assert scorecard.baseline_ttft_ms is not None
-        assert scorecard.optimized_ttft_ms is not None
-        assert scorecard.ttft_delta_ms is not None and scorecard.ttft_delta_ms < 0
+        # Rule 10 Invariant: Zero synthetic TTFT in offline mode (no upstream API calls dispatched)
+        assert scorecard.optimized_ttft_ms is None
+        assert scorecard.ttft_delta_ms is None
+        assert scorecard.cache_control_injected > 0
+        assert scorecard.cache_hits == 1
+        assert scorecard.cache_hit_rate == 50.0
 
     def test_evaluate_rounds_scaling(self, sample_trace_records: list[dict]) -> None:
         scorecard_1 = evaluate_offline_ab_run(sample_trace_records, rounds=1)
@@ -205,7 +219,7 @@ class TestOfflineABEvaluation:
         )
         assert failing_scorecard.passed_threshold is False
 
-    def test_semantic_parity_failure_detection(self) -> None:
+    def test_semantic_parity_failure_on_empty_messages(self) -> None:
         corrupted_record = [
             {
                 "turn_id": "turn-bad",
@@ -233,6 +247,67 @@ class TestOfflineABEvaluation:
         )
         assert scorecard.semantic_parity_verified is False
 
+    def test_semantic_parity_failure_on_missing_messages_key(self) -> None:
+        record = [
+            {
+                "turn_id": "turn-key-dropped",
+                "provider": "anthropic",
+                "raw_request": {"request": {"messages": [{"role": "user", "content": "Hello"}]}},
+            }
+        ]
+
+        class MissingKeyCleaner:
+            def process_payload_with_stats(self, payload: dict, provider: str = "anthropic") -> Any:
+                from holon_coherence.payload_cleaner import CleaningResult
+
+                # Drops messages key completely
+                return CleaningResult(
+                    payload={},
+                    tool_outputs_omitted=0,
+                    turns_summarized=0,
+                    cache_control_injected=0,
+                    chars_saved=50,
+                )
+
+        scorecard = evaluate_offline_ab_run(transactions=record, cleaner=MissingKeyCleaner())  # type: ignore[arg-type]
+        assert scorecard.semantic_parity_verified is False
+
+    def test_semantic_parity_failure_on_mutated_active_role(self) -> None:
+        record = [
+            {
+                "turn_id": "turn-role-mutated",
+                "provider": "anthropic",
+                "raw_request": {
+                    "request": {
+                        "messages": [
+                            {"role": "user", "content": "Task 1"},
+                            {"role": "assistant", "content": "Response 1"},
+                        ]
+                    }
+                },
+            }
+        ]
+
+        class RoleMutatingCleaner:
+            def process_payload_with_stats(self, payload: dict, provider: str = "anthropic") -> Any:
+                from holon_coherence.payload_cleaner import CleaningResult
+
+                return CleaningResult(
+                    payload={
+                        "messages": [
+                            {"role": "user", "content": "Task 1"},
+                            {"role": "user", "content": "Response 1"},  # Role mutated from assistant to user
+                        ]
+                    },
+                    tool_outputs_omitted=0,
+                    turns_summarized=0,
+                    cache_control_injected=0,
+                    chars_saved=0,
+                )
+
+        scorecard = evaluate_offline_ab_run(transactions=record, cleaner=RoleMutatingCleaner())  # type: ignore[arg-type]
+        assert scorecard.semantic_parity_verified is False
+
 
 class TestScorecardPresentation:
     """Tests for human-readable and machine-readable scorecard presentation."""
@@ -248,6 +323,8 @@ class TestScorecardPresentation:
         assert "Baseline (Control)" in table
         assert "Optimized" in table
         assert "Net Tokens Reduced:" in table
+        assert "Prompt Cache Breakpoints:" in table
+        assert "Baseline TTFT (Recorded):" in table
         assert "Semantic Parity Check:       ✅ PASSED" in table
         assert "CI Reduction Gate:           ✅ PASSED" in table
 
@@ -259,6 +336,7 @@ class TestScorecardPresentation:
         assert "turns" in data
         assert data["summary"]["total_turns"] == 2
         assert "token_reduction_pct" in data["summary"]
+        assert "cache_control_injected" in data["summary"]
         assert len(data["turns"]) == 2
         assert data["turns"][0]["turn_id"] == "turn-1"
         assert data["turns"][0]["semantic_parity"] is True
@@ -277,6 +355,7 @@ class TestABTestCLI:
         assert "summary" in data
         assert data["summary"]["total_turns"] == 2
         assert data["summary"]["tokens_reduced"] > 0
+        assert data["summary"]["cache_control_injected"] > 0
 
     def test_cli_ab_test_human_table_output(self, jsonl_trace_file: Path, capsys: pytest.CaptureFixture) -> None:
         with pytest.raises(SystemExit) as exc_info:
