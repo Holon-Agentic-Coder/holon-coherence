@@ -1107,8 +1107,8 @@ class TestCLIDispatchAndMain:
 
     def test_stop_subcommand_dispatch(self) -> None:
         with patch("holon_coherence.cli.stop_proxy_container") as mock_stop:
-            main(["stop"])
-            mock_stop.assert_called_once()
+            main(["stop", "--name", "sandbox-custom"])
+            mock_stop.assert_called_once_with("sandbox-custom")
 
     def test_port_configuration_from_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HOLON_PROXY_PORT", "9999")
@@ -2618,12 +2618,14 @@ class TestCLIMetricsCommand:
             patch("holon_coherence.cli.handle_metrics", return_value=0) as mock_handle,
             pytest.raises(SystemExit) as exc,
         ):
-            main(["metrics", "--json", "--port", "9999"])
+            main(["metrics", "--json", "--port", "9999", "--offline", "--name", "custom-proxy"])
         assert exc.value.code == 0
         assert mock_handle.call_count == 1
         args = mock_handle.call_args[0][0]
         assert args.json is True
         assert args.port == 9999
+        assert args.offline is True
+        assert args.name == "custom-proxy"
 
 
 class TestLocalLlmRunnerFlagsAndEnvs:
