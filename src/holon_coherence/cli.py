@@ -221,11 +221,6 @@ def main(argv: list[str] | None = None) -> None:
     start_parser.add_argument(
         "--image", default="holon-coherence:latest", help="Docker image tag (default: holon-coherence:latest)"
     )
-    start_parser.add_argument(
-        "--name",
-        default=None,
-        help="Container name (defaults to HOLON_CONTAINER_NAME or holon-coherence-proxy)",
-    )
     start_parser.add_argument("--build", action="store_true", help="Rebuild Docker image before starting")
 
     # Stop proxy container
@@ -286,9 +281,6 @@ def main(argv: list[str] | None = None) -> None:
         help="Display offline telemetry metrics if live proxy is unreachable",
     )
     metrics_parser.add_argument("--json", action="store_true", help="Output metrics as raw JSON")
-    metrics_parser.add_argument(
-        "--offline", action="store_true", help="Display historical metrics from offline wire logs"
-    )
 
     # A/B testing suite
     ab_parser = subparsers.add_parser(
