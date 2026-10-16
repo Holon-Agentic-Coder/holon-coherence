@@ -164,12 +164,6 @@ class TestCredentialMappingAndNativeAuth:
         assert env["GEMINI_API_KEY"] == "secret-test-key-123"
         assert env["AGY_USER_TOKEN"] == "secret-test-key-123"
 
-    def test_credential_mapping_antigravity_alias(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("HOLON_AGENT_KEY", "secret-test-key-123")
-        env = build_agent_env("antigravity", port=8080)
-        assert env["GEMINI_API_KEY"] == "secret-test-key-123"
-        assert env["AGY_USER_TOKEN"] == "secret-test-key-123"
-
     def test_credential_mapping_claude(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HOLON_AGENT_KEY", "secret-test-key-123")
         env = build_agent_env("claude", port=8080)
@@ -198,7 +192,7 @@ class TestCredentialMappingAndNativeAuth:
             env = build_agent_env(agent, port=8080)
             assert "HOLON_AGENT_KEY" not in env
             assert env.get("EXISTING_HOST_SESSION") == "present"
-            if agent in ("agy", "antigravity"):
+            if agent == "agy":
                 assert "GEMINI_API_KEY" not in env or env["GEMINI_API_KEY"] != "secret-test-key-123"
             elif agent == "claude":
                 assert "ANTHROPIC_API_KEY" not in env or env["ANTHROPIC_API_KEY"] != "secret-test-key-123"
