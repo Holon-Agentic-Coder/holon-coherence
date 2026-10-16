@@ -36,6 +36,7 @@ from holon_coherence.commands import (
     find_system_ca_bundle,
     get_active_web_token,
     get_or_create_merged_ca_bundle,
+    handle_ab_test,
     handle_build,
     handle_init_ca,
     handle_logs,
@@ -95,6 +96,7 @@ __all__ = [
     "generate_root_ca",
     "get_active_web_token",
     "get_or_create_merged_ca_bundle",
+    "handle_ab_test",
     "handle_build",
     "handle_init_ca",
     "handle_logs",
@@ -212,19 +214,39 @@ def main(argv: list[str] | None = None) -> None:
     )
     start_parser.add_argument("-d", "--detach", action="store_true", help="Run Docker container in background")
     start_parser.add_argument(
+        "--name",
+        default=None,
+        help="Container name (defaults to HOLON_CONTAINER_NAME or holon-coherence-proxy)",
+    )
+    start_parser.add_argument(
         "--image", default="holon-coherence:latest", help="Docker image tag (default: holon-coherence:latest)"
     )
     start_parser.add_argument("--build", action="store_true", help="Rebuild Docker image before starting")
 
     # Stop proxy container
-    subparsers.add_parser("stop", help="Stop and remove running holon-coherence Docker container")
+    stop_parser = subparsers.add_parser("stop", help="Stop and remove running holon-coherence Docker container")
+    stop_parser.add_argument(
+        "--name",
+        default=None,
+        help="Container name (defaults to HOLON_CONTAINER_NAME or holon-coherence-proxy)",
+    )
 
     # Status of proxy container
-    subparsers.add_parser("status", help="Check status of holon-coherence Docker container")
+    status_parser = subparsers.add_parser("status", help="Check status of holon-coherence Docker container")
+    status_parser.add_argument(
+        "--name",
+        default=None,
+        help="Container name (defaults to HOLON_CONTAINER_NAME or holon-coherence-proxy)",
+    )
 
     # Logs of proxy container
     logs_parser = subparsers.add_parser("logs", help="View logs of holon-coherence Docker container")
     logs_parser.add_argument("-f", "--follow", action="store_true", help="Follow log stream")
+    logs_parser.add_argument(
+        "--name",
+        default=None,
+        help="Container name (defaults to HOLON_CONTAINER_NAME or holon-coherence-proxy)",
+    )
 
     # Build image
     build_parser = subparsers.add_parser("build", help="Build the holon-coherence Docker image")
@@ -249,6 +271,61 @@ def main(argv: list[str] | None = None) -> None:
         help=f"Proxy listen port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)",
     )
     metrics_parser.add_argument("--json", action="store_true", help="Output metrics as raw JSON")
+    metrics_parser.add_argument(
+        "--offline", action="store_true", help="Display historical metrics from offline wire logs"
+    )
+
+    # A/B testing suite
+    ab_parser = subparsers.add_parser(
+        "ab-test",
+        help="Run real-traffic A/B benchmark comparing baseline vs optimized runs",
+    )
+    ab_parser.add_argument(
+        "--command",
+        "-c",
+        dest="workload_cmd",
+        default=None,
+        help="Command/agent workload to execute twice through proxy with real LLM traffic",
+    )
+    ab_parser.add_argument(
+        "--trace-file",
+        "-f",
+        default=None,
+        help="Path to authentic trace transactions (.jsonl or .json) file",
+    )
+    ab_parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Replay trace requests as live HTTP traffic through proxy against real upstream LLM endpoints",
+    )
+    ab_parser.add_argument(
+        "--baseline",
+        default=None,
+        help="Path to authentic baseline wire log file or directory (Variant A)",
+    )
+    ab_parser.add_argument(
+        "--optimized",
+        default=None,
+        help="Path to authentic optimized wire log file or directory (Variant B)",
+    )
+    ab_parser.add_argument(
+        "--rounds",
+        "-n",
+        type=int,
+        default=1,
+        help="Number of evaluation rounds to run (default: 1)",
+    )
+    ab_parser.add_argument(
+        "--fail-under-reduction",
+        type=float,
+        default=None,
+        help="Enforce minimum token reduction percentage gate (e.g. 15.0 for 15%%)",
+    )
+    ab_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output raw JSON comparison scorecard",
+    )
 
     # Run command with inline proxy properties
     run_parser = subparsers.add_parser(
@@ -347,6 +424,9 @@ def main(argv: list[str] | None = None) -> None:
 
     elif args.command == "metrics":
         sys.exit(handle_metrics(args))
+
+    elif args.command == "ab-test":
+        sys.exit(handle_ab_test(args))
 
     elif args.command == "logs":
         handle_logs(args)

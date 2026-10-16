@@ -9,7 +9,10 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from holon_coherence.commands.docker_ops import CONTAINER_NAME, get_container_mapped_port
+from holon_coherence.commands.docker_ops import (
+    get_container_mapped_port,
+    get_container_name,
+)
 from holon_coherence.commands.start import DEFAULT_PROXY_PORT
 from holon_coherence.metrics_math import (
     average,
@@ -247,7 +250,8 @@ def handle_metrics(
             except ValueError:
                 target_port = DEFAULT_PROXY_PORT
         else:
-            mapped = get_container_mapped_port(CONTAINER_NAME, DEFAULT_PROXY_PORT)
+            container = get_container_name()
+            mapped = get_container_mapped_port(container, DEFAULT_PROXY_PORT)
             target_port = mapped if mapped is not None else DEFAULT_PROXY_PORT
 
     is_json = getattr(args, "json", False) if args is not None else False
@@ -268,6 +272,23 @@ def handle_metrics(
                 is_live = True
     except Exception:
         metrics = None
+
+    allow_offline = getattr(args, "offline", False) if args is not None else False
+    if os.getenv("WIRE_LOG_DIR"):
+        allow_offline = True
+
+    # If the live proxy is down, do not silently display stale offline metrics in terminal mode
+    if not is_live and not is_json and not allow_offline:
+        print("================================================================")
+        print("           HOLON COHERENCE OPTIMIZATION METRICS")
+        print(f"  🔴 PROXY STATUS: DOWN / UNREACHABLE (Port: {target_port})")
+        print("================================================================")
+        print(f"  ⚠️  Could not connect to live proxy at {endpoint_url}")
+        print("  The holon-coherence proxy container is not running.")
+        print("  Start it with 'holon-coherence start' or run an agent.")
+        print("  (To view historical metrics from wire logs, pass --offline)")
+        print("================================================================")
+        return 1
 
     # 2. Fallback to offline wire logs if proxy is not reachable
     if metrics is None:

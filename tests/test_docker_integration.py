@@ -77,35 +77,53 @@ class TestDockerIntegration(unittest.TestCase):
 
     def test_cli_docker_wrapper_start_and_stop(self):
         """Verify holon-coherence start -d and stop manage the container correctly."""
+        import os
         import sys
 
         from holon_coherence.cli import main
 
-        # Test start -d on custom port 18095
+        sandbox_container = "test-holon-coherence-sandbox"
         orig_argv = sys.argv
+        orig_container_env = os.environ.get("HOLON_CONTAINER_NAME")
+        os.environ["HOLON_CONTAINER_NAME"] = sandbox_container
+
+        # Clean any preexisting sandbox container
+        subprocess.run(["docker", "rm", "-f", sandbox_container], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
         try:
-            sys.argv = ["holon-coherence", "start", "-d", "--port", "18095"]
+            # Test start -d on custom port 18095 using sandbox container
+            sys.argv = ["holon-coherence", "start", "-d", "--port", "18095", "--name", sandbox_container]
             main()
 
-            # Verify container is running
+            # Verify sandbox container is running (exact match)
             ps_res = subprocess.run(
-                ["docker", "ps", "-q", "--filter", "name=holon-coherence"], capture_output=True, text=True, check=True
+                ["docker", "ps", "-q", "--filter", f"name=^{sandbox_container}$"],
+                capture_output=True,
+                text=True,
+                check=True,
             )
-            self.assertTrue(len(ps_res.stdout.strip()) > 0, "holon-coherence container was not detected running.")
+            self.assertTrue(len(ps_res.stdout.strip()) > 0, "Sandbox container was not detected running.")
 
-            # Stop container
-            sys.argv = ["holon-coherence", "stop"]
+            # Stop sandbox container
+            sys.argv = ["holon-coherence", "stop", "--name", sandbox_container]
             main()
 
             time.sleep(1)
             ps_after = subprocess.run(
-                ["docker", "ps", "-q", "--filter", "name=holon-coherence"], capture_output=True, text=True, check=True
+                ["docker", "ps", "-q", "--filter", f"name=^{sandbox_container}$"],
+                capture_output=True,
+                text=True,
+                check=True,
             )
-            self.assertEqual(len(ps_after.stdout.strip()), 0, "Container should not be running after stop.")
+            self.assertEqual(len(ps_after.stdout.strip()), 0, "Sandbox container should not be running after stop.")
         finally:
             sys.argv = orig_argv
+            if orig_container_env is not None:
+                os.environ["HOLON_CONTAINER_NAME"] = orig_container_env
+            else:
+                os.environ.pop("HOLON_CONTAINER_NAME", None)
             subprocess.run(
-                ["docker", "rm", "-f", "holon-coherence"],
+                ["docker", "rm", "-f", sandbox_container],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )

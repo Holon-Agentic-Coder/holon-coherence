@@ -375,7 +375,29 @@ the persisted wire transaction ledger (`transactions.jsonl`).
 
 ---
 
-### 5. Alternative: Direct Docker Invocation
+### 5. A/B Testing & Token Reduction Verification Suite
+
+`holon-coherence ab-test` runs differential benchmarking over recorded authentic transaction traces to empirically
+validate token reduction, character savings, tool output deduplication, and TTFT deltas between raw baseline and
+optimized requests.
+
+```bash
+# Run A/B differential benchmark over recorded trace transactions
+holon-coherence ab-test -f ~/.holon/wire_logs/transactions.jsonl
+
+# Enforce minimum token reduction gate in CI (fails if reduction < 15%)
+holon-coherence ab-test -f transactions.jsonl --fail-under-reduction 15.0
+
+# Export structured JSON scorecard for analytics pipelines
+holon-coherence ab-test -f transactions.jsonl --json > scorecard.json
+```
+
+See the [A/B Testing Guide](docs/ab_testing_guide.md) for full benchmark configuration, scorecard metric definitions,
+and CI integration patterns.
+
+---
+
+### 6. Alternative: Direct Docker Invocation
 
 If you prefer to invoke Docker directly without using the Python CLI wrapper:
 
@@ -393,7 +415,7 @@ docker run --name holon-coherence --rm -it \
   holon-coherence:latest
 ```
 
-### 6. Connect Any Agent (Inline Execution)
+### 7. Connect Any Agent (Inline Execution)
 
 > [!IMPORTANT] **Why Inline Proxy Execution instead of `export`?**
 >
@@ -471,7 +493,8 @@ For agent behavioral rules, coding standards, and operational guidelines, see [A
 
 - [System Architecture](docs/token_reduction_architecture.md)
 - [Measurement Plan & Empirical Telemetry](docs/token_reduction_measurement_plan.md)
-- [A/B Testing & Efficacy Verification](docs/token_reduction_ab_testing.md)
+- [A/B Testing & Token Reduction Verification Guide](docs/ab_testing_guide.md)
+- [A/B Testing & Efficacy Verification (Background)](docs/token_reduction_ab_testing.md)
 - **Methodical How-To Guides**:
   - [Context Cleaning & Deduplication](docs/methods/context_cleaning.md)
   - [Hybrid & Semantic Local Cache](docs/methods/local_cache_layer.md)

@@ -1300,6 +1300,7 @@ class TestCLIDispatchAndMain:
         with (
             patch("holon_coherence.cli.is_in_container", return_value=False),
             patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", return_value=False),
             patch("holon_coherence.cli.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
@@ -1905,6 +1906,7 @@ class TestLocalLlmRunnerFlag:
         with (
             patch("holon_coherence.cli.is_in_container", return_value=False),
             patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", return_value=False),
             patch("holon_coherence.cli.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
@@ -1994,6 +1996,7 @@ class TestHostLocalContainerWiring:
         with (
             patch("holon_coherence.cli.is_in_container", return_value=False),
             patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", return_value=False),
             patch("os.makedirs"),
             patch("holon_coherence.cli.generate_root_ca", return_value=("/tmp/ca.pem", "/tmp/ca.key")),
             patch("holon_coherence.cli.ensure_docker_image"),
