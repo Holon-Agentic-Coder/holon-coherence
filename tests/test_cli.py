@@ -1107,8 +1107,24 @@ class TestCLIDispatchAndMain:
 
     def test_stop_subcommand_dispatch(self) -> None:
         with patch("holon_coherence.cli.stop_proxy_container") as mock_stop:
+            main(["stop"])
+            mock_stop.assert_called_once_with("holon-coherence-proxy")
+
+        with patch("holon_coherence.cli.stop_proxy_container") as mock_stop:
             main(["stop", "--name", "sandbox-custom"])
             mock_stop.assert_called_once_with("sandbox-custom")
+
+    def test_status_and_logs_subcommand_dispatch_with_name(self) -> None:
+        with patch("holon_coherence.cli.handle_status") as mock_status:
+            main(["status", "--name", "sandbox-custom"])
+            assert mock_status.call_count == 1
+            assert mock_status.call_args[0][0].name == "sandbox-custom"
+
+        with patch("holon_coherence.cli.handle_logs") as mock_logs:
+            main(["logs", "--name", "sandbox-custom", "-f"])
+            assert mock_logs.call_count == 1
+            assert mock_logs.call_args[0][0].name == "sandbox-custom"
+            assert mock_logs.call_args[0][0].follow is True
 
     def test_port_configuration_from_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HOLON_PROXY_PORT", "9999")
