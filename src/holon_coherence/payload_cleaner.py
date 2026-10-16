@@ -47,7 +47,6 @@ class JSONContextCleaner:
         self.enable_prompt_caching = enable_prompt_caching
         self.max_turns = max_turns
         self.recent_turns_to_keep = recent_turns_to_keep
-        self.max_turns = max_turns
 
     def process_payload(self, payload: dict[str, Any], provider: str = "anthropic") -> dict[str, Any]:
         """Processes and optimizes an outgoing LLM JSON request payload.
@@ -435,7 +434,7 @@ class JSONContextCleaner:
             content = msg_copy.get("content", "")
 
             # Tool result in OpenAI format (role: "tool", tool_call_id: "...")
-            if role == "tool" and isinstance(content, str) and len(content) > 100:
+            if self.enable_deduplication and role == "tool" and isinstance(content, str) and len(content) > 100:
                 content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
                 tool_res_id = msg_copy.get("tool_call_id", f"tool_result_{turn_idx}")
                 if content_hash in seen_content_hashes and is_older_turn:
@@ -445,11 +444,11 @@ class JSONContextCleaner:
                         stats["tool_outputs_omitted"] += 1
                 else:
                     seen_content_hashes[content_hash] = (turn_idx, tool_res_id)
-            elif isinstance(content, str) and len(content) > 200:
+            elif self.enable_deduplication and isinstance(content, str) and len(content) > 200:
                 content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
                 if content_hash in seen_content_hashes and is_older_turn:
                     prev_turn, _prev_res = seen_content_hashes[content_hash]
-                    msg_copy["content"] = f"[Tool output omitted: identical output matches Turn {prev_turn}]"
+                    msg_copy["content"] = f"[Message content omitted: identical output matches Turn {prev_turn}]"
                     if stats is not None:
                         stats["tool_outputs_omitted"] += 1
                 else:
@@ -529,7 +528,11 @@ class JSONContextCleaner:
                         continue
                     part_copy = copy.deepcopy(part)
                     # Tool response in Gemini format (functionResponse)
-                    if "functionResponse" in part_copy and isinstance(part_copy["functionResponse"], dict):
+                    if (
+                        self.enable_deduplication
+                        and "functionResponse" in part_copy
+                        and isinstance(part_copy["functionResponse"], dict)
+                    ):
                         func_resp = part_copy["functionResponse"]
                         resp_data = func_resp.get("response", {})
                         func_name = func_resp.get("name", f"func_{turn_idx}")
@@ -547,7 +550,7 @@ class JSONContextCleaner:
                                     stats["tool_outputs_omitted"] += 1
                             else:
                                 seen_content_hashes[content_hash] = (turn_idx, func_name)
-                    else:
+                    elif self.enable_deduplication:
                         text = part_copy.get("text", "")
                         if isinstance(text, str) and len(text) > 100:
                             text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()

@@ -391,6 +391,61 @@ class TestHolonCoherence(unittest.TestCase):
                 if "functionResponse" in part:
                     self.assertEqual(part["functionResponse"]["name"], "list_files")
 
+    def test_deduplication_disabled_openai_and_gemini(self):
+        cleaner = JSONContextCleaner(enable_deduplication=False, max_turns=60)
+
+        # 1. OpenAI: verify tool outputs and repeated content are not omitted
+        build_line = "Compiling src/core.rs...\nFinished release [optimized] target(s) in 2.34s\n"
+        build_log = build_line * 10
+        messages = [{"role": "user", "content": "Execute build"}]
+        for i in range(1, 11, 2):
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{"id": f"call_{i}", "type": "function", "function": {"name": "run_build"}}],
+                }
+            )
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": f"call_{i}",
+                    "content": build_log,
+                }
+            )
+        messages.append({"role": "assistant", "content": "All builds complete."})
+        res_openai = cleaner.process_payload_with_stats({"messages": messages}, provider="openai")
+        self.assertEqual(res_openai.tool_outputs_omitted, 0)
+        for msg in res_openai.payload["messages"]:
+            if msg.get("role") == "tool":
+                self.assertEqual(msg["content"], build_log)
+
+        # 2. Gemini: verify functionResponse and repeated text are not omitted
+        dir_listing = {"files": [f"file_{k}.py" for k in range(50)], "status": "ok"}
+        contents = [{"role": "user", "parts": [{"text": "List files"}]}]
+        for _i in range(1, 11, 2):
+            contents.append({"role": "model", "parts": [{"functionCall": {"name": "list_files"}}]})
+            contents.append(
+                {
+                    "role": "function",
+                    "parts": [
+                        {
+                            "functionResponse": {
+                                "name": "list_files",
+                                "response": dir_listing,
+                            }
+                        }
+                    ],
+                }
+            )
+        contents.append({"role": "model", "parts": [{"text": "Done."}]})
+        res_gemini = cleaner.process_payload_with_stats({"contents": contents}, provider="gemini")
+        self.assertEqual(res_gemini.tool_outputs_omitted, 0)
+        for turn in res_gemini.payload["contents"]:
+            for part in turn.get("parts", []):
+                if "functionResponse" in part:
+                    self.assertEqual(part["functionResponse"]["response"], dir_listing)
+
     def test_throughput_metric_aliases(self):
         from holon_coherence.metrics_math import (
             compute_decode_speed,
