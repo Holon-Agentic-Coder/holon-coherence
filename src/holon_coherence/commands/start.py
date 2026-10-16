@@ -14,9 +14,9 @@ from typing import Any, NamedTuple
 from holon_coherence.ca_generator import generate_root_ca
 from holon_coherence.commands._dispatch import get_cli
 from holon_coherence.commands.docker_ops import (
-    CONTAINER_NAME,
     check_docker_daemon,
     ensure_docker_image,
+    get_container_name,
     is_container_bound_to_port,
     is_container_running,
     stop_proxy_container,
@@ -126,14 +126,17 @@ def find_available_port(start_port: int = 8080, max_attempts: int = 100, host: s
         return s.getsockname()[1]
 
 
-def wait_for_proxy_ready(port: int, timeout: float = PROXY_READY_TIMEOUT_SECONDS) -> bool:
+def wait_for_proxy_ready(
+    port: int, timeout: float = PROXY_READY_TIMEOUT_SECONDS, container_name: str | None = None
+) -> bool:
     """Poll the proxy port until it accepts TCP connections or timeout occurs."""
     cli = get_cli()
     is_running = getattr(cli, "is_container_running", is_container_running)
     in_use = getattr(cli, "is_port_in_use", is_port_in_use)
+    name = container_name or get_container_name()
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if not is_running(CONTAINER_NAME):
+        if not is_running(name):
             return False
         if in_use(port):
             return True
@@ -153,11 +156,12 @@ def host_local_container_args(host_local_spec: str) -> list[str]:
     return ["-e", f"{HOST_LOCAL_ENV_VAR}={host_local_spec}"]
 
 
-def container_host_local_spec(container_name: str = CONTAINER_NAME) -> str:
+def container_host_local_spec(container_name: str | None = None) -> str:
     """Read back the host-local allow list a running proxy container was started with."""
+    name = container_name or get_container_name()
     try:
         res = subprocess.run(
-            ["docker", "inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", container_name],
+            ["docker", "inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", name],
             capture_output=True,
             text=True,
             timeout=5.0,
@@ -186,14 +190,13 @@ def host_local_covered(required_spec: str, existing_spec: str) -> bool:
     return all(covered(target) for target in required)
 
 
-def probe_host_local_reachable(
-    port: int, timeout: float = 15.0, container_name: str = CONTAINER_NAME
-) -> tuple[bool, str]:
+def probe_host_local_reachable(port: int, timeout: float = 15.0, container_name: str | None = None) -> tuple[bool, str]:
     """Check from inside the container that the Docker host gateway answers on ``port``."""
+    name = container_name or get_container_name()
     for interpreter in ("python3", "python"):
         try:
             res = subprocess.run(
-                ["docker", "exec", container_name, interpreter, "-c", _CONTAINER_GATEWAY_PROBE, str(port)],
+                ["docker", "exec", name, interpreter, "-c", _CONTAINER_GATEWAY_PROBE, str(port)],
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -291,6 +294,7 @@ def ensure_proxy_running(
     port: int = DEFAULT_PROXY_PORT,
     image: str = "holon-coherence:latest",
     host_local_spec: str = "",
+    container_name: str | None = None,
 ) -> bool:
     """Ensure the holon-coherence optimization proxy is running in the background and healthy."""
     cli = get_cli()
@@ -306,6 +310,8 @@ def ensure_proxy_running(
     get_host_local_args = getattr(cli, "host_local_container_args", host_local_container_args)
     wait_ready = getattr(cli, "wait_for_proxy_ready", wait_for_proxy_ready)
 
+    name = container_name or get_container_name()
+
     ok, err_msg = check_daemon()
     if not ok:
         print(err_msg, file=sys.stderr)
@@ -313,10 +319,10 @@ def ensure_proxy_running(
 
     was_running = False
     if in_use(port):
-        if is_running(CONTAINER_NAME) and is_bound(port, CONTAINER_NAME):
+        if is_running(name) and is_bound(port, name):
             if not host_local_spec:
                 return False
-            existing_spec = get_spec()
+            existing_spec = get_spec(name) if container_name else get_spec()
             if is_covered(host_local_spec, existing_spec):
                 return False
             was_running = True
@@ -326,7 +332,7 @@ def ensure_proxy_running(
                 f"♻️  Running proxy container does not intercept {host_local_spec}; recreating it. "
                 "Other sessions sharing this proxy will briefly lose interception."
             )
-            stop_container()
+            stop_container(name) if container_name else stop_container()
             deadline = time.monotonic() + 10.0
             while in_use(port) and time.monotonic() < deadline:
                 time.sleep(PROXY_POLL_INTERVAL_SECONDS)
@@ -344,21 +350,37 @@ def ensure_proxy_running(
                 file=sys.stderr,
             )
             sys.exit(1)
-    elif is_running(CONTAINER_NAME):
-        if is_bound(port, CONTAINER_NAME):
-            if wait_ready(port):
+    elif is_running(name):
+        if is_bound(port, name):
+            ready = wait_ready(port, container_name=name) if container_name else wait_ready(port)
+            if ready:
                 return False
-            print(
-                f"Error: A holon-coherence proxy container is running for port {port}, but is not responding.\n"
-                "Please restart it using 'holon-coherence stop' and retry.",
-                file=sys.stderr,
-            )
+            if container_name:
+                print(
+                    f"Error: A holon-coherence proxy container '{name}' is running for port {port}, "
+                    "but is not responding.\n"
+                    "Please restart it using 'holon-coherence stop' and retry.",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"Error: A holon-coherence proxy container is running for port {port}, but is not responding.\n"
+                    "Please restart it using 'holon-coherence stop' and retry.",
+                    file=sys.stderr,
+                )
         else:
-            print(
-                "Error: A holon-coherence proxy container is already running on a different port.\n"
-                f"Stop it first using 'holon-coherence stop' before launching on port {port}.",
-                file=sys.stderr,
-            )
+            if container_name:
+                print(
+                    f"Error: A holon-coherence proxy container '{name}' is already running on a different port.\n"
+                    f"Stop it first using 'holon-coherence stop' before launching on port {port}.",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    "Error: A holon-coherence proxy container is already running on a different port.\n"
+                    f"Stop it first using 'holon-coherence stop' before launching on port {port}.",
+                    file=sys.stderr,
+                )
         sys.exit(1)
 
     ca_dir = os.path.expanduser("~/.holon/proxy-ca")
@@ -377,7 +399,7 @@ def ensure_proxy_running(
 
     with contextlib.suppress(subprocess.TimeoutExpired, OSError):
         subprocess.run(
-            ["docker", "rm", "-f", CONTAINER_NAME],
+            ["docker", "rm", "-f", name],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=5.0,
@@ -389,7 +411,7 @@ def ensure_proxy_running(
         "-d",
         "--init",
         "--name",
-        CONTAINER_NAME,
+        name,
         *get_alias_args(),
         "-p",
         f"127.0.0.1:{port}:8080",
@@ -418,13 +440,14 @@ def ensure_proxy_running(
         print(f"Error starting proxy container: {run_res.stderr.strip()}", file=sys.stderr)
         sys.exit(run_res.returncode)
 
-    if not wait_ready(port):
+    ready = wait_ready(port, container_name=name) if container_name else wait_ready(port)
+    if not ready:
         print(f"Error: Proxy container did not become ready within {PROXY_READY_TIMEOUT_SECONDS}s.", file=sys.stderr)
-        logs_res = subprocess.run(["docker", "logs", CONTAINER_NAME], capture_output=True, text=True)
+        logs_res = subprocess.run(["docker", "logs", name], capture_output=True, text=True)
         combined_logs = f"{logs_res.stdout or ''}{logs_res.stderr or ''}".strip()
         if combined_logs:
             print(f"Container logs:\n{combined_logs}", file=sys.stderr)
-        stop_container()
+        stop_container(name) if container_name else stop_container()
         sys.exit(1)
 
     return not was_running
@@ -527,14 +550,15 @@ def handle_start(args: Any) -> None:
 
     ensure_image(args.image, rebuild=args.build)
 
-    subprocess.run(["docker", "rm", "-f", CONTAINER_NAME], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    target_container = getattr(args, "name", None) or get_container_name()
+    subprocess.run(["docker", "rm", "-f", target_container], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     docker_cmd = [
         "docker",
         "run",
         "--init",
         "--name",
-        CONTAINER_NAME,
+        target_container,
         *get_alias_args(),
         "-p",
         f"127.0.0.1:{actual_proxy_port}:8080",
@@ -610,7 +634,7 @@ def handle_start(args: Any) -> None:
         except KeyboardInterrupt:
             print("\nShutting down holon-coherence container...")
             subprocess.run(
-                ["docker", "stop", CONTAINER_NAME],
+                ["docker", "stop", target_container],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )

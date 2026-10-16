@@ -14,15 +14,24 @@ from typing import Any
 from holon_coherence.commands._dispatch import get_cli
 from holon_coherence.commands.web_token import get_active_web_token
 
-CONTAINER_NAME = "holon-coherence-proxy"
+DEFAULT_CONTAINER_NAME = "holon-coherence-proxy"
+CONTAINER_NAME = DEFAULT_CONTAINER_NAME
 DOCKER_BUILD_TIMEOUT_SECONDS = 600
 
 
-def is_container_running(container_name: str = CONTAINER_NAME) -> bool:
+def get_container_name(override: str | None = None) -> str:
+    """Return configured Docker container name respecting override or HOLON_CONTAINER_NAME."""
+    if override:
+        return override
+    return os.getenv("HOLON_CONTAINER_NAME", DEFAULT_CONTAINER_NAME)
+
+
+def is_container_running(container_name: str | None = None) -> bool:
     """Check if the Docker container is currently running."""
+    name = container_name or get_container_name()
     try:
         res = subprocess.run(
-            ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
+            ["docker", "inspect", "-f", "{{.State.Running}}", name],
             capture_output=True,
             text=True,
             timeout=5.0,
@@ -32,11 +41,12 @@ def is_container_running(container_name: str = CONTAINER_NAME) -> bool:
         return False
 
 
-def is_container_bound_to_port(port: int, container_name: str = CONTAINER_NAME) -> bool:
+def is_container_bound_to_port(port: int, container_name: str | None = None) -> bool:
     """Check if the container is currently running and bound to the specified host port."""
+    name = container_name or get_container_name()
     try:
         res = subprocess.run(
-            ["docker", "port", container_name, "8080/tcp"],
+            ["docker", "port", name, "8080/tcp"],
             capture_output=True,
             text=True,
             timeout=5.0,
@@ -47,7 +57,7 @@ def is_container_bound_to_port(port: int, container_name: str = CONTAINER_NAME) 
     if res.returncode != 0 or not output.strip():
         try:
             fallback_res = subprocess.run(
-                ["docker", "port", container_name],
+                ["docker", "port", name],
                 capture_output=True,
                 text=True,
                 timeout=5.0,
@@ -193,19 +203,21 @@ def ensure_docker_image(image: str, rebuild: bool = False) -> None:
                 sys.exit(1)
 
 
-def stop_proxy_container() -> None:
+def stop_proxy_container(container_name: str | None = None) -> None:
     """Stop and remove the holon-coherence background Docker container on demand."""
-    print("🛑 Stopping and removing holon-coherence Docker container...")
+    target_container = container_name or get_container_name()
+    display_name = "holon-coherence" if target_container == DEFAULT_CONTAINER_NAME else target_container
+    print(f"🛑 Stopping and removing {display_name} Docker container...")
     try:
         res = subprocess.run(
-            ["docker", "rm", "-f", CONTAINER_NAME],
+            ["docker", "rm", "-f", target_container],
             capture_output=True,
             text=True,
         )
         if res.returncode == 0:
-            print("✅ holon-coherence container stopped and removed.")
+            print(f"✅ {display_name} container stopped and removed.")
         elif "no such container" in (res.stderr or "").lower():
-            print("✅ No active holon-coherence container found.")
+            print(f"✅ No active {display_name} container found.")
         else:
             print(f"⚠️  Failed to remove container: {res.stderr.strip()}")
     except OSError as e:
@@ -227,17 +239,19 @@ def handle_build(args: Any) -> int:
 
 def handle_stop(args: Any = None) -> int:
     """Stop and remove running holon-coherence Docker container."""
+    target_container = getattr(args, "name", None) or get_container_name()
     cli = get_cli()
     stopper = getattr(cli, "stop_proxy_container", stop_proxy_container)
-    stopper()
+    stopper(target_container)
     return 0
 
 
-def get_container_mapped_port(container_name: str = CONTAINER_NAME, container_port: int = 8080) -> int | None:
+def get_container_mapped_port(container_name: str | None = None, container_port: int = 8080) -> int | None:
     """Return the host port mapped to the specified container TCP port."""
+    name = container_name or get_container_name()
     try:
         res = subprocess.run(
-            ["docker", "port", container_name, f"{container_port}/tcp"],
+            ["docker", "port", name, f"{container_port}/tcp"],
             capture_output=True,
             text=True,
             timeout=5.0,
@@ -254,27 +268,29 @@ def get_container_mapped_port(container_name: str = CONTAINER_NAME, container_po
 
 def handle_status(args: Any = None) -> int:
     """Check status of holon-coherence Docker container."""
+    target_container = getattr(args, "name", None) or get_container_name()
+    display_name = "holon-coherence" if target_container == DEFAULT_CONTAINER_NAME else target_container
     cli = get_cli()
     is_running = getattr(cli, "is_container_running", is_container_running)
     get_token = getattr(cli, "get_active_web_token", get_active_web_token)
     get_mapped_port = getattr(cli, "get_container_mapped_port", get_container_mapped_port)
     try:
-        res = subprocess.run(["docker", "ps", "-a", "--filter", f"name={CONTAINER_NAME}"])
+        res = subprocess.run(["docker", "ps", "-a", "--filter", f"name=^{target_container}$"])
         retcode = res.returncode
     except (subprocess.SubprocessError, OSError):
         retcode = 1
     token = get_token()
 
-    if not is_running():
-        print("\n🔴 holon-coherence is down (not running).")
+    if not is_running(target_container):
+        print(f"\n🔴 {display_name} is down (not running).")
         return retcode
 
-    web_port = get_mapped_port(CONTAINER_NAME, 8081)
+    web_port = get_mapped_port(target_container, 8081)
     if token and web_port:
         print(f"\n🔑 Web Dashboard Token: {token}")
         print(f"🌐 Access URL: http://127.0.0.1:{web_port}/?token={token}")
 
-    proxy_port = get_mapped_port(CONTAINER_NAME, 8080)
+    proxy_port = get_mapped_port(target_container, 8080)
     if proxy_port is None:
         proxy_port_str = os.getenv("HOLON_PROXY_PORT", "8080")
         try:
@@ -308,9 +324,10 @@ def handle_status(args: Any = None) -> int:
 
 def handle_logs(args: Any) -> int:
     """View logs of holon-coherence Docker container."""
+    target_container = getattr(args, "name", None) or get_container_name()
     cmd = ["docker", "logs"]
     if getattr(args, "follow", False):
         cmd.append("-f")
-    cmd.append(CONTAINER_NAME)
+    cmd.append(target_container)
     res = subprocess.run(cmd)
     return res.returncode

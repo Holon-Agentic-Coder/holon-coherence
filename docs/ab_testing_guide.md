@@ -47,33 +47,54 @@ Wire transaction logs are recorded under `~/.holon/wire_logs/` as individual tur
 
 ## 🚀 Running A/B Differential Evaluations
 
-Use the `holon-coherence ab-test` command to evaluate traces offline or validate proxy efficacy:
+Use the `holon-coherence ab-test` command across four flexible execution modes:
 
-### 1. Basic Evaluation
+### 1. Live Workload Interception (`--command` / `-c`)
 
-```bash
-holon-coherence ab-test -f ~/.holon/wire_logs/transactions.jsonl
-```
-
-### 2. Multi-Round Statistical Stability
-
-To simulate multi-session drift or stress test determinism across repeated turns:
+Execute an authentic agent command twice through the proxy. Pass 1 runs in passive monitoring mode (Variant A: baseline control) where all LLM requests are forwarded unmodified. Pass 2 runs in active optimization mode (Variant B: optimized treatment) with context deduplication and prompt caching. All network calls are intercepted in real time with genuine upstream provider TTFT and token usage:
 
 ```bash
-holon-coherence ab-test -f transactions.jsonl --rounds 5
+# Run real coding agent workload through proxy twice for authentic A/B evaluation
+holon-coherence ab-test -c "agy 'implement feature X in src/'" --fail-under-reduction 15.0
 ```
 
-### 3. Enforcing CI Reduction Thresholds
+### 2. Comparing Two Authentic Wire Log Sessions (`--baseline` & `--optimized`)
 
-Ensure that context cleaning achieves at least a minimum token reduction (e.g., 15%):
+Compare two directories or transaction files captured from real agent sessions:
+
+```bash
+# Evaluate baseline passive wire logs vs optimized wire logs
+holon-coherence ab-test \
+  --baseline ~/.holon/wire_logs/baseline/ \
+  --optimized ~/.holon/wire_logs/optimized/ \
+  --json > scorecard.json
+```
+
+### 3. Live Proxy Replay (`--trace-file` & `--live`)
+
+Replay authentic historical request traces as real HTTP traffic through the running proxy against upstream LLM endpoints:
+
+```bash
+holon-coherence ab-test -f transactions.jsonl --live --fail-under-reduction 20.0
+```
+
+### 4. Offline Trace Evaluation (`--trace-file` / `-f`)
+
+Evaluate recorded authentic traces offline through `JSONContextCleaner` to verify reduction mechanics without making network requests:
 
 ```bash
 holon-coherence ab-test -f transactions.jsonl --fail-under-reduction 15.0
 ```
 
-If the measured token reduction is less than 15.0%, the command exits with code `1`.
+### Multi-Round Statistical Stability
 
-### 4. Structured JSON Output for Automation
+To simulate multi-session drift or test determinism across repeated turns:
+
+```bash
+holon-coherence ab-test -f transactions.jsonl --rounds 5
+```
+
+### Structured JSON Output for Automation
 
 For machine consumption or ingestion into telemetry pipelines:
 

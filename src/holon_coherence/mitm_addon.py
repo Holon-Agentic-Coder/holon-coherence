@@ -64,7 +64,9 @@ __all__ = [
     "extract_sse_token_counts",
     "extract_token_counts",
     "find_nested_key",
+    "is_flow_passive",
     "is_local_target",
+    "is_passive_monitoring",
     "normalize_anthropic_request",
     "render_dashboard_html",
     "safe_int",
@@ -207,6 +209,26 @@ def is_passive_monitoring() -> bool:
     """Checks whether proxy operates in passive monitoring mode (logging only, no reduction/caching)."""
     flag = os.getenv("HOLON_PASSIVE_MONITORING", "0").lower().strip()
     return flag in ("1", "true", "yes", "on")
+
+
+def is_flow_passive(flow: Any, default_passive: bool | None = None) -> bool:
+    """Checks whether the flow should be handled in passive monitoring mode (baseline)."""
+    try:
+        if flow and hasattr(flow, "request") and hasattr(flow.request, "headers"):
+            headers = flow.request.headers
+            for key in ("x-holon-passive", "x-holon-mode", "X-Holon-Passive", "X-Holon-Mode"):
+                val = headers.get(key)
+                if val:
+                    val_clean = val.strip().lower()
+                    if val_clean in ("1", "true", "yes", "baseline", "passive"):
+                        return True
+                    if val_clean in ("0", "false", "no", "optimized", "active"):
+                        return False
+    except Exception:
+        pass
+    if default_passive is not None:
+        return default_passive
+    return is_passive_monitoring()
 
 
 _wire_log_executor: concurrent.futures.ThreadPoolExecutor | None = None
@@ -1658,6 +1680,7 @@ class MitmproxyAddon:
         self.total_requests = 0
         self.cache_hits = 0
         self.metrics = CumulativeMetrics()
+        self.default_passive: bool = is_passive_monitoring()
         self._gateway_ip: str | None = None
         self._warned_gateway = False
 
@@ -1835,6 +1858,11 @@ class MitmproxyAddon:
                 "raw_request": scrub_payload(raw_req),
                 "cleaned_request": scrub_payload(cleaned_req),
                 "delta": delta,
+                "mode": (
+                    "baseline"
+                    if is_flow_passive(flow, default_passive=getattr(self, "default_passive", None))
+                    else "optimized"
+                ),
                 "cache_action": "HIT" if is_hit else "MISS",
                 "response": {
                     "status": status_code,
@@ -1881,6 +1909,43 @@ class MitmproxyAddon:
                 {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"},
             )
             return
+
+        # Intercept mode control endpoint: POST /holon/api/mode or GET /holon/api/mode
+        if path_clean in ("/holon/api/mode", "/_holon/mode"):
+            if method == "POST":
+                try:
+                    mode_data = json.loads(flow.request.get_text() or "{}")
+                    new_mode = str(mode_data.get("mode", "")).lower().strip()
+                    if new_mode in ("baseline", "passive"):
+                        self.default_passive = True
+                    elif new_mode in ("optimized", "active"):
+                        self.default_passive = False
+                    if mode_data.get("wire_log_dir"):
+                        self.wire_log_dir = str(mode_data["wire_log_dir"])
+                    resp_bytes = json.dumps(
+                        {
+                            "status": "ok",
+                            "mode": "baseline" if getattr(self, "default_passive", False) else "optimized",
+                            "wire_log_dir": self.wire_log_dir,
+                        }
+                    ).encode("utf-8")
+                    flow.response = _make_http_response(flow, 200, resp_bytes, {"Content-Type": "application/json"})
+                    return
+                except Exception as exc:
+                    flow.response = _make_http_response(
+                        flow,
+                        400,
+                        json.dumps({"error": str(exc)}).encode("utf-8"),
+                        {"Content-Type": "application/json"},
+                    )
+                    return
+            elif method == "GET":
+                current_mode = (
+                    "baseline" if getattr(self, "default_passive", False) or is_passive_monitoring() else "optimized"
+                )
+                resp_bytes = json.dumps({"mode": current_mode, "wire_log_dir": self.wire_log_dir}).encode("utf-8")
+                flow.response = _make_http_response(flow, 200, resp_bytes, {"Content-Type": "application/json"})
+                return
 
         # Intercept web dashboard: GET /holon/ or /holon
         if method == "GET" and path_clean == "/holon":
@@ -1952,7 +2017,7 @@ class MitmproxyAddon:
             try:
                 if data is not None:
                     flow.raw_request_data = copy.deepcopy(data)
-                    if is_passive_monitoring():
+                    if is_flow_passive(flow, default_passive=getattr(self, "default_passive", None)):
                         # Passive mode: bypass cleaning and cache lookup, preserving raw payload for baseline logging
                         flow.cleaner_result = None
                         flow.req_data = data
@@ -2122,7 +2187,7 @@ class MitmproxyAddon:
                     # Note: Response caching is explicitly bypassed for SSE streams (is_sse is True)
                     # because streaming responses cannot be served statically from cache, but telemetry
                     # metrics (token counts, TTFT, TPS) are still calculated and logged.
-                    if not is_sse and not is_passive_monitoring():
+                    if not is_sse and not is_flow_passive(flow, default_passive=getattr(self, "default_passive", None)):
                         self.interceptor.intercept_response(url, req_data, resp_data, status_code=status_code)
 
                     # Extract token counts and cache read tokens in a single pass

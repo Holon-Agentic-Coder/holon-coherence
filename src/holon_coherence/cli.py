@@ -214,19 +214,39 @@ def main(argv: list[str] | None = None) -> None:
     )
     start_parser.add_argument("-d", "--detach", action="store_true", help="Run Docker container in background")
     start_parser.add_argument(
+        "--name",
+        default=None,
+        help="Container name (defaults to HOLON_CONTAINER_NAME or holon-coherence-proxy)",
+    )
+    start_parser.add_argument(
         "--image", default="holon-coherence:latest", help="Docker image tag (default: holon-coherence:latest)"
     )
     start_parser.add_argument("--build", action="store_true", help="Rebuild Docker image before starting")
 
     # Stop proxy container
-    subparsers.add_parser("stop", help="Stop and remove running holon-coherence Docker container")
+    stop_parser = subparsers.add_parser("stop", help="Stop and remove running holon-coherence Docker container")
+    stop_parser.add_argument(
+        "--name",
+        default=None,
+        help="Container name (defaults to HOLON_CONTAINER_NAME or holon-coherence-proxy)",
+    )
 
     # Status of proxy container
-    subparsers.add_parser("status", help="Check status of holon-coherence Docker container")
+    status_parser = subparsers.add_parser("status", help="Check status of holon-coherence Docker container")
+    status_parser.add_argument(
+        "--name",
+        default=None,
+        help="Container name (defaults to HOLON_CONTAINER_NAME or holon-coherence-proxy)",
+    )
 
     # Logs of proxy container
     logs_parser = subparsers.add_parser("logs", help="View logs of holon-coherence Docker container")
     logs_parser.add_argument("-f", "--follow", action="store_true", help="Follow log stream")
+    logs_parser.add_argument(
+        "--name",
+        default=None,
+        help="Container name (defaults to HOLON_CONTAINER_NAME or holon-coherence-proxy)",
+    )
 
     # Build image
     build_parser = subparsers.add_parser("build", help="Build the holon-coherence Docker image")
@@ -251,17 +271,42 @@ def main(argv: list[str] | None = None) -> None:
         help=f"Proxy listen port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)",
     )
     metrics_parser.add_argument("--json", action="store_true", help="Output metrics as raw JSON")
+    metrics_parser.add_argument(
+        "--offline", action="store_true", help="Display historical metrics from offline wire logs"
+    )
 
     # A/B testing suite
     ab_parser = subparsers.add_parser(
         "ab-test",
-        help="Run A/B benchmark comparing baseline vs optimized runs on trace transactions",
+        help="Run real-traffic A/B benchmark comparing baseline vs optimized runs",
+    )
+    ab_parser.add_argument(
+        "--command",
+        "-c",
+        dest="workload_cmd",
+        default=None,
+        help="Command/agent workload to execute twice through proxy with real LLM traffic",
     )
     ab_parser.add_argument(
         "--trace-file",
         "-f",
-        required=True,
+        default=None,
         help="Path to authentic trace transactions (.jsonl or .json) file",
+    )
+    ab_parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Replay trace requests as live HTTP traffic through proxy against real upstream LLM endpoints",
+    )
+    ab_parser.add_argument(
+        "--baseline",
+        default=None,
+        help="Path to authentic baseline wire log file or directory (Variant A)",
+    )
+    ab_parser.add_argument(
+        "--optimized",
+        default=None,
+        help="Path to authentic optimized wire log file or directory (Variant B)",
     )
     ab_parser.add_argument(
         "--rounds",

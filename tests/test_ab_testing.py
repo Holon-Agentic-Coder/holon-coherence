@@ -11,7 +11,9 @@ import pytest
 from holon_coherence.cli import main
 from holon_coherence.commands.ab_test import (
     evaluate_offline_ab_run,
+    evaluate_runs,
     load_trace_transactions,
+    load_transactions_from_path,
 )
 
 
@@ -410,3 +412,201 @@ class TestABTestCLI:
 
         # argparse catches non-float before handler
         assert exc_info.value.code != 0
+
+    def test_cli_no_args_shows_error(self, capsys: pytest.CaptureFixture) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            main(["ab-test"])
+
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "One of --command (-c), --trace-file (-f), or both --baseline and --optimized" in captured.err
+
+    def test_cli_baseline_and_optimized_dirs(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        base_dir = tmp_path / "baseline_wire"
+        opt_dir = tmp_path / "optimized_wire"
+        base_dir.mkdir()
+        opt_dir.mkdir()
+
+        base_tx = {
+            "turn_id": "turn-1",
+            "provider": "anthropic",
+            "mode": "baseline",
+            "raw_request": {"request": {"messages": [{"role": "user", "content": "test payload"}]}},
+            "response": {"status": 200, "usage": {"input_tokens": 1500}},
+            "timing": {"ttft_ms": 1100.0, "decode_tps": 40.0},
+        }
+        opt_tx = {
+            "turn_id": "turn-1",
+            "provider": "anthropic",
+            "mode": "optimized",
+            "raw_request": {"request": {"messages": [{"role": "user", "content": "test payload"}]}},
+            "cleaned_request": {"request": {"messages": [{"role": "user", "content": "test payload"}]}},
+            "delta": {"tool_outputs_omitted": 1, "cache_control_injected": 2},
+            "response": {"status": 200, "usage": {"input_tokens": 1000, "cache_read_input_tokens": 500}},
+            "timing": {"ttft_ms": 750.0, "decode_tps": 52.0},
+        }
+
+        with open(base_dir / "transactions.jsonl", "w", encoding="utf-8") as f:
+            f.write(json.dumps(base_tx) + "\n")
+        with open(opt_dir / "transactions.jsonl", "w", encoding="utf-8") as f:
+            f.write(json.dumps(opt_tx) + "\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            main(["ab-test", "--baseline", str(base_dir), "--optimized", str(opt_dir), "--json"])
+
+        assert exc_info.value.code == 0
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        summary = data["summary"]
+        assert summary["total_turns"] == 1
+        assert summary["tokens_reduced"] == 500
+        assert summary["baseline_ttft_ms"] == 1100.0
+        assert summary["optimized_ttft_ms"] == 750.0
+        assert summary["ttft_delta_ms"] == 350.0
+        assert summary["baseline_decode_tps"] == 40.0
+        assert summary["optimized_decode_tps"] == 52.0
+        assert summary["semantic_parity_verified"] is True
+
+    def test_cli_mixed_trace_file(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        trace_file = tmp_path / "mixed_trace.jsonl"
+        base_tx = {
+            "turn_id": "turn-1",
+            "provider": "anthropic",
+            "mode": "baseline",
+            "raw_request": {"messages": [{"role": "user", "content": "hello"}]},
+            "response": {"status": 200, "usage": {"input_tokens": 800}},
+            "timing": {"ttft_ms": 950.0},
+        }
+        opt_tx = {
+            "turn_id": "turn-1",
+            "provider": "anthropic",
+            "mode": "optimized",
+            "raw_request": {"messages": [{"role": "user", "content": "hello"}]},
+            "cleaned_request": {"messages": [{"role": "user", "content": "hello"}]},
+            "response": {"status": 200, "usage": {"input_tokens": 600}},
+            "timing": {"ttft_ms": 650.0},
+        }
+        with open(trace_file, "w", encoding="utf-8") as f:
+            f.write(json.dumps(base_tx) + "\n")
+            f.write(json.dumps(opt_tx) + "\n")
+
+        with pytest.raises(SystemExit) as exc_info:
+            main(["ab-test", "-f", str(trace_file)])
+
+        assert exc_info.value.code == 0
+        captured = capsys.readouterr()
+        assert "HOLON COHERENCE A/B BENCHMARK SCORECARD" in captured.out
+        assert "Source: Real Intercepted Traffic (Mixed Trace)" in captured.out
+        assert "Avg TTFT:                   Baseline: 950.0ms | Optimized: 650.0ms" in captured.out
+
+
+class TestPathAndDirectoryLoading:
+    """Tests for load_transactions_from_path supporting directories and files."""
+
+    def test_load_from_directory_with_transactions_jsonl(self, tmp_path: Path) -> None:
+        dir_path = tmp_path / "run_logs"
+        dir_path.mkdir()
+        jsonl = dir_path / "transactions.jsonl"
+        with open(jsonl, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"turn_id": "t1"}) + "\n")
+            f.write(json.dumps({"turn_id": "t2"}) + "\n")
+
+        txs = load_transactions_from_path(str(dir_path))
+        assert len(txs) == 2
+        assert txs[0]["turn_id"] == "t1"
+        assert txs[1]["turn_id"] == "t2"
+
+    def test_load_from_directory_with_turn_json_files(self, tmp_path: Path) -> None:
+        dir_path = tmp_path / "turn_logs"
+        dir_path.mkdir()
+        with open(dir_path / "turn_1.json", "w", encoding="utf-8") as f:
+            json.dump({"turn_id": "turn-1"}, f)
+        with open(dir_path / "turn_2.json", "w", encoding="utf-8") as f:
+            json.dump({"turn_id": "turn-2"}, f)
+
+        txs = load_transactions_from_path(str(dir_path))
+        assert len(txs) == 2
+
+    def test_load_from_empty_directory_raises(self, tmp_path: Path) -> None:
+        empty_dir = tmp_path / "empty_dir"
+        empty_dir.mkdir()
+        with pytest.raises(ValueError, match="No valid transaction records found in directory"):
+            load_transactions_from_path(str(empty_dir))
+
+    def test_load_from_missing_path_raises(self) -> None:
+        with pytest.raises(FileNotFoundError, match="Trace path not found"):
+            load_transactions_from_path("/nonexistent/path/dir")
+
+
+class TestRealTrafficRunsEvaluation:
+    """Tests for evaluate_runs comparing authentic baseline and optimized runs."""
+
+    def test_evaluate_runs_authentic_metrics(self) -> None:
+        base_txs = [
+            {
+                "turn_id": "turn-1",
+                "provider": "anthropic",
+                "mode": "baseline",
+                "raw_request": {"request": {"messages": [{"role": "user", "content": "hi"}]}},
+                "response": {"status": 200, "usage": {"input_tokens": 2000}},
+                "timing": {"ttft_ms": 1200.0, "decode_tps": 45.0},
+            }
+        ]
+        opt_txs = [
+            {
+                "turn_id": "turn-1",
+                "provider": "anthropic",
+                "mode": "optimized",
+                "raw_request": {"request": {"messages": [{"role": "user", "content": "hi"}]}},
+                "cleaned_request": {"request": {"messages": [{"role": "user", "content": "hi"}]}},
+                "delta": {"tool_outputs_omitted": 1, "cache_control_injected": 2},
+                "cache_action": "HIT",
+                "response": {"status": 200, "usage": {"input_tokens": 1500}},
+                "timing": {"ttft_ms": 900.0, "decode_tps": 55.0},
+            }
+        ]
+
+        scorecard = evaluate_runs(
+            baseline_transactions=base_txs,
+            optimized_transactions=opt_txs,
+            fail_under_reduction=15.0,
+        )
+
+        assert scorecard.total_turns == 1
+        assert scorecard.baseline_input_tokens == 2000
+        assert scorecard.optimized_input_tokens == 1500
+        assert scorecard.tokens_reduced == 500
+        assert scorecard.token_reduction_pct == 25.0
+        assert scorecard.baseline_ttft_ms == 1200.0
+        assert scorecard.optimized_ttft_ms == 900.0
+        assert scorecard.ttft_delta_ms == 300.0
+        assert scorecard.baseline_decode_tps == 45.0
+        assert scorecard.optimized_decode_tps == 55.0
+        assert scorecard.cache_hits == 1
+        assert scorecard.cache_hit_rate == 100.0
+        assert scorecard.semantic_parity_verified is True
+        assert scorecard.passed_threshold is True
+
+    def test_evaluate_runs_zero_turns_raises(self) -> None:
+        with pytest.raises(ValueError, match="Cannot evaluate A/B test with zero paired turns"):
+            evaluate_runs([], [])
+
+    def test_evaluate_runs_parity_failure_on_status_error(self) -> None:
+        base_txs = [
+            {
+                "turn_id": "turn-err",
+                "provider": "anthropic",
+                "raw_request": {"request": {"messages": [{"role": "user", "content": "hi"}]}},
+                "response": {"status": 500, "usage": {"input_tokens": 100}},
+            }
+        ]
+        opt_txs = [
+            {
+                "turn_id": "turn-err",
+                "provider": "anthropic",
+                "raw_request": {"request": {"messages": [{"role": "user", "content": "hi"}]}},
+                "response": {"status": 200, "usage": {"input_tokens": 80}},
+            }
+        ]
+        scorecard = evaluate_runs(base_txs, opt_txs)
+        assert scorecard.semantic_parity_verified is False
