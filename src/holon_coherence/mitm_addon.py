@@ -1804,7 +1804,7 @@ class MitmproxyAddon:
             # IDs and Role
             flow_id = getattr(flow, "id", None) or f"flow_{uuid.uuid4().hex[:8]}"
             agent_id = get_header_case_insensitive(flow_headers, "x-holon-agent-id") or os.getenv(
-                "HOLON_AGENT_ID", "antigravity"
+                "HOLON_AGENT_ID", "agy"
             )
             agent_role = get_header_case_insensitive(flow_headers, "x-holon-agent-role") or os.getenv(
                 "HOLON_ROLE", "executor"

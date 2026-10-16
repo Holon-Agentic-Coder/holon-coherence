@@ -270,10 +270,17 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help=f"Proxy listen port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)",
     )
-    metrics_parser.add_argument("--json", action="store_true", help="Output metrics as raw JSON")
     metrics_parser.add_argument(
-        "--offline", action="store_true", help="Display historical metrics from offline wire logs"
+        "--name",
+        default=None,
+        help="Container name (defaults to HOLON_CONTAINER_NAME or holon-coherence-proxy)",
     )
+    metrics_parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Display offline telemetry metrics if live proxy is unreachable",
+    )
+    metrics_parser.add_argument("--json", action="store_true", help="Output metrics as raw JSON")
 
     # A/B testing suite
     ab_parser = subparsers.add_parser(

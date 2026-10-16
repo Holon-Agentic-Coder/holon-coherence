@@ -20,11 +20,10 @@ from holon_coherence.commands.start import (
 )
 from holon_coherence.host_local import GATEWAY_HOSTNAME
 
-SUPPORTED_AGENTS = ("agy", "antigravity", "claude", "codex", "opencode", "pi")
+SUPPORTED_AGENTS = ("agy", "claude", "codex", "opencode", "pi")
 
 AGENT_BINARY_MAP: dict[str, list[str]] = {
     "agy": ["agy", "antigravity"],
-    "antigravity": ["agy", "antigravity"],
     "claude": ["claude"],
     "codex": ["codex", "chatgpt"],
     "opencode": ["opencode"],
@@ -162,7 +161,7 @@ def build_agent_env(
             env.pop(var, None)
 
     holon_key = env.get("HOLON_AGENT_KEY")
-    normalized_agent = "agy" if agent_name == "antigravity" else agent_name
+    normalized_agent = agent_name
 
     effective_local_base = local_llm_base or os.getenv("HOLON_LOCAL_LLM_BASE")
     if effective_local_base:

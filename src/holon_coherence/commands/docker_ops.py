@@ -206,7 +206,8 @@ def ensure_docker_image(image: str, rebuild: bool = False) -> None:
 def stop_proxy_container(container_name: str | None = None) -> None:
     """Stop and remove the holon-coherence background Docker container on demand."""
     target_container = container_name or get_container_name()
-    display_name = "holon-coherence" if target_container == DEFAULT_CONTAINER_NAME else target_container
+    is_default = target_container in (DEFAULT_CONTAINER_NAME, "holon-coherence")
+    display_name = "holon-coherence" if is_default else target_container
     print(f"🛑 Stopping and removing {display_name} Docker container...")
     try:
         res = subprocess.run(
@@ -269,7 +270,8 @@ def get_container_mapped_port(container_name: str | None = None, container_port:
 def handle_status(args: Any = None) -> int:
     """Check status of holon-coherence Docker container."""
     target_container = getattr(args, "name", None) or get_container_name()
-    display_name = "holon-coherence" if target_container == DEFAULT_CONTAINER_NAME else target_container
+    is_default = target_container in (DEFAULT_CONTAINER_NAME, "holon-coherence")
+    display_name = "holon-coherence" if is_default else target_container
     cli = get_cli()
     is_running = getattr(cli, "is_container_running", is_container_running)
     get_token = getattr(cli, "get_active_web_token", get_active_web_token)

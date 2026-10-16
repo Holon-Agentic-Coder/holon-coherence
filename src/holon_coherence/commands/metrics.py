@@ -250,7 +250,7 @@ def handle_metrics(
             except ValueError:
                 target_port = DEFAULT_PROXY_PORT
         else:
-            container = get_container_name()
+            container = getattr(args, "name", None) or get_container_name()
             mapped = get_container_mapped_port(container, DEFAULT_PROXY_PORT)
             target_port = mapped if mapped is not None else DEFAULT_PROXY_PORT
 

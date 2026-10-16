@@ -164,12 +164,6 @@ class TestCredentialMappingAndNativeAuth:
         assert env["GEMINI_API_KEY"] == "secret-test-key-123"
         assert env["AGY_USER_TOKEN"] == "secret-test-key-123"
 
-    def test_credential_mapping_antigravity_alias(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("HOLON_AGENT_KEY", "secret-test-key-123")
-        env = build_agent_env("antigravity", port=8080)
-        assert env["GEMINI_API_KEY"] == "secret-test-key-123"
-        assert env["AGY_USER_TOKEN"] == "secret-test-key-123"
-
     def test_credential_mapping_claude(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HOLON_AGENT_KEY", "secret-test-key-123")
         env = build_agent_env("claude", port=8080)
@@ -198,7 +192,7 @@ class TestCredentialMappingAndNativeAuth:
             env = build_agent_env(agent, port=8080)
             assert "HOLON_AGENT_KEY" not in env
             assert env.get("EXISTING_HOST_SESSION") == "present"
-            if agent in ("agy", "antigravity"):
+            if agent == "agy":
                 assert "GEMINI_API_KEY" not in env or env["GEMINI_API_KEY"] != "secret-test-key-123"
             elif agent == "claude":
                 assert "ANTHROPIC_API_KEY" not in env or env["ANTHROPIC_API_KEY"] != "secret-test-key-123"
@@ -1114,7 +1108,23 @@ class TestCLIDispatchAndMain:
     def test_stop_subcommand_dispatch(self) -> None:
         with patch("holon_coherence.cli.stop_proxy_container") as mock_stop:
             main(["stop"])
-            mock_stop.assert_called_once()
+            mock_stop.assert_called_once_with("holon-coherence-proxy")
+
+        with patch("holon_coherence.cli.stop_proxy_container") as mock_stop:
+            main(["stop", "--name", "sandbox-custom"])
+            mock_stop.assert_called_once_with("sandbox-custom")
+
+    def test_status_and_logs_subcommand_dispatch_with_name(self) -> None:
+        with patch("holon_coherence.cli.handle_status") as mock_status:
+            main(["status", "--name", "sandbox-custom"])
+            assert mock_status.call_count == 1
+            assert mock_status.call_args[0][0].name == "sandbox-custom"
+
+        with patch("holon_coherence.cli.handle_logs") as mock_logs:
+            main(["logs", "--name", "sandbox-custom", "-f"])
+            assert mock_logs.call_count == 1
+            assert mock_logs.call_args[0][0].name == "sandbox-custom"
+            assert mock_logs.call_args[0][0].follow is True
 
     def test_port_configuration_from_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HOLON_PROXY_PORT", "9999")
@@ -2624,12 +2634,14 @@ class TestCLIMetricsCommand:
             patch("holon_coherence.cli.handle_metrics", return_value=0) as mock_handle,
             pytest.raises(SystemExit) as exc,
         ):
-            main(["metrics", "--json", "--port", "9999"])
+            main(["metrics", "--json", "--port", "9999", "--offline", "--name", "custom-proxy"])
         assert exc.value.code == 0
         assert mock_handle.call_count == 1
         args = mock_handle.call_args[0][0]
         assert args.json is True
         assert args.port == 9999
+        assert args.offline is True
+        assert args.name == "custom-proxy"
 
 
 class TestLocalLlmRunnerFlagsAndEnvs:
