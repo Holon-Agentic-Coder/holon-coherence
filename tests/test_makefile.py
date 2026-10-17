@@ -1114,3 +1114,72 @@ def test_check_prerequisites_uv_probe_inspects_the_requested_env_not_the_active_
     assert "uv inside conda env active" not in result.stdout, result.stdout
     assert "other" in result.stdout
     assert result.returncode != 0, "uv is not installed in 'other', so the probe must fail"
+
+
+def test_build_images_alias_resolves_to_build_image():
+    """make -n build-images must expand to the same recipe as build-image."""
+    result = subprocess.run(
+        ["make", "-n", "build-images"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=ENV_NO_COLOR,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "build_image.sh" in result.stdout
+
+
+def test_tools_target(tmp_path):
+    """make tools inspects the toolbelt dependencies and exits cleanly with stub tools."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    stub_content = "#!/bin/sh\nprintf '%s version 1.0.0\\n' \"$0\"\nexit 0\n"
+    for tool in ("git", "jq", "shellcheck", "uv", "gh", "npx", "openssl"):
+        tool_file = bin_dir / tool
+        tool_file.write_text(stub_content)
+        tool_file.chmod(0o755)
+
+    env = {
+        **ENV_NO_COLOR,
+        "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+    }
+    result = subprocess.run(
+        ["make", "tools"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "OS Toolbelt Inspection:" in result.stdout
+    assert "All toolbelt tools are present." in result.stdout
+
+
+def test_lint_targets_in_help():
+    """make help lists the newly aligned targets."""
+    result = subprocess.run(
+        ["make", "help"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=ENV_NO_COLOR,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    for target in ("build-images", "tools", "lint", "lint-json", "lint-yaml", "lint-shell", "lint-md"):
+        assert target in result.stdout, f"Target '{target}' missing from help output"
+
+
+def test_lint_dry_run():
+    """make -n lint exits 0 under dry-run."""
+    result = subprocess.run(
+        ["make", "-n", "lint"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=ENV_NO_COLOR,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
