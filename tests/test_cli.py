@@ -2472,11 +2472,10 @@ class TestCLIMetricsCommand:
         assert ret == 0
         out = capsys.readouterr().out
         assert "HOLON COHERENCE OPTIMIZATION METRICS" in out
-        assert "Tool Calls Saved / Pruned:  12" in out
-        assert "Tokens Reduced:              350" in out
-        assert "Cache Hit Rate:              40.0%" in out
-        assert "Average TTFT:" in out
-        assert "120.50 ms" in out
+        assert "Tool Calls Saved / Pruned    : 12" in out
+        assert "Tokens Reduced               : 350" in out
+        assert "Cache Hit Rate               : 40.0%" in out
+        assert "Average TTFT                 : 120.50 ms" in out
         assert "http://127.0.0.1:8080/holon/" in out
 
     def test_handle_metrics_live_json(self, capsys: pytest.CaptureFixture[str]) -> None:
@@ -2620,14 +2619,14 @@ class TestCLIMetricsCommand:
             ret = handle_metrics(port=8080)
         assert ret == 0
         out = capsys.readouterr().out
-        assert "Prefill Throughput:         650.00 tokens/sec" in out
+        assert "Prefill Throughput           : 650.00 tokens/sec" in out
         assert "Latest: 700.00 t/s" in out
-        assert "Tail Prefill Throughput:    200.00 tokens/sec" in out
-        assert "Decode Throughput:          60.00 tokens/sec" in out
-        assert "Cache Hit Rate:              40.0%" in out
+        assert "Tail Prefill Throughput      : 200.00 tokens/sec" in out
+        assert "Decode Throughput            : 60.00 tokens/sec" in out
+        assert "Cache Hit Rate               : 40.0%" in out
         assert "75.0% KV hit" in out
-        assert "Cache Write Tokens:         250" in out
-        assert "Reasoning Tokens:          40" in out
+        assert "Cache Write Tokens           : 250" in out
+        assert "Reasoning Tokens             : 40" in out
 
     def test_metrics_cli_dispatch(self) -> None:
         with (
