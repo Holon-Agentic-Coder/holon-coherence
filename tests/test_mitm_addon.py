@@ -267,7 +267,7 @@ class TestMetricsAndDashboardEndpoints:
         assert "Tool Calls Pruned" in html
         assert "Tokens Reduced" in html
         assert "Cache Hit Rate" in html
-        assert "Latency & Speed" in html
+        assert "Latency & Throughput" in html
         assert "/holon/api/metrics" in html
 
     def test_render_dashboard_html_structure(self) -> None:

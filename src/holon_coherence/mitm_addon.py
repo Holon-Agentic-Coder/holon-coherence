@@ -208,7 +208,10 @@ def is_wire_logging_enabled() -> bool:
 def is_passive_monitoring() -> bool:
     """Checks whether proxy operates in passive monitoring mode (logging only, no reduction/caching)."""
     flag = os.getenv("HOLON_PASSIVE_MONITORING", "0").lower().strip()
-    return flag in ("1", "true", "yes", "on")
+    if flag in ("1", "true", "yes", "on"):
+        return True
+    tr_flag = os.getenv("COHERENCE_TOKEN_REDUCTION", "1").lower().strip()
+    return tr_flag in ("0", "false", "no", "off")
 
 
 def is_flow_passive(flow: Any, default_passive: bool | None = None) -> bool:
@@ -613,8 +616,13 @@ class CumulativeMetrics:
                 "decode_samples": count_decode_samples,
                 "avg_prefill_throughput_tps": round(avg_prefill, 2),
                 "latest_prefill_tps": round(self.latest_prefill_tps, 2),
+                "latest_prefill_throughput_tps": round(self.latest_prefill_tps, 2),
                 "avg_tail_prefill_tps": round(avg_tail_prefill, 2),
+                "avg_tail_prefill_throughput_tps": round(avg_tail_prefill, 2),
                 "latest_tail_prefill_tps": round(self.latest_tail_prefill_tps, 2),
+                "latest_tail_prefill_throughput_tps": round(self.latest_tail_prefill_tps, 2),
+                "avg_prompt_prefill_speed_tps": round(avg_prefill, 2),
+                "avg_tail_prefill_speed_tps": round(avg_tail_prefill, 2),
                 "latest_ttft_ms": round(self.latest_ttft_ms, 2),
                 "latest_total_time_ms": round(self.latest_total_time_ms, 2),
                 "total_input_tokens": self.total_input_tokens,
@@ -1321,7 +1329,7 @@ def render_dashboard_html() -> str:
         <div class="card-desc"><span id="cache-hits">0</span> hits / <span id="total-requests">0</span> requests</div>
       </div>
       <div class="card">
-        <div class="card-title">⏱️ Latency & Speed</div>
+        <div class="card-title">⏱️ Latency & Throughput</div>
         <div id="avg-ttft" class="card-val amber">0.0 ms</div>
         <div class="card-desc">
           Prefill: <span id="prefill-tps">0.0</span> t/s (latest: <span id="latest-prefill-tps">0.0</span>) |
@@ -1342,11 +1350,11 @@ def render_dashboard_html() -> str:
           <span id="cache-misses" class="detail-value">0</span>
         </div>
         <div class="detail-item">
-          <span class="detail-label">Prompt Prefill Speed (Avg)</span>
+          <span class="detail-label">Prefill Throughput (Avg)</span>
           <span id="avg-prefill-val" class="detail-value">0.0 tok/s</span>
         </div>
         <div class="detail-item">
-          <span class="detail-label">Tail Prefill Speed</span>
+          <span class="detail-label">Tail Prefill Throughput</span>
           <span id="tail-prefill-val" class="detail-value">0.0 tok/s</span>
         </div>
         <div class="detail-item">

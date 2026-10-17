@@ -175,7 +175,7 @@ class ABComparisonScorecard:
         if self.baseline_decode_tps is not None and self.optimized_decode_tps is not None:
             base_tps = f"{self.baseline_decode_tps:.1f} t/s"
             opt_tps = f"{self.optimized_decode_tps:.1f} t/s"
-            lines.append(f"  🚀 Decode Speed:                Baseline: {base_tps} | Optimized: {opt_tps}")
+            lines.append(f"  🚀 Decode Throughput:           Baseline: {base_tps} | Optimized: {opt_tps}")
 
         if self.semantic_parity_verified:
             parity_str = "✅ PASSED (100% Structural Equivalence)"

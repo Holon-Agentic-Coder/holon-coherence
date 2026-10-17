@@ -99,6 +99,15 @@ def is_in_container() -> bool:
     return os.path.exists("/.dockerenv") or os.environ.get("HOLON_IN_CONTAINER") == "1"
 
 
+def is_start_passive(passive_flag: bool = False) -> bool:
+    """Return True if proxy should run in passive monitoring mode (baseline)."""
+    if passive_flag:
+        return True
+    if os.getenv("HOLON_PASSIVE_MONITORING", "0").lower().strip() in ("1", "true", "yes", "on"):
+        return True
+    return os.getenv("COHERENCE_TOKEN_REDUCTION", "1").lower().strip() in ("0", "false", "no", "off")
+
+
 def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
     """Check if the specified TCP port is currently open and accepting connections or cannot be bound."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -427,6 +436,10 @@ def ensure_proxy_running(
         "WIRE_LOG_DIR=/tmp/wire_logs",
         "-e",
         f"HOLON_PROXY_PORT={port}",
+        "-e",
+        f"COHERENCE_TOKEN_REDUCTION={'0' if is_start_passive() else '1'}",
+        "-e",
+        f"HOLON_PASSIVE_MONITORING={'1' if is_start_passive() else '0'}",
         *get_host_local_args(host_local_spec),
         image,
         "start",
@@ -574,6 +587,10 @@ def handle_start(args: Any) -> None:
         "WIRE_LOG_DIR=/tmp/wire_logs",
         "-e",
         f"HOLON_PROXY_PORT={actual_proxy_port}",
+        "-e",
+        f"COHERENCE_TOKEN_REDUCTION={'0' if is_start_passive(getattr(args, 'passive', False)) else '1'}",
+        "-e",
+        f"HOLON_PASSIVE_MONITORING={'1' if is_start_passive(getattr(args, 'passive', False)) else '0'}",
         *get_host_local_args(start_host_local_spec),
     ]
 

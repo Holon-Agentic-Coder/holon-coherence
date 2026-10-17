@@ -358,9 +358,9 @@ def handle_metrics(
     print(f"  ⚡ Tokens Reduced:              {tokens_reduced:,} (Chars Saved: {chars_saved:,})")
     print(f"  🎯 Cache Hit Rate:              {hit_rate_pct:.1f}% ({cache_hits:,} hits / {total_requests:,} total)")
     print(f"  ⏱️  Average TTFT:               {avg_ttft:.2f} ms")
-    print(f"  🚀 Prompt (Prefill) Speed:     {avg_prefill_tps:.2f} tokens/sec (Latest: {latest_prefill_tps:.2f} t/s)")
+    print(f"  🚀 Prefill Throughput:         {avg_prefill_tps:.2f} tokens/sec (Latest: {latest_prefill_tps:.2f} t/s)")
     if avg_tail_prefill_tps > 0:
-        print(f"  ⚡ Tail Prefill Speed:        {avg_tail_prefill_tps:.2f} tokens/sec")
+        print(f"  ⚡ Tail Prefill Throughput:    {avg_tail_prefill_tps:.2f} tokens/sec")
     decode_suffix = f" (latest: {latest_decode_tps:.2f} t/s)" if latest_decode_tps else ""
     if not decode_samples and avg_decode_tps == 0:
         decode_suffix += "  [no streaming samples yet]"

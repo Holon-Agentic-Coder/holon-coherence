@@ -354,7 +354,7 @@ Open `http://127.0.0.1:8080/holon/` in your browser (substituting your configure
 dashboard:
 
 - **Optimization Cards**: Real-time counters for tool calls pruned/saved, tokens reduced, cache hit rate, average TTFT
-  latency, and token decoding throughput.
+  latency, prefill throughput, and decode throughput.
 - **Token Usage Breakdown**: Input tokens, model output tokens, cache read tokens, and characters saved.
 - **Live Updating**: Polls the proxy's lightweight JSON endpoint (`/holon/api/metrics`) every 3 seconds.
 
