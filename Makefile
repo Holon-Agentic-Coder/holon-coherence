@@ -187,7 +187,10 @@ COLOR_YELLOW := \033[1;33m
 COLOR_RESET := \033[0m
 endif
 
-.PHONY: check-prerequisites prerequisites check-docker install-docker install-homebrew install-miniforge create-conda-env activate-conda-env build-image help
+TARGET_DIR ?= .
+LINT_TARGET ?= $(TARGET_DIR)
+
+.PHONY: check-prerequisites prerequisites check-docker install-docker install-homebrew install-miniforge create-conda-env activate-conda-env build-image build-images tools lint lint-json lint-yaml lint-shell lint-md help
 
 ## ==============================================================================
 ## Docker & Prerequisite Installation & Checks
@@ -652,6 +655,95 @@ build-image: check-docker
 	@echo "$(COLOR_BOLD)Building holon-coherence Docker image...$(COLOR_RESET)"
 	@./build_image.sh $(BUILD_IMAGE_ARGS)
 
+# Alias for build-image
+build-images: build-image
+
+## ==============================================================================
+## OS Toolbelt & Linting Targets
+## ==============================================================================
+
+# Inspect baked-in OS toolbelt paths and versions
+tools:
+	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
+	ERRORS=0; \
+	echo "$(COLOR_BOLD)OS Toolbelt Inspection:$(COLOR_RESET)"; \
+	for tool in git jq shellcheck uv gh npx openssl; do \
+		tool_path=$$(command -v "$$tool" 2>/dev/null || true); \
+		if [ -n "$$tool_path" ]; then \
+			case "$$tool" in \
+				git) tool_ver=$$("$$tool_path" --version 2>/dev/null | head -n 1 || true) ;; \
+				jq) tool_ver=$$("$$tool_path" --version 2>/dev/null | head -n 1 || true) ;; \
+				shellcheck) tool_ver=$$("$$tool_path" --version 2>/dev/null | grep -E 'version:' | head -n 1 || true); \
+					if [ -z "$$tool_ver" ]; then tool_ver=$$("$$tool_path" -V 2>/dev/null | head -n 2 | tail -n 1 || true); fi; \
+					if [ -z "$$tool_ver" ]; then tool_ver=$$("$$tool_path" --version 2>/dev/null | head -n 1 || true); fi ;; \
+				uv) tool_ver=$$("$$tool_path" --version 2>/dev/null | head -n 1 || true) ;; \
+				gh) tool_ver=$$("$$tool_path" --version 2>/dev/null | grep -E 'gh version' | head -n 1 || true); \
+					if [ -z "$$tool_ver" ]; then tool_ver=$$("$$tool_path" --version 2>/dev/null | head -n 1 || true); fi ;; \
+				npx) tool_ver=$$("$$tool_path" --version 2>/dev/null | head -n 1 || true) ;; \
+				openssl) tool_ver=$$("$$tool_path" version 2>/dev/null | head -n 1 || true) ;; \
+				*) tool_ver=$$("$$tool_path" --version 2>/dev/null | head -n 1 || true) ;; \
+			esac; \
+			if [ -z "$$(printf '%s' "$$tool_ver" | tr -d '[:space:]')" ]; then tool_ver="unknown version"; fi; \
+			printf "  %-12s %-35s %s\n" "$$tool" "$$tool_path" "$$tool_ver"; \
+		else \
+			printf "  %-12s %-35s %b\n" "$$tool" "NOT FOUND" "$(COLOR_RED)missing$(COLOR_RESET)"; \
+			ERRORS=$$((ERRORS + 1)); \
+		fi; \
+	done; \
+	if [ $$ERRORS -gt 0 ]; then \
+		echo "$(COLOR_RED)❌ $$ERRORS required toolbelt tool(s) missing from PATH.$(COLOR_RESET)"; \
+		exit 1; \
+	else \
+		echo "$(COLOR_GREEN)✅ All toolbelt tools are present.$(COLOR_RESET)"; \
+	fi
+
+# Validate all JSON and JSONL files using jq
+lint-json:
+	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
+	echo "$(COLOR_BOLD)Validating JSON and JSONL files with jq...$(COLOR_RESET)"; \
+	FILES=$$(find $(LINT_TARGET) -type d \( -name ".git" -o -name ".venv" \) -prune -o -type f \( -name "*.json" -o -name "*.jsonl" \) -print); \
+	for file in $$FILES; do \
+		jq -e . "$$file" >/dev/null || { echo "$(COLOR_RED)❌ JSON/JSONL validation failed for $$file$(COLOR_RESET)"; exit 1; }; \
+	done; \
+	echo "$(COLOR_GREEN)✅ All JSON and JSONL files are valid.$(COLOR_RESET)"
+
+# Validate all YAML files using Prettier
+lint-yaml:
+	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
+	echo "$(COLOR_BOLD)Validating YAML files with Prettier...$(COLOR_RESET)"; \
+	FILES=$$(find $(LINT_TARGET) -type d \( -name ".git" -o -name ".venv" \) -prune -o -type f \( -name "*.yml" -o -name "*.yaml" \) -print); \
+	if [ -n "$$FILES" ]; then \
+		echo "$$FILES" | xargs npx prettier --no-config --check >/dev/null || { echo "$(COLOR_RED)❌ YAML validation failed$(COLOR_RESET)"; exit 1; }; \
+	fi; \
+	echo "$(COLOR_GREEN)✅ All YAML files are valid.$(COLOR_RESET)"
+
+# Validate all shell scripts using shellcheck
+lint-shell:
+	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
+	echo "$(COLOR_BOLD)Validating shell scripts with shellcheck...$(COLOR_RESET)"; \
+	FILES=$$(find $(LINT_TARGET) -type d \( -name ".git" -o -name ".venv" \) -prune -o -type f -name "*.sh" -print); \
+	for file in $$FILES; do \
+		shellcheck "$$file" || { echo "$(COLOR_RED)❌ ShellCheck validation failed for $$file$(COLOR_RESET)"; exit 1; }; \
+	done; \
+	echo "$(COLOR_GREEN)✅ All shell scripts passed shellcheck.$(COLOR_RESET)"
+
+# Check markdown formatting with Prettier
+lint-md:
+	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
+	echo "$(COLOR_BOLD)Checking markdown formatting with Prettier...$(COLOR_RESET)"; \
+	if [ "$(LINT_TARGET)" = "." ]; then \
+		npx prettier --no-config --check "**/*.md" || { echo "$(COLOR_RED)❌ Markdown formatting check failed$(COLOR_RESET)"; exit 1; }; \
+	else \
+		npx prettier --no-config --check "$(LINT_TARGET)" || { echo "$(COLOR_RED)❌ Markdown formatting check failed$(COLOR_RESET)"; exit 1; }; \
+	fi; \
+	echo "$(COLOR_GREEN)✅ Markdown formatting check passed.$(COLOR_RESET)"
+
+# Composite linter running JSON, YAML, Shell, Markdown, and Python linters
+lint: lint-json lint-yaml lint-shell lint-md
+	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
+	echo "$(COLOR_BOLD)Running Python linting...$(COLOR_RESET)"; \
+	uv run task lint || { echo "$(COLOR_RED)❌ Python linting failed$(COLOR_RESET)"; exit 1; }; \
+	echo "$(COLOR_GREEN)✅ All lint checks passed successfully!$(COLOR_RESET)"
 
 ## ==============================================================================
 ## Help Target
@@ -672,6 +764,13 @@ help:
 	@printf $(HELP_FORMAT) "create-conda-env" "Create or update Conda environment (CONDA_WRITE_ENV, default 'holon'; 'base' only on deliberate consent; CONDA_PRUNE=1 to prune)."
 	@printf $(HELP_FORMAT) "activate-conda-env" "Show command to activate the Conda environment."
 	@printf $(HELP_FORMAT) "build-image" "Build the holon-coherence Docker container via build_image.sh."
+	@printf $(HELP_FORMAT) "build-images" "Alias for build-image."
+	@printf $(HELP_FORMAT) "tools" "Inspect baked-in OS toolbelt paths and versions."
+	@printf $(HELP_FORMAT) "lint" "Run all repository linters (JSON, YAML, Shell, Markdown, Python)."
+	@printf $(HELP_FORMAT) "lint-json" "Validate all JSON and JSONL files with jq."
+	@printf $(HELP_FORMAT) "lint-yaml" "Validate all YAML files with Prettier."
+	@printf $(HELP_FORMAT) "lint-shell" "Validate shell scripts with shellcheck."
+	@printf $(HELP_FORMAT) "lint-md" "Check markdown formatting with Prettier."
 	@printf $(HELP_FORMAT) "help" "Show this help message."
 	@echo ""
 	@echo "$(COLOR_BOLD)Variables:$(COLOR_RESET)"
