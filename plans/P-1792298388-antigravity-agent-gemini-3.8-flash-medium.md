@@ -9,9 +9,11 @@
 
 - **Intent handling:** `ACCEPT_AS_IS`
 - **Reframed intent (if applicable):** NONE
-- **Exploration stance:** `conservative` — Well-specified Makefile alignment, pre-commit security hook, Australian English orthography, and audit report update.
+- **Exploration stance:** `conservative` — Well-specified Makefile alignment, pre-commit security hook, Australian
+  English orthography, and audit report update.
 - **Safety priority level:** `elevated`
-- **Priority Justification:** Enforces credential leak prevention (Bean 0110) and build/lint hygiene parity (Bean 0116) without breaking existing CLI or proxy runtime contracts.
+- **Priority Justification:** Enforces credential leak prevention (Bean 0110) and build/lint hygiene parity (Bean 0116)
+  without breaking existing CLI or proxy runtime contracts.
 
 ## Exploration
 
@@ -31,12 +33,13 @@
 
 ### Strategy Rationale
 
-Derived using `EV = P(success) * Impact + mu * LearningValue - lambda * Delta_S_intent - Cost` with `lambda = 0.3` and `mu = 0.5`:
-`EV = 0.96 * 88.0 + 0.5 * 2.0 - 0.3 * 1.2 - 2.5 = 84.48 + 1.00 - 0.36 - 2.50 = 82.62`.
+Derived using `EV = P(success) * Impact + mu * LearningValue - lambda * Delta_S_intent - Cost` with `lambda = 0.3` and
+`mu = 0.5`: `EV = 0.96 * 88.0 + 0.5 * 2.0 - 0.3 * 1.2 - 2.5 = 84.48 + 1.00 - 0.36 - 2.50 = 82.62`.
 
 ## Safety & Constraint Alignment
 
-- **Key world ruleset constraints that affect this plan:** `holon-config/world/ruleset.md` and `holon-config/world/constraints.md`.
+- **Key world ruleset constraints that affect this plan:** `holon-config/world/ruleset.md` and
+  `holon-config/world/constraints.md`.
 - **Potential violations or edge cases:** Prettier reformatting unrelated files or missing tool binaries on CI runners.
 - **Mitigations built into the plan:** Use `--no-config` in Makefile Prettier checks and PATH stubs in unit tests.
 - **Residual risk accepted (and why):** Low risk; all changes are verified by pytest and Ruff.
@@ -46,10 +49,13 @@ Derived using `EV = P(success) * Impact + mu * LearningValue - lambda * Delta_S_
 
 ## Plan Description & Strategy
 
-1. Align `Makefile` targets (`build-images` alias, `tools`, `lint`, `lint-json`, `lint-yaml`, `lint-shell`, `lint-md`, `pre-commit-check`) and format `.github/**/*.yml` (Bean 0116).
-2. Implement `scripts/pre_commit_check.py` and `tests/test_pre_commit_check.py` to detect leaked credentials and disallowed scratch paths (Bean 0110).
+1. Align `Makefile` targets (`build-images` alias, `tools`, `lint`, `lint-json`, `lint-yaml`, `lint-shell`, `lint-md`,
+   `pre-commit-check`) and format `.github/**/*.yml` (Bean 0116).
+2. Implement `scripts/pre_commit_check.py` and `tests/test_pre_commit_check.py` to detect leaked credentials and
+   disallowed scratch paths (Bean 0110).
 3. Add `tests/test_makefile.py` testing `Makefile` targets and toolbelt inspection (Bean 0116).
-4. Align documentation to Australian English (`en-AU`), update `holon-config/prompts/planner.template.md` to write plan files directly, and update `docs/audit_report.md` (Beans 0105, 0106).
+4. Align documentation to Australian English (`en-AU`), update `holon-config/prompts/planner.template.md` to write plan
+   files directly, and update `docs/audit_report.md` (Beans 0105, 0106).
 
 ---
 
@@ -62,8 +68,10 @@ Derived using `EV = P(success) * Impact + mu * LearningValue - lambda * Delta_S_
 
 ### Intent & Git Integration
 
-- **Step Intent:** Add `build-images`, `tools`, `lint-*`, and `pre-commit-check` targets to `Makefile` and add `tests/test_makefile.py`.
-- **Git branch:** `I-1792298329-coherence-make-tasks-pre-commit-and-audit/P-1792298388-antigravity-agent-gemini-3.8-flash-medium/_`
+- **Step Intent:** Add `build-images`, `tools`, `lint-*`, and `pre-commit-check` targets to `Makefile` and add
+  `tests/test_makefile.py`.
+- **Git branch:**
+  `I-1792298329-coherence-make-tasks-pre-commit-and-audit/P-1792298388-antigravity-agent-gemini-3.8-flash-medium/_`
 - **Sub-intent:** `NONE`
 
 ### Implementation Details
@@ -116,12 +124,14 @@ Deterministic Makefile target addition and unit test coverage.
 ### Intent & Git Integration
 
 - **Step Intent:** Create `scripts/pre_commit_check.py` and `tests/test_pre_commit_check.py`.
-- **Git branch:** `I-1792298329-coherence-make-tasks-pre-commit-and-audit/P-1792298388-antigravity-agent-gemini-3.8-flash-medium/_`
+- **Git branch:**
+  `I-1792298329-coherence-make-tasks-pre-commit-and-audit/P-1792298388-antigravity-agent-gemini-3.8-flash-medium/_`
 - **Sub-intent:** `NONE`
 
 ### Implementation Details
 
-- Create `scripts/pre_commit_check.py` scanning staged files for Google AI, GitHub PAT, OpenAI, and Anthropic keys, and blocking `tmp/*`, `*.tmp`, `*.log`, `.index/*`.
+- Create `scripts/pre_commit_check.py` scanning staged files for Google AI, GitHub PAT, OpenAI, and Anthropic keys, and
+  blocking `tmp/*`, `*.tmp`, `*.log`, `.index/*`.
 - Create `tests/test_pre_commit_check.py` testing secret detection and disallowed path blocking.
 
 ### Dependencies & Criticality
@@ -166,8 +176,10 @@ High security value with low implementation complexity.
 
 ### Intent & Git Integration
 
-- **Step Intent:** Align docs with Australian English (`en-AU`), update `holon-config/prompts/planner.template.md`, and update `docs/audit_report.md`.
-- **Git branch:** `I-1792298329-coherence-make-tasks-pre-commit-and-audit/P-1792298388-antigravity-agent-gemini-3.8-flash-medium/_`
+- **Step Intent:** Align docs with Australian English (`en-AU`), update `holon-config/prompts/planner.template.md`, and
+  update `docs/audit_report.md`.
+- **Git branch:**
+  `I-1792298329-coherence-make-tasks-pre-commit-and-audit/P-1792298388-antigravity-agent-gemini-3.8-flash-medium/_`
 - **Sub-intent:** `NONE`
 
 ### Implementation Details

@@ -117,8 +117,8 @@ The inspection covered all source files, documentation, test suites, container d
   ```
   This violates the repository invariant documented in
   [`docs/methods/context_cleaning.md`](methods/context_cleaning.md#L92-L95): _"Dynamic Model Discovery (Zero Hardcoded
-  Models): In compliance with repository invariants, never hardcode model identifiers. Query the live active catalogue via
-  `agy models`."_
+  Models): In compliance with repository invariants, never hardcode model identifiers. Query the live active catalogue
+  via `agy models`."_
 - **Recommendation:** Remove hardcoded default model strings or parameterise them to dynamically resolve via environment
   configuration or CLI arguments.
 

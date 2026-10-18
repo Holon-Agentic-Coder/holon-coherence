@@ -663,18 +663,37 @@ build-images: build-image
 # Inspect OS toolbelt dependencies
 tools:
 	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
-	echo "$(COLOR_BOLD)=========================================$(COLOR_RESET)"; \
-	echo "$(COLOR_BOLD) Inspecting OS Toolbelt Dependencies$(COLOR_RESET)"; \
-	echo "$(COLOR_BOLD)=========================================$(COLOR_RESET)"; \
+	ERRORS=0; \
+	echo "$(COLOR_BOLD)OS Toolbelt Inspection:$(COLOR_RESET)"; \
 	for tool in git jq shellcheck uv gh npx openssl; do \
-		printf "%-20s " "$$tool:"; \
-		if command -v $$tool >/dev/null 2>&1; then \
-			echo "$(COLOR_GREEN)✅ $$(command -v $$tool)$(COLOR_RESET)"; \
+		tool_path=$$(command -v "$$tool" 2>/dev/null || true); \
+		if [ -n "$$tool_path" ]; then \
+			case "$$tool" in \
+				git) tool_ver=$$("$$tool_path" --version 2>/dev/null | head -n 1 || true) ;; \
+				jq) tool_ver=$$("$$tool_path" --version 2>/dev/null | head -n 1 || true) ;; \
+				shellcheck) tool_ver=$$("$$tool_path" --version 2>/dev/null | grep -E 'version:' | head -n 1 || true); \
+					if [ -z "$$tool_ver" ]; then tool_ver=$$("$$tool_path" -V 2>/dev/null | head -n 2 | tail -n 1 || true); fi; \
+					if [ -z "$$tool_ver" ]; then tool_ver=$$("$$tool_path" --version 2>/dev/null | head -n 1 || true); fi ;; \
+				uv) tool_ver=$$("$$tool_path" --version 2>/dev/null | head -n 1 || true) ;; \
+				gh) tool_ver=$$("$$tool_path" --version 2>/dev/null | grep -E 'gh version' | head -n 1 || true); \
+					if [ -z "$$tool_ver" ]; then tool_ver=$$("$$tool_path" --version 2>/dev/null | head -n 1 || true); fi ;; \
+				npx) tool_ver=$$("$$tool_path" --version 2>/dev/null | head -n 1 || true) ;; \
+				openssl) tool_ver=$$("$$tool_path" version 2>/dev/null | head -n 1 || true) ;; \
+				*) tool_ver=$$("$$tool_path" --version 2>/dev/null | head -n 1 || true) ;; \
+			esac; \
+			if [ -z "$$(printf '%s' "$$tool_ver" | tr -d '[:space:]')" ]; then tool_ver="unknown version"; fi; \
+			printf "  %-12s %-35s %s\n" "$$tool" "$$tool_path" "$$tool_ver"; \
 		else \
-			echo "$(COLOR_YELLOW)⚠️  Not found on PATH$(COLOR_RESET)"; \
+			printf "  %-12s %-35s %b\n" "$$tool" "NOT FOUND" "$(COLOR_RED)missing$(COLOR_RESET)"; \
+			ERRORS=$$((ERRORS + 1)); \
 		fi; \
 	done; \
-	echo "$(COLOR_BOLD)=========================================$(COLOR_RESET)"
+	if [ $$ERRORS -gt 0 ]; then \
+		echo "$(COLOR_RED)❌ $$ERRORS required toolbelt tool(s) missing from PATH.$(COLOR_RESET)"; \
+		exit 1; \
+	else \
+		echo "$(COLOR_GREEN)✅ All toolbelt tools are present.$(COLOR_RESET)"; \
+	fi
 
 # Pre-commit credential and scratch file detection check
 pre-commit-check:
@@ -691,7 +710,7 @@ lint-json:
 	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
 	if command -v npx >/dev/null 2>&1; then \
 		echo "$(COLOR_BOLD)Checking JSON formatting with Prettier...$(COLOR_RESET)"; \
-		npx prettier --no-config --check "**/*.json"; \
+		npx prettier --no-config --check "**/*.json" --no-error-on-unmatched-pattern; \
 	else \
 		echo "$(COLOR_YELLOW)⚠️  npx not found on PATH, skipping lint-json$(COLOR_RESET)"; \
 	fi
@@ -701,7 +720,7 @@ lint-yaml:
 	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
 	if command -v npx >/dev/null 2>&1; then \
 		echo "$(COLOR_BOLD)Checking YAML formatting with Prettier...$(COLOR_RESET)"; \
-		npx prettier --no-config --check "**/*.yml" "**/*.yaml"; \
+		npx prettier --no-config --check "**/*.yml" "**/*.yaml" --no-error-on-unmatched-pattern; \
 	else \
 		echo "$(COLOR_YELLOW)⚠️  npx not found on PATH, skipping lint-yaml$(COLOR_RESET)"; \
 	fi
@@ -721,13 +740,18 @@ lint-md:
 	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
 	if command -v npx >/dev/null 2>&1; then \
 		echo "$(COLOR_BOLD)Checking Markdown formatting with Prettier...$(COLOR_RESET)"; \
-		npx prettier --no-config --check "**/*.md"; \
+		npx prettier --no-config --check "**/*.md" --no-error-on-unmatched-pattern; \
 	else \
 		echo "$(COLOR_YELLOW)⚠️  npx not found on PATH, skipping lint-md$(COLOR_RESET)"; \
 	fi
 
 # Run all repository lint checks
 lint: pre-commit-check lint-json lint-yaml lint-shell lint-md
+	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
+	if command -v uv >/dev/null 2>&1; then \
+		echo "$(COLOR_BOLD)Running Python linting...$(COLOR_RESET)"; \
+		uv run task lint; \
+	fi
 
 # Comprehensive pre-commit and lint check
 check: pre-commit-check lint

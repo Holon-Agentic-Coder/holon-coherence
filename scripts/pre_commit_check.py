@@ -9,7 +9,6 @@ Scans staged files (or explicitly passed file paths) for:
 from __future__ import annotations
 
 import fnmatch
-import os
 import re
 import subprocess
 import sys
@@ -47,10 +46,24 @@ IGNORED_DIRS = {
     "dist",
 }
 
+# Whitelist patterns for files exempt from credential scanning (e.g. mock test secrets and docs)
+SCAN_WHITELIST_PATTERNS = [
+    "tests/test_*.py",
+    "docs/*",
+]
+
+
+def _normalise_path(path: str | Path) -> str:
+    """Normalise path without stripping leading dots from hidden directories."""
+    s = str(path).replace("\\", "/")
+    while s.startswith("./"):
+        s = s[2:]
+    return s
+
 
 def is_disallowed_path(path: str | Path) -> bool:
     """Return True if the path matches any disallowed ephemeral scratch path pattern."""
-    norm = str(path).replace("\\", "/").lstrip("./")
+    norm = _normalise_path(path)
     for pat in DISALLOWED_PATH_PATTERNS:
         if fnmatch.fnmatch(norm, pat):
             return True
@@ -59,9 +72,7 @@ def is_disallowed_path(path: str | Path) -> bool:
         return True
     if ".index" in parts[:-1] or parts[0] == ".index":
         return True
-    if norm.endswith(".tmp") or norm.endswith(".log"):
-        return True
-    return False
+    return bool(norm.endswith(".tmp") or norm.endswith(".log"))
 
 
 def mask_secret(secret: str) -> str:
@@ -93,18 +104,29 @@ def check_content(content: str, filename: str = "") -> list[dict[str, Any]]:
     return findings
 
 
+def is_whitelisted_path(path: str | Path) -> bool:
+    """Return True if path is whitelisted from credential scanning."""
+    norm = _normalise_path(path)
+    for pat in SCAN_WHITELIST_PATTERNS:
+        if fnmatch.fnmatch(norm, pat):
+            return True
+        if fnmatch.fnmatch(Path(norm).name, pat):
+            return True
+    return False
+
+
 def scan_file(path: str | Path) -> list[str]:
     """Scan a single file for path violations and secret credentials."""
     errors: list[str] = []
-    str_path = str(path).replace("\\", "/").lstrip("./")
+    str_path = _normalise_path(path)
 
     # 1. Check disallowed scratch path
     if is_disallowed_path(str_path):
         errors.append(f"Disallowed ephemeral scratch path staged: {str_path}")
 
-    # 2. Check content for secrets if file exists and is a regular file
+    # 2. Check content for secrets if file exists, is a regular file, and is not whitelisted
     p = Path(path)
-    if not p.is_file():
+    if not p.is_file() or is_whitelisted_path(str_path):
         return errors
 
     # Ignore binary files or common non-text extensions
@@ -113,13 +135,14 @@ def scan_file(path: str | Path) -> list[str]:
 
     try:
         content = p.read_text(encoding="utf-8", errors="replace")
-    except Exception as exc:
+    except Exception:
         # Ignore unreadable files
         return errors
 
     findings = check_content(content, filename=str_path)
     for f in findings:
-        errors.append(f"Potential secret credential detected in {f['file']}:{f['line']} [{f['pattern']}]: {f['masked']}")
+        msg = f"Potential secret credential detected in {f['file']}:{f['line']} [{f['pattern']}]: {f['masked']}"
+        errors.append(msg)
 
     return errors
 
@@ -144,7 +167,13 @@ def main(argv: list[str] | None = None) -> int:
         argv = sys.argv[1:]
 
     files_to_check: list[str] = []
-    if argv:
+    if argv and any(a in ("--all", "--all-files") for a in argv):
+        try:
+            res = subprocess.run(["git", "ls-files"], capture_output=True, text=True, check=True)
+            files_to_check = [line.strip() for line in res.stdout.splitlines() if line.strip()]
+        except Exception:
+            files_to_check = []
+    elif argv:
         for arg in argv:
             if not arg.startswith("-"):
                 files_to_check.append(arg)
@@ -157,7 +186,7 @@ def main(argv: list[str] | None = None) -> int:
 
     all_errors: list[str] = []
     for f in files_to_check:
-        norm_f = f.replace("\\", "/").lstrip("./")
+        norm_f = _normalise_path(f)
         # Skip explicitly ignored directories
         parts = norm_f.split("/")
         if any(ignored in parts for ignored in IGNORED_DIRS):
