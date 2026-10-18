@@ -63,7 +63,17 @@ def _normalise_path(path: str | Path) -> str:
 
 def is_disallowed_path(path: str | Path) -> bool:
     """Return True if the path matches any disallowed ephemeral scratch path pattern."""
-    norm = _normalise_path(path)
+    p = Path(path)
+    if p.is_absolute():
+        try:
+            p = p.resolve().relative_to(Path.cwd().resolve())
+        except ValueError:
+            # File is outside repo root (e.g. system /tmp in pytest on Linux)
+            norm = p.name
+            if any(fnmatch.fnmatch(norm, pat) for pat in ("*.tmp", "*.log")):
+                return True
+            return bool(norm.endswith(".tmp") or norm.endswith(".log"))
+    norm = _normalise_path(p)
     for pat in DISALLOWED_PATH_PATTERNS:
         if fnmatch.fnmatch(norm, pat):
             return True
