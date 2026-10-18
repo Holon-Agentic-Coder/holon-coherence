@@ -187,7 +187,7 @@ COLOR_YELLOW := \033[1;33m
 COLOR_RESET := \033[0m
 endif
 
-.PHONY: check-prerequisites prerequisites check-docker install-docker install-homebrew install-miniforge create-conda-env activate-conda-env build-image help
+.PHONY: check-prerequisites prerequisites check-docker install-docker install-homebrew install-miniforge create-conda-env activate-conda-env build-image build-images tools check lint lint-json lint-yaml lint-shell lint-md pre-commit-check help
 
 ## ==============================================================================
 ## Docker & Prerequisite Installation & Checks
@@ -652,6 +652,86 @@ build-image: check-docker
 	@echo "$(COLOR_BOLD)Building holon-coherence Docker image...$(COLOR_RESET)"
 	@./build_image.sh $(BUILD_IMAGE_ARGS)
 
+# Alias for build-image
+build-images: build-image
+
+
+## ==============================================================================
+## Developer & Quality Toolbelt Targets
+## ==============================================================================
+
+# Inspect OS toolbelt dependencies
+tools:
+	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
+	echo "$(COLOR_BOLD)=========================================$(COLOR_RESET)"; \
+	echo "$(COLOR_BOLD) Inspecting OS Toolbelt Dependencies$(COLOR_RESET)"; \
+	echo "$(COLOR_BOLD)=========================================$(COLOR_RESET)"; \
+	for tool in git jq shellcheck uv gh npx openssl; do \
+		printf "%-20s " "$$tool:"; \
+		if command -v $$tool >/dev/null 2>&1; then \
+			echo "$(COLOR_GREEN)✅ $$(command -v $$tool)$(COLOR_RESET)"; \
+		else \
+			echo "$(COLOR_YELLOW)⚠️  Not found on PATH$(COLOR_RESET)"; \
+		fi; \
+	done; \
+	echo "$(COLOR_BOLD)=========================================$(COLOR_RESET)"
+
+# Pre-commit credential and scratch file detection check
+pre-commit-check:
+	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
+	echo "$(COLOR_BOLD)Running pre-commit security and scratch file checks...$(COLOR_RESET)"; \
+	if command -v uv >/dev/null 2>&1; then \
+		uv run python scripts/pre_commit_check.py; \
+	else \
+		python3 scripts/pre_commit_check.py; \
+	fi
+
+# Check JSON formatting with Prettier
+lint-json:
+	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
+	if command -v npx >/dev/null 2>&1; then \
+		echo "$(COLOR_BOLD)Checking JSON formatting with Prettier...$(COLOR_RESET)"; \
+		npx prettier --no-config --check "**/*.json"; \
+	else \
+		echo "$(COLOR_YELLOW)⚠️  npx not found on PATH, skipping lint-json$(COLOR_RESET)"; \
+	fi
+
+# Check YAML formatting with Prettier
+lint-yaml:
+	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
+	if command -v npx >/dev/null 2>&1; then \
+		echo "$(COLOR_BOLD)Checking YAML formatting with Prettier...$(COLOR_RESET)"; \
+		npx prettier --no-config --check "**/*.yml" "**/*.yaml"; \
+	else \
+		echo "$(COLOR_YELLOW)⚠️  npx not found on PATH, skipping lint-yaml$(COLOR_RESET)"; \
+	fi
+
+# Check shell scripts with shellcheck
+lint-shell:
+	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
+	if command -v shellcheck >/dev/null 2>&1; then \
+		echo "$(COLOR_BOLD)Checking shell scripts with shellcheck...$(COLOR_RESET)"; \
+		find . -type f -name "*.sh" -not -path "*/.*/*" -not -path "./build/*" -not -path "./dist/*" -exec shellcheck {} +; \
+	else \
+		echo "$(COLOR_YELLOW)⚠️  shellcheck not found on PATH, skipping lint-shell$(COLOR_RESET)"; \
+	fi
+
+# Check Markdown formatting with Prettier
+lint-md:
+	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
+	if command -v npx >/dev/null 2>&1; then \
+		echo "$(COLOR_BOLD)Checking Markdown formatting with Prettier...$(COLOR_RESET)"; \
+		npx prettier --no-config --check "**/*.md"; \
+	else \
+		echo "$(COLOR_YELLOW)⚠️  npx not found on PATH, skipping lint-md$(COLOR_RESET)"; \
+	fi
+
+# Run all repository lint checks
+lint: pre-commit-check lint-json lint-yaml lint-shell lint-md
+
+# Comprehensive pre-commit and lint check
+check: pre-commit-check lint
+
 
 ## ==============================================================================
 ## Help Target
@@ -672,6 +752,15 @@ help:
 	@printf $(HELP_FORMAT) "create-conda-env" "Create or update Conda environment (CONDA_WRITE_ENV, default 'holon'; 'base' only on deliberate consent; CONDA_PRUNE=1 to prune)."
 	@printf $(HELP_FORMAT) "activate-conda-env" "Show command to activate the Conda environment."
 	@printf $(HELP_FORMAT) "build-image" "Build the holon-coherence Docker container via build_image.sh."
+	@printf $(HELP_FORMAT) "build-images" "Alias for build-image."
+	@printf $(HELP_FORMAT) "tools" "Inspect OS toolbelt dependencies (git, jq, shellcheck, uv, gh, npx, openssl)."
+	@printf $(HELP_FORMAT) "check" "Run pre-commit-check and all lint targets."
+	@printf $(HELP_FORMAT) "lint" "Run all repository linting checks (Prettier, shellcheck, pre-commit)."
+	@printf $(HELP_FORMAT) "lint-json" "Check JSON files with Prettier (--no-config)."
+	@printf $(HELP_FORMAT) "lint-yaml" "Check YAML files with Prettier (--no-config)."
+	@printf $(HELP_FORMAT) "lint-shell" "Check shell scripts with shellcheck."
+	@printf $(HELP_FORMAT) "lint-md" "Check Markdown documentation with Prettier (--no-config)."
+	@printf $(HELP_FORMAT) "pre-commit-check" "Run pre-commit secret leak and scratch file detection."
 	@printf $(HELP_FORMAT) "help" "Show this help message."
 	@echo ""
 	@echo "$(COLOR_BOLD)Variables:$(COLOR_RESET)"

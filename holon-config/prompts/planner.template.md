@@ -24,7 +24,7 @@ objective is to produce a comprehensive, high-quality, production-grade implemen
 ## Instructions for Plan Authoring
 
 Generate a complete markdown plan for `{intent_id}` following the standard Holon architecture specification. You must
-output the complete markdown document without conversational preamble.
+write the complete plan directly to `plans/{plan_id}.md` without conversational preamble.
 
 The plan MUST include the following mandatory sections:
 
