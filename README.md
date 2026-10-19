@@ -1,11 +1,11 @@
 # holon-coherence
 
-> **High-coherence, low-entropy optimization gateway for fractal coding agents.**
+> **High-coherence, low-entropy optimisation gateway for fractal coding agents.**
 
-`holon-coherence` is part of the **Holon** family of self-improving, fractal intent coding agents, used to optimize LLM
+`holon-coherence` is part of the **Holon** family of self-improving, fractal intent coding agents, used to optimise LLM
 usage, eliminate token waste, and drive informational entropy to zero across autonomous execution loops.
 
-It operates as a wire-level HTTPS interception proxy and optimization layer, eliminating quadratic context bloat
+It operates as a wire-level HTTPS interception proxy and optimisation layer, eliminating quadratic context bloat
 ($O(N^2)$) and cognitive friction transparently via standard proxy routing, requiring **zero code modifications** to the
 client agent.
 
@@ -18,7 +18,7 @@ client agent.
    preserving active turns and modified files verbatim.
 2. **Hybrid & Semantic Local Cache**: Disk-backed SQLite exact and Jaccard semantic caching that short-circuits repeated
    requests locally at **0 prompt/output tokens and sub-5ms latency**.
-3. **Provider Prompt Cache Optimization**: Anchors static context at the prefix and automatically injects
+3. **Provider Prompt Cache Optimisation**: Anchors static context at the prefix and automatically injects
    provider-specific cache control breakpoints (`"cache_control": {"type": "ephemeral"}`) to unlock 80–90% cost
    discounts.
 4. **AST & Keyword Codebase Indexing**: Symbol-based AST mapping to replace brute-force Turn 0 codebase dumping, cutting
@@ -31,7 +31,7 @@ client agent.
    requests, cleaned requests, SSE streams, TTFT latency, and exact token counts.
 8. **Live Telemetry & Local LLM Adapters**: In-memory cumulative metrics dashboard served at `/holon/`, CLI reporting
    (`holon-coherence metrics`), and transparent protocol translation (Gemini v1beta <-> OpenAI ChatCompletions and
-   Anthropic local normalization) for self-hosted LLM runners.
+   Anthropic local normalisation) for self-hosted LLM runners.
 
 ---
 
@@ -104,8 +104,27 @@ If any prerequisite is missing, install and configure it directly using the Make
   and `python=3.13` with `conda install -y -n base -c conda-forge` instead of the full `environment.yml`.
 
 - **Build Docker Container**:
+
   ```bash
   make build-image
+  # Or using the build-images alias:
+  make build-images
+  ```
+
+- **Toolbelt Inspection & Code Quality**:
+
+  ```bash
+  # Inspect OS toolbelt dependencies (git, jq, shellcheck, uv, gh, npx, openssl):
+  make tools
+
+  # Run pre-commit secret leak prevention and scratch file detection:
+  make pre-commit-check
+
+  # Run comprehensive linters (Prettier, shellcheck, pre-commit-check):
+  make lint
+
+  # Run pre-commit checks and linters:
+  make check
   ```
 
 ### 3. Local Directory Permissions
@@ -166,13 +185,13 @@ holon-coherence start --web --web-password "custom-secret-key"
 holon-coherence web-token
 # (alias: holon-coherence web-key)
 
-# Check container status (and display web dashboard token and live optimization summary)
+# Check container status (and display web dashboard token and live optimisation summary)
 holon-coherence status
 
-# Display cumulative optimization metrics (tool calls pruned, cache hit rate, TTFT, tokens reduced)
+# Display cumulative optimisation metrics (tool calls pruned, cache hit rate, TTFT, tokens reduced)
 holon-coherence metrics
 
-# Display optimization metrics as raw JSON (reads from live proxy or falls back to transactions.jsonl)
+# Display optimisation metrics as raw JSON (reads from live proxy or falls back to transactions.jsonl)
 holon-coherence metrics --json
 
 # Stream container logs
@@ -186,9 +205,9 @@ holon-coherence stop
 
 ### 3. Automated Coding Agent Runners
 
-`holon-coherence` provides first-class coding agent runners that automatically launch the optimization proxy in the
+`holon-coherence` provides first-class coding agent runners that automatically launch the optimisation proxy in the
 background, configure proxy routing and certificate trust, map universal credentials, and execute the agent with full
-wire telemetry and token optimization enabled:
+wire telemetry and token optimisation enabled:
 
 ```bash
 # Run Antigravity agent (interactive or CLI mode)
@@ -258,7 +277,7 @@ holon-coherence claude -- --dangerously-skip-permissions
 - **Port Allocation & Conflict Detection**: Configure the proxy port via `--port <port>` or the `HOLON_PROXY_PORT`
   environment variable (default: `8080`). Port conflicts are detected during startup with actionable guidance.
 - **Custom CA Certificate (`HOLON_CA_CERT`)**: Override the default CA certificate path used for TLS bundle merging by
-  setting `HOLON_CA_CERT=/path/to/ca.pem`. Useful in CI/CD or containerized environments where the Holon CA certificate
+  setting `HOLON_CA_CERT=/path/to/ca.pem`. Useful in CI/CD or containerised environments where the Holon CA certificate
   is mounted at a non-default location. Falls back to `~/.holon/proxy-ca/mitmproxy-ca-cert.pem` if unset or if the
   specified file does not exist.
 - **Interactive TTY & Signal Forwarding**: Full interactive TTY attachment (`sys.stdin`, `sys.stdout`, `sys.stderr`)
@@ -280,8 +299,8 @@ When `--local-llm-base` (or `--local-llm-endpoint`) and `--model` are supplied:
   - **Antigravity (`agy`)**: The runner routes to the proxy using `AGY_GATEWAY_URL="http://127.0.0.1.nip.io:{port}"`.
     Go's `net/http` client standard library automatically bypasses `HTTP_PROXY` for literal `localhost` and `127.0.0.1`;
     using the `127.0.0.1.nip.io` alias ensures Go routes all requests through the proxy while resolving to loopback.
-- **Anthropic Protocol Normalizer**: Local OpenAI/Anthropic-compatible engines often reject proprietary Claude API
-  parameters. The proxy automatically normalizes outbound requests targeting local endpoints by stripping unsupported
+- **Anthropic Protocol Normaliser**: Local OpenAI/Anthropic-compatible engines often reject proprietary Claude API
+  parameters. The proxy automatically normalises outbound requests targeting local endpoints by stripping unsupported
   fields (`thinking`, `output_config`, `context_management`, prompt caching `cache_control` annotations) and removing
   `anthropic-beta` headers.
 - **Gemini v1beta <-> OpenAI ChatCompletions Bridge**: For agents emitting Google Gemini v1beta REST requests (such as
@@ -345,7 +364,7 @@ handles both:
 
 ### 4. Real-Time Web & CLI Metrics Dashboard
 
-`holon-coherence` includes an in-memory cumulative optimization metrics engine and real-time dashboard served directly
+`holon-coherence` includes an in-memory cumulative optimisation metrics engine and real-time dashboard served directly
 by the proxy without requiring external databases or third-party monitoring stacks.
 
 #### Interactive Web Dashboard
@@ -353,14 +372,14 @@ by the proxy without requiring external databases or third-party monitoring stac
 Open `http://127.0.0.1:8080/holon/` in your browser (substituting your configured proxy port) to view the live dark-mode
 dashboard:
 
-- **Optimization Cards**: Real-time counters for tool calls pruned/saved, tokens reduced, cache hit rate, average TTFT
+- **Optimisation Cards**: Real-time counters for tool calls pruned/saved, tokens reduced, cache hit rate, average TTFT
   latency, prefill throughput, and decode throughput.
 - **Token Usage Breakdown**: Input tokens, model output tokens, cache read tokens, and characters saved.
 - **Live Updating**: Polls the proxy's lightweight JSON endpoint (`/holon/api/metrics`) every 3 seconds.
 
 #### Terminal Metrics CLI
 
-Inspect cumulative optimization performance directly in the terminal:
+Inspect cumulative optimisation performance directly in the terminal:
 
 ```bash
 # Formatted terminal summary
@@ -449,7 +468,7 @@ NODE_EXTRA_CA_CERTS="${HOME}/.holon/proxy-ca/mitmproxy-ca-cert.pem" \
 <your-agent-command>
 ```
 
-All outbound LLM traffic (Anthropic, Google Gemini, OpenAI) is automatically optimized, cached, and recorded without
+All outbound LLM traffic (Anthropic, Google Gemini, OpenAI) is automatically optimised, cached, and recorded without
 altering your terminal's persistent state.
 
 ---

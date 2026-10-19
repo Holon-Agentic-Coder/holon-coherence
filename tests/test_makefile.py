@@ -272,6 +272,15 @@ def test_makefile_help():
     assert "create-conda-env" in result.stdout
     assert "activate-conda-env" in result.stdout
     assert "build-image" in result.stdout
+    assert "build-images" in result.stdout
+    assert "tools" in result.stdout
+    assert "check" in result.stdout
+    assert "lint" in result.stdout
+    assert "lint-json" in result.stdout
+    assert "lint-yaml" in result.stdout
+    assert "lint-shell" in result.stdout
+    assert "lint-md" in result.stdout
+    assert "pre-commit-check" in result.stdout
 
 
 def test_makefile_help_documents_conda_variables():
@@ -301,8 +310,17 @@ def test_makefile_default_goal():
         "check-docker",
         "check-prerequisites",
         "build-image",
+        "build-images",
         "create-conda-env",
         "activate-conda-env",
+        "tools",
+        "check",
+        "lint",
+        "lint-json",
+        "lint-yaml",
+        "lint-shell",
+        "lint-md",
+        "pre-commit-check",
     ],
 )
 def test_makefile_dry_run(target):
@@ -1114,3 +1132,67 @@ def test_check_prerequisites_uv_probe_inspects_the_requested_env_not_the_active_
     assert "uv inside conda env active" not in result.stdout, result.stdout
     assert "other" in result.stdout
     assert result.returncode != 0, "uv is not installed in 'other', so the probe must fail"
+
+
+def test_makefile_build_images_alias():
+    result = subprocess.run(
+        ["make", "-n", "build-images"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=ENV_NO_COLOR,
+        timeout=15,
+    )
+    assert result.returncode == 0
+    assert "build_image.sh" in result.stdout
+
+
+def test_makefile_tools_inspection():
+    result = subprocess.run(
+        ["make", "-n", "tools"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=ENV_NO_COLOR,
+        timeout=15,
+    )
+    assert result.returncode == 0
+    assert "git jq shellcheck uv gh npx openssl" in result.stdout
+
+
+def test_makefile_lint_and_check_targets():
+    result_lint = subprocess.run(
+        ["make", "-n", "lint"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=ENV_NO_COLOR,
+        timeout=15,
+    )
+    assert result_lint.returncode == 0
+    assert "prettier" in result_lint.stdout
+    assert "pre_commit_check.py" in result_lint.stdout
+
+    result_check = subprocess.run(
+        ["make", "-n", "check"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=ENV_NO_COLOR,
+        timeout=15,
+    )
+    assert result_check.returncode == 0
+    assert "prettier" in result_check.stdout
+
+
+def test_makefile_pre_commit_check_target():
+    result = subprocess.run(
+        ["make", "-n", "pre-commit-check"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=ENV_NO_COLOR,
+        timeout=15,
+    )
+    assert result.returncode == 0
+    assert "pre_commit_check.py" in result.stdout

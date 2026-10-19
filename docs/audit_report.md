@@ -14,9 +14,9 @@
 ### 1.1 Executive Summary
 
 This audit delivers an exhaustive architectural, security, concurrency, reliability, and test pipeline evaluation of the
-`holon-coherence` repository. `holon-coherence` serves as an optimization gateway and MITM proxy sidecar designed to
-minimize LLM token consumption for autonomous fractal coding agents through context cleaning, tool output deduplication,
-prompt cache optimization, and local response caching.
+`holon-coherence` repository. `holon-coherence` serves as an optimisation gateway and MITM proxy sidecar designed to
+minimise LLM token consumption for autonomous fractal coding agents through context cleaning, tool output deduplication,
+prompt cache optimisation, and local response caching.
 
 The audit identified **16 discrete findings** across the codebase. While the core networking primitives, Docker gateway
 routing, and CA validation mechanisms demonstrate thoughtful defensive engineering, significant vulnerabilities and
@@ -27,9 +27,9 @@ technical debt were uncovered:
    automation includes unverified `curl | sudo sh` scripts.
 2. **Operational Concurrency & Memory**: Addon metrics counters suffer from race conditions under multi-threaded proxy
    flows; SSE stream buffers allow unbounded in-memory accumulation up to 50MB per flow before silently truncating wire
-   logging data; and `HybridCacheStore` lacks TTL expiration, LRU bounds, and thread synchronization.
-3. **Prompt & Context Invariants**: History summarization creates dangling references when deduplicated tool outputs
-   point to turns pruned by subsequent summarization passes, and risks violating Anthropic `tool_use`/`tool_result`
+   logging data; and `HybridCacheStore` lacks TTL expiration, LRU bounds, and thread synchronisation.
+3. **Prompt & Context Invariants**: History summarisation creates dangling references when deduplicated tool outputs
+   point to turns pruned by subsequent summarisation passes, and risks violating Anthropic `tool_use`/`tool_result`
    pairing requirements. Naive bag-of-words Jaccard similarity in semantic caching poses severe false-positive hit risks
    for code generation.
 4. **Testing Hygiene & Architecture**: Over 1,500 lines of critical proxy and indexer logic (`mitm_addon.py`,
@@ -117,9 +117,9 @@ The inspection covered all source files, documentation, test suites, container d
   ```
   This violates the repository invariant documented in
   [`docs/methods/context_cleaning.md`](methods/context_cleaning.md#L92-L95): _"Dynamic Model Discovery (Zero Hardcoded
-  Models): In compliance with repository invariants, never hardcode model identifiers. Query the live active catalog via
-  `agy models`."_
-- **Recommendation:** Remove hardcoded default model strings or parameterize them to dynamically resolve via environment
+  Models): In compliance with repository invariants, never hardcode model identifiers. Query the live active catalogue
+  via `agy models`."_
+- **Recommendation:** Remove hardcoded default model strings or parameterise them to dynamically resolve via environment
   configuration or CLI arguments.
 
 ### 2.4 Documentation Drift & Legacy Monorepo Path References
@@ -206,7 +206,7 @@ The inspection covered all source files, documentation, test suites, container d
   strict pre-pinned SHA-256 verification before running downloaded scripts (as is already done for Miniforge in lines
   125-126 of `Makefile`).
 
-### 3.3 Silent Error Suppression in CA Combined PEM Synchronization
+### 3.3 Silent Error Suppression in CA Combined PEM Synchronisation
 
 - **Severity:** Low
 - **CWE:** CWE-390 (Detection of Error Condition Without Action)
@@ -222,7 +222,7 @@ The inspection covered all source files, documentation, test suites, container d
           pf.write(combined)
   ```
 - **Security Impact:** If disk quota is exhausted or permission denies writing `mitmproxy-ca.pem`, the function silently
-  completes. The caller believes Root CA initialization succeeded, but subsequent mitmproxy startup fails or falls back
+  completes. The caller believes Root CA initialisation succeeded, but subsequent mitmproxy startup fails or falls back
   to an unmanaged internal CA, breaking downstream client trust.
 - **Recommendation:** Log the failure or allow `OSError` to propagate into an actionable `RuntimeError`.
 
@@ -244,7 +244,7 @@ The inspection covered all source files, documentation, test suites, container d
 
 ## 4. Concurrency, Performance & Bug Detection Audit
 
-### 4.1 Thread Safety & Unsynchronized Addon State
+### 4.1 Thread Safety & Unsynchronised Addon State
 
 - **Severity:** Medium
 - **CWE:** CWE-362 (Concurrent Execution using Shared Resource with Improper Synchronization)
@@ -530,12 +530,25 @@ graph TD
   - Author `tests/test_payload_cleaner.py` covering Gemini/OpenAI payload processing and prompt cache control injection.
   - Add end-to-end integration tests validating proxy short-circuiting on cache hits.
 
-### Candidate Bean 0050: Architecture Decoupling & Documentation Modernization
+### Candidate Bean 0050: Architecture Decoupling & Documentation Modernisation
 
-- **Objective:** Resolve technical debt, modularize bloated files, and eliminate legacy monorepo path references.
+- **Objective:** Resolve technical debt, modularise bloated files, and eliminate legacy monorepo path references.
 - **Scope:**
   - Decompose `mitm_addon.py` and `cli.py` into focused, single-responsibility submodules.
   - Update all documentation in `docs/methods/` and `docs/token_reduction_measurement_plan.md` to reflect
     `src/holon_coherence/` paths and import signatures.
   - Align `pyproject.toml` dependencies and lock container builds using `uv.lock`.
   - Dynamically resolve model identifiers in `RingerOrchestrator` via `agy models`.
+
+---
+
+## 7. Ongoing Audit Remediations & Holon Quality Status
+
+### 7.1 Status of Addressed Beans
+
+| Bean          | Target Domain                            | Implementation Status | Key Achievements                                                                                                                                                                                                                                              |
+| :------------ | :--------------------------------------- | :-------------------: | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Bean 0116** | Makefile Alignment & Quality Hygiene     |     **COMPLETED**     | Added `build-images` alias, OS toolbelt inspection (`make tools` checking git, jq, shellcheck, uv, gh, npx, openssl), Prettier lint targets (`lint-json`, `lint-yaml`, `lint-shell`, `lint-md`, `lint`, `check`), and unit tests in `tests/test_makefile.py`. |
+| **Bean 0110** | Pre-Commit Security & Leak Prevention    |     **COMPLETED**     | Implemented `scripts/pre_commit_check.py` and `tests/test_pre_commit_check.py` scanning staged files for Google AI, GitHub PAT, Anthropic, and OpenAI API credentials and blocking ephemeral scratch paths (`tmp/*`, `*.tmp`, `*.log`, `.index/*`).           |
+| **Bean 0105** | Australian English (`en-AU`) Orthography |     **COMPLETED**     | Standardised all documentation, guides, and templates to Australian English conventions (`optimise`, `standardise`, `initialise`, `behaviour`, `colour`) while preserving programmatic API contracts.                                                         |
+| **Bean 0106** | Codebase Technical Audit Maintenance     |     **COMPLETED**     | Updated architectural and security audit report with latest remediation progress, verification metrics, and test coverage evidence.                                                                                                                           |
