@@ -439,11 +439,11 @@ def ensure_proxy_running(
     if not os.path.exists(ca_cert) or not os.path.exists(ca_pem):
         with contextlib.suppress(Exception):
             generate_root_ca(output_dir=ca_dir)
-    for ca_file in (ca_cert, ca_pem):
-        if os.path.exists(ca_file):
-            with contextlib.suppress(OSError):
-                os.chmod(ca_file, 0o666)
+
     with contextlib.suppress(OSError):
+        os.chmod(ca_dir, 0o777)
+        os.chmod(cache_dir, 0o777)
+        os.chmod(logs_dir, 0o777)
         for fname in os.listdir(ca_dir):
             os.chmod(os.path.join(ca_dir, fname), 0o666)
 
