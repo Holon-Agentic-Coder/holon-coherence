@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import contextlib
+import http.client
 import os
 import shutil
 import socket
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from typing import Any, NamedTuple
 
 from holon_coherence.ca_generator import generate_root_ca
@@ -138,17 +141,45 @@ def find_available_port(start_port: int = 8080, max_attempts: int = 100, host: s
 def wait_for_proxy_ready(
     port: int, timeout: float = PROXY_READY_TIMEOUT_SECONDS, container_name: str | None = None
 ) -> bool:
-    """Poll the proxy port until it accepts TCP connections or timeout occurs."""
+    """Poll the proxy HTTP metrics endpoint until it returns HTTP 200 or timeout occurs."""
     cli = get_cli()
     is_running = getattr(cli, "is_container_running", is_container_running)
-    in_use = getattr(cli, "is_port_in_use", is_port_in_use)
     name = container_name or get_container_name()
     deadline = time.time() + timeout
+    candidate_urls = (
+        f"http://127.0.0.1:{port}/holon/api/metrics",
+        f"http://127.0.0.1:{port}/_holon/metrics",
+    )
     while time.time() < deadline:
         if not is_running(name):
             return False
-        if in_use(port):
-            return True
+
+        for url in candidate_urls:
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "holon-coherence-readiness"})
+                resp = urllib.request.urlopen(req, timeout=1.0)
+                try:
+                    status = getattr(resp, "status", None) or getattr(resp, "code", None)
+                    if status == 200:
+                        return True
+                finally:
+                    close = getattr(resp, "close", None)
+                    if callable(close):
+                        close()
+            except urllib.error.HTTPError as exc:
+                if exc.code == 404:
+                    continue
+                break
+            except (
+                urllib.error.URLError,
+                ConnectionRefusedError,
+                OSError,
+                TimeoutError,
+                http.client.RemoteDisconnected,
+                http.client.HTTPException,
+            ):
+                break
+
         time.sleep(PROXY_POLL_INTERVAL_SECONDS)
     return False
 

@@ -43,6 +43,7 @@ transactions.jsonl
 turn_*.json
 
 # Sandbox & temporary files
+.test_write
 /tmp/
 *.tmp
 *.log
