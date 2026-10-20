@@ -429,11 +429,23 @@ def ensure_proxy_running(
     os.makedirs(ca_dir, exist_ok=True)
     os.makedirs(cache_dir, exist_ok=True)
     os.makedirs(logs_dir, exist_ok=True)
+    with contextlib.suppress(OSError):
+        os.chmod(ca_dir, 0o777)
+        os.chmod(cache_dir, 0o777)
+        os.chmod(logs_dir, 0o777)
 
     ca_cert = os.path.join(ca_dir, "mitmproxy-ca-cert.pem")
-    if not os.path.exists(ca_cert):
+    ca_pem = os.path.join(ca_dir, "mitmproxy-ca.pem")
+    if not os.path.exists(ca_cert) or not os.path.exists(ca_pem):
         with contextlib.suppress(Exception):
             generate_root_ca(output_dir=ca_dir)
+    for ca_file in (ca_cert, ca_pem):
+        if os.path.exists(ca_file):
+            with contextlib.suppress(OSError):
+                os.chmod(ca_file, 0o666)
+    with contextlib.suppress(OSError):
+        for fname in os.listdir(ca_dir):
+            os.chmod(os.path.join(ca_dir, fname), 0o666)
 
     ensure_image(image, rebuild=False)
 

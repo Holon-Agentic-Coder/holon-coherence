@@ -51,8 +51,8 @@ def test_agent_runner_cold_start_help(
         mock_script = bin_dir / agent_name
         mock_script.write_text(
             "#!/bin/sh\n"
-            "if [ \"$1\" = \"--help\" ] || [ \"$1\" = \"-h\" ]; then\n"
-            f"    echo \"Usage: {agent_name} [options]\"\n"
+            'if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then\n'
+            f'    echo "Usage: {agent_name} [options]"\n'
             "    exit 0\n"
             "fi\n"
             "exit 0\n"
