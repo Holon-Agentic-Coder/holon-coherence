@@ -138,6 +138,12 @@ def find_available_port(start_port: int = 8080, max_attempts: int = 100, host: s
         return s.getsockname()[1]
 
 
+def _urlopen_no_proxy(req: urllib.request.Request, timeout: float) -> Any:
+    """Open a request directly, ignoring http_proxy/HTTP_PROXY env vars (readiness probes target loopback)."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return opener.open(req, timeout=timeout)
+
+
 def wait_for_proxy_ready(
     port: int, timeout: float = PROXY_READY_TIMEOUT_SECONDS, container_name: str | None = None
 ) -> bool:
@@ -157,7 +163,7 @@ def wait_for_proxy_ready(
         for url in candidate_urls:
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "holon-coherence-readiness"})
-                resp = urllib.request.urlopen(req, timeout=1.0)
+                resp = _urlopen_no_proxy(req, timeout=1.0)
                 try:
                     status = getattr(resp, "status", None) or getattr(resp, "code", None)
                     if status == 200:
@@ -330,6 +336,20 @@ def report_local_llm_route(route: LocalLlmRoute, reachable: bool, detail: str) -
     return plan.remove
 
 
+def _chmod_proxy_dirs(ca_dir: str, cache_dir: str, logs_dir: str, ca_files: bool = False) -> None:
+    """Make mounted proxy dirs (and optionally CA files) accessible to non-root container users.
+
+    Each chmod is attempted independently so one failure does not skip the rest.
+    """
+    targets: list[tuple[str, int]] = [(ca_dir, 0o777), (cache_dir, 0o777), (logs_dir, 0o777)]
+    if ca_files:
+        with contextlib.suppress(OSError):
+            targets.extend((os.path.join(ca_dir, fname), 0o666) for fname in os.listdir(ca_dir))
+    for path, mode in targets:
+        with contextlib.suppress(OSError):
+            os.chmod(path, mode)
+
+
 def ensure_proxy_running(
     port: int = DEFAULT_PROXY_PORT,
     image: str = "holon-coherence:latest",
@@ -429,10 +449,7 @@ def ensure_proxy_running(
     os.makedirs(ca_dir, exist_ok=True)
     os.makedirs(cache_dir, exist_ok=True)
     os.makedirs(logs_dir, exist_ok=True)
-    with contextlib.suppress(OSError):
-        os.chmod(ca_dir, 0o777)
-        os.chmod(cache_dir, 0o777)
-        os.chmod(logs_dir, 0o777)
+    _chmod_proxy_dirs(ca_dir, cache_dir, logs_dir)
 
     ca_cert = os.path.join(ca_dir, "mitmproxy-ca-cert.pem")
     ca_pem = os.path.join(ca_dir, "mitmproxy-ca.pem")
@@ -440,12 +457,7 @@ def ensure_proxy_running(
         with contextlib.suppress(Exception):
             generate_root_ca(output_dir=ca_dir)
 
-    with contextlib.suppress(OSError):
-        os.chmod(ca_dir, 0o777)
-        os.chmod(cache_dir, 0o777)
-        os.chmod(logs_dir, 0o777)
-        for fname in os.listdir(ca_dir):
-            os.chmod(os.path.join(ca_dir, fname), 0o666)
+    _chmod_proxy_dirs(ca_dir, cache_dir, logs_dir, ca_files=True)
 
     ensure_image(image, rebuild=False)
 

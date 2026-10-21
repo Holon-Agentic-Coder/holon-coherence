@@ -41,7 +41,7 @@ def test_agent_runner_cold_start_help(
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    if res.returncode != 0 and not os.path.exists("Dockerfile"):
+    if res.returncode != 0 and not (Path(__file__).resolve().parents[1] / "Dockerfile").exists():
         pytest.skip("Docker image holon-coherence:latest not available and no Dockerfile to build")
 
     # If the real binary is missing on host, create a dummy mock executable on PATH
@@ -69,10 +69,23 @@ def test_agent_runner_cold_start_help(
     try:
         stop_proxy_container(container_name)
 
+        import holon_coherence.cli as cli_module
+
+        readiness: list[bool] = []
+        real_wait = cli_module.wait_for_proxy_ready
+
+        def recording_wait(*args: object, **kwargs: object) -> bool:
+            result = real_wait(*args, **kwargs)
+            readiness.append(result)
+            return result
+
+        monkeypatch.setattr(cli_module, "wait_for_proxy_ready", recording_wait)
+
         # Launch agent runner with --ephemeral and -- --help
         with pytest.raises(SystemExit) as exc_info:
             main([agent_name, "--ephemeral", "--", "--help"])
 
         assert exc_info.value.code == 0
+        assert readiness == [True], "proxy container did not report ready before the agent ran"
     finally:
         stop_proxy_container(container_name)
