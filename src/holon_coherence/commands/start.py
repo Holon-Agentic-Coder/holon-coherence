@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import contextlib
+import http.client
 import os
 import shutil
 import socket
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from typing import Any, NamedTuple
 
 from holon_coherence.ca_generator import generate_root_ca
@@ -135,20 +138,54 @@ def find_available_port(start_port: int = 8080, max_attempts: int = 100, host: s
         return s.getsockname()[1]
 
 
+def _urlopen_no_proxy(req: urllib.request.Request, timeout: float) -> Any:
+    """Open a request directly, ignoring http_proxy/HTTP_PROXY env vars (readiness probes target loopback)."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return opener.open(req, timeout=timeout)
+
+
 def wait_for_proxy_ready(
     port: int, timeout: float = PROXY_READY_TIMEOUT_SECONDS, container_name: str | None = None
 ) -> bool:
-    """Poll the proxy port until it accepts TCP connections or timeout occurs."""
+    """Poll the proxy HTTP metrics endpoint until it returns HTTP 200 or timeout occurs."""
     cli = get_cli()
     is_running = getattr(cli, "is_container_running", is_container_running)
-    in_use = getattr(cli, "is_port_in_use", is_port_in_use)
     name = container_name or get_container_name()
     deadline = time.time() + timeout
+    candidate_urls = (
+        f"http://127.0.0.1:{port}/holon/api/metrics",
+        f"http://127.0.0.1:{port}/_holon/metrics",
+    )
     while time.time() < deadline:
         if not is_running(name):
             return False
-        if in_use(port):
-            return True
+
+        for url in candidate_urls:
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "holon-coherence-readiness"})
+                resp = _urlopen_no_proxy(req, timeout=1.0)
+                try:
+                    status = getattr(resp, "status", None) or getattr(resp, "code", None)
+                    if status == 200:
+                        return True
+                finally:
+                    close = getattr(resp, "close", None)
+                    if callable(close):
+                        close()
+            except urllib.error.HTTPError as exc:
+                if exc.code == 404:
+                    continue
+                break
+            except (
+                urllib.error.URLError,
+                ConnectionRefusedError,
+                OSError,
+                TimeoutError,
+                http.client.RemoteDisconnected,
+                http.client.HTTPException,
+            ):
+                break
+
         time.sleep(PROXY_POLL_INTERVAL_SECONDS)
     return False
 
@@ -299,6 +336,20 @@ def report_local_llm_route(route: LocalLlmRoute, reachable: bool, detail: str) -
     return plan.remove
 
 
+def _chmod_proxy_dirs(ca_dir: str, cache_dir: str, logs_dir: str, ca_files: bool = False) -> None:
+    """Make mounted proxy dirs (and optionally CA files) accessible to non-root container users.
+
+    Each chmod is attempted independently so one failure does not skip the rest.
+    """
+    targets: list[tuple[str, int]] = [(ca_dir, 0o777), (cache_dir, 0o777), (logs_dir, 0o777)]
+    if ca_files:
+        with contextlib.suppress(OSError):
+            targets.extend((os.path.join(ca_dir, fname), 0o666) for fname in os.listdir(ca_dir))
+    for path, mode in targets:
+        with contextlib.suppress(OSError):
+            os.chmod(path, mode)
+
+
 def ensure_proxy_running(
     port: int = DEFAULT_PROXY_PORT,
     image: str = "holon-coherence:latest",
@@ -398,11 +449,15 @@ def ensure_proxy_running(
     os.makedirs(ca_dir, exist_ok=True)
     os.makedirs(cache_dir, exist_ok=True)
     os.makedirs(logs_dir, exist_ok=True)
+    _chmod_proxy_dirs(ca_dir, cache_dir, logs_dir)
 
     ca_cert = os.path.join(ca_dir, "mitmproxy-ca-cert.pem")
-    if not os.path.exists(ca_cert):
+    ca_pem = os.path.join(ca_dir, "mitmproxy-ca.pem")
+    if not os.path.exists(ca_cert) or not os.path.exists(ca_pem):
         with contextlib.suppress(Exception):
             generate_root_ca(output_dir=ca_dir)
+
+    _chmod_proxy_dirs(ca_dir, cache_dir, logs_dir, ca_files=True)
 
     ensure_image(image, rebuild=False)
 

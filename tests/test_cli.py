@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import email.message
 import json
 import os
 import signal
 import stat
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -1509,30 +1512,125 @@ class TestCLIDispatchAndMain:
 
 
 class TestWaitForProxyReady:
-    """Tests for wait_for_proxy_ready polling and fail-fast container exit handling."""
+    """Tests for wait_for_proxy_ready HTTP metrics polling and fail-fast container exit handling."""
 
-    def test_wait_for_proxy_ready_success(self) -> None:
+    def test_wait_for_proxy_ready_immediate_success(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.status = 200
         with (
             patch("holon_coherence.cli.is_container_running", return_value=True),
-            patch("holon_coherence.cli.is_port_in_use", return_value=True),
+            patch("holon_coherence.commands.start._urlopen_no_proxy", return_value=mock_resp) as mock_urlopen,
+            patch("time.sleep") as mock_sleep,
         ):
             assert wait_for_proxy_ready(8080) is True
+            assert mock_urlopen.call_count == 1
+            mock_sleep.assert_not_called()
+
+    def test_wait_for_proxy_ready_retry_success(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        side_effects = [
+            urllib.error.URLError(ConnectionRefusedError("Connection refused")),
+            urllib.error.URLError(ConnectionRefusedError("Connection refused")),
+            mock_resp,
+        ]
+        with (
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch("holon_coherence.commands.start._urlopen_no_proxy", side_effect=side_effects) as mock_urlopen,
+            patch("time.sleep") as mock_sleep,
+        ):
+            assert wait_for_proxy_ready(8080) is True
+            assert mock_urlopen.call_count == 3
+            assert mock_sleep.call_count == 2
+
+    def test_wait_for_proxy_ready_fallback_endpoint_on_404(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        http_404 = urllib.error.HTTPError(
+            url="http://127.0.0.1:8080/holon/api/metrics",
+            code=404,
+            msg="Not Found",
+            hdrs=email.message.Message(),
+            fp=None,
+        )
+        with (
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch(
+                "holon_coherence.commands.start._urlopen_no_proxy", side_effect=[http_404, mock_resp]
+            ) as mock_urlopen,
+            patch("time.sleep"),
+        ):
+            assert wait_for_proxy_ready(8080) is True
+            assert mock_urlopen.call_count == 2
+            first_url = mock_urlopen.call_args_list[0][0][0].full_url
+            second_url = mock_urlopen.call_args_list[1][0][0].full_url
+            assert first_url == "http://127.0.0.1:8080/holon/api/metrics"
+            assert second_url == "http://127.0.0.1:8080/_holon/metrics"
 
     def test_wait_for_proxy_ready_fail_fast_when_container_exits(self) -> None:
         with (
-            patch("holon_coherence.cli.is_container_running", return_value=False),
-            patch("holon_coherence.cli.is_port_in_use", return_value=False),
+            patch("holon_coherence.cli.is_container_running", side_effect=[True, False]),
+            patch(
+                "holon_coherence.commands.start._urlopen_no_proxy",
+                side_effect=urllib.error.URLError(ConnectionRefusedError()),
+            ),
+            patch("time.sleep"),
         ):
-            # Should immediately return False without polling up to timeout
             assert wait_for_proxy_ready(8080, timeout=15.0) is False
 
     def test_wait_for_proxy_ready_timeout(self) -> None:
+        clock = [0.0]
+        fake_time = MagicMock()
+        fake_time.time.side_effect = lambda: clock[0]
+        fake_time.sleep.side_effect = lambda s: clock.__setitem__(0, clock[0] + 1.0)
         with (
             patch("holon_coherence.cli.is_container_running", return_value=True),
-            patch("holon_coherence.cli.is_port_in_use", return_value=False),
+            patch(
+                "holon_coherence.commands.start._urlopen_no_proxy",
+                side_effect=urllib.error.URLError(ConnectionRefusedError()),
+            ) as mock_urlopen,
+            patch("holon_coherence.commands.start.time", fake_time),
+        ):
+            assert wait_for_proxy_ready(8080, timeout=3.0) is False
+            assert mock_urlopen.call_count == 3
+            assert fake_time.sleep.call_count == 3
+
+    def test_wait_for_proxy_ready_non_404_http_error_retries_without_fallback(self) -> None:
+        http_503 = urllib.error.HTTPError(
+            url="http://127.0.0.1:8080/holon/api/metrics",
+            code=503,
+            msg="Service Unavailable",
+            hdrs=email.message.Message(),
+            fp=None,
+        )
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        with (
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch(
+                "holon_coherence.commands.start._urlopen_no_proxy", side_effect=[http_503, mock_resp]
+            ) as mock_urlopen,
+            patch("time.sleep") as mock_sleep,
+        ):
+            assert wait_for_proxy_ready(8080) is True
+            assert mock_urlopen.call_count == 2
+            assert mock_urlopen.call_args_list[1][0][0].full_url == "http://127.0.0.1:8080/holon/api/metrics"
+            assert mock_sleep.call_count == 1
+
+    def test_wait_for_proxy_ready_ignores_env_proxy(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_opener = MagicMock()
+        mock_opener.open.return_value = mock_resp
+        with (
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch("urllib.request.build_opener", return_value=mock_opener) as mock_build,
             patch("time.sleep"),
         ):
-            assert wait_for_proxy_ready(8080, timeout=0.001) is False
+            assert wait_for_proxy_ready(8080) is True
+        handler = mock_build.call_args[0][0]
+        assert isinstance(handler, urllib.request.ProxyHandler)
+        assert handler.proxies == {}
 
 
 class TestEnsureDockerImage:
