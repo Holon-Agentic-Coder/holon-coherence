@@ -3309,6 +3309,43 @@ class TestMitmwebInspectorDefaultBean0129:
         assert "--web" not in docker_cmd
         mock_resolve.assert_not_called()
 
+    @pytest.mark.parametrize("env_value", [None, "0"])
+    def test_start_web_password_alone_implies_inspector(
+        self, env_value: str | None, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        if env_value is not None:
+            monkeypatch.setenv("HOLON_COHERENCE_WEB", env_value)
+        docker_cmd, mock_resolve, mock_save = self._host_start(["start", "-d", "--web-password", "pw-secret"])
+
+        assert "127.0.0.1:8081:8081" in docker_cmd
+        assert docker_cmd[-3:] == ["--web", "--web-port", "8081"]
+        mock_resolve.assert_called_once_with("pw-secret")
+        mock_save.assert_called_once_with("tok123")
+        assert "pw-secret" not in capsys.readouterr().err
+
+    def test_start_no_web_with_web_password_warns_without_leaking(self, capsys: pytest.CaptureFixture[str]) -> None:
+        docker_cmd, mock_resolve, mock_save = self._host_start(
+            ["start", "-d", "--no-web", "--web-password", "pw-secret"]
+        )
+
+        assert "--web" not in docker_cmd
+        assert not any(arg.startswith("HOLON_COHERENCE_WEB_PASSWORD=") for arg in docker_cmd)
+        mock_resolve.assert_not_called()
+        mock_save.assert_not_called()
+        captured = capsys.readouterr()
+        assert "--web-password is ignored because --no-web disables the mitmweb inspector" in captured.err
+        assert "pw-secret" not in captured.out + captured.err
+
+    def test_in_container_web_password_alone_runs_mitmweb(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        cmd = self._in_container_start(["start", "--port", "8080", "--web-password", "pw-secret"], monkeypatch)
+        assert cmd[0].endswith("mitmweb")
+
+    def test_web_password_env_var_does_not_imply_inspector(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HOLON_COHERENCE_WEB_PASSWORD", "env-secret")
+        docker_cmd, mock_resolve, _save = self._host_start(["start", "-d"])
+        assert "--web" not in docker_cmd
+        mock_resolve.assert_not_called()
+
     def test_start_web_inspector_port_falls_back(self, capsys: pytest.CaptureFixture[str]) -> None:
         docker_cmd, _resolve, _save = self._host_start(
             ["start", "-d", "--web"], in_use=lambda port, host="127.0.0.1": port == 8081

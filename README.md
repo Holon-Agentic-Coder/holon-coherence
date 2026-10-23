@@ -178,8 +178,9 @@ holon-coherence start -d
 # Opt in to the token-protected mitmweb inspector on 8081 (or set HOLON_COHERENCE_WEB=1 once in your shell)
 holon-coherence start --web
 
-# Start with an explicit inspector token (defaults to HOLON_COHERENCE_WEB_PASSWORD or an auto-generated token)
-holon-coherence start --web-password "custom-secret-key"
+# Start the inspector with an explicit token (defaults to HOLON_COHERENCE_WEB_PASSWORD or an auto-generated token;
+# --web-password alone also enables the inspector, and is ignored with a warning under --no-web)
+holon-coherence start --web --web-password "custom-secret-key"
 
 # Publish the inspector on another host port (falls back to the next free port if occupied)
 holon-coherence start --web --web-port 9090
@@ -412,9 +413,11 @@ at individual flows as they happen, before any aggregation:
   and the upstream server certificate.
 
 **Enabling it.** The inspector is opt-in: pass `--web` to `start`, or set `HOLON_COHERENCE_WEB=1` (also `true`, `yes`,
-`on`) in your shell so every host `start` enables it. `--no-web` overrides the variable for one start. A plain `start`
-runs a headless, mitmdump-only proxy with no inspector port and no token. The background proxies started by
-`holon-coherence run`, `run-agent` and the agent shortcuts (for example `holon-coherence claude`) are always headless.
+`on`) in your shell so every host `start` enables it. `--no-web` overrides the variable for one start. Passing
+`--web-password` on its own also enables the inspector; combined with `--no-web` the password is ignored and `start`
+warns. A plain `start` runs a headless, mitmdump-only proxy with no inspector port and no token. The background proxies
+started by `holon-coherence run`, `run-agent` and the agent shortcuts (for example `holon-coherence claude`) are always
+headless.
 
 > [!IMPORTANT] **Memory trade-off.** mitmweb keeps every captured flow, including request and response bodies, in memory
 > for the life of the process, and mitmproxy 12 has no option to cap that (`view_filter` only hides flows; it does not

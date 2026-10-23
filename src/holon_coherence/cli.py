@@ -238,7 +238,7 @@ def main(argv: list[str] | None = None) -> None:
         "--web-password",
         default=None,
         help="Token protecting the mitmweb inspector (defaults to HOLON_COHERENCE_WEB_PASSWORD or an "
-        "auto-generated token)",
+        "auto-generated token); implies --web unless --no-web is given",
     )
     start_parser.add_argument("-d", "--detach", action="store_true", help="Run Docker container in background")
     start_parser.add_argument(

@@ -120,10 +120,23 @@ def is_web_inspector_enabled(args: Any, in_container: bool) -> bool:
     stays headless (mitmdump only) unless ``--web`` is passed: the Dockerfile ``CMD`` and the
     background ``run`` / ``run-agent`` containers publish no inspector port. The host ``start``
     always passes ``--web`` explicitly when it wants the inspector.
+
+    An explicit ``--web-password`` without ``--web`` / ``--no-web`` implies the inspector, since a
+    password only protects mitmweb and silently dropping it would surprise the operator. With
+    ``--no-web`` the flag still wins and a warning (never the password itself) is printed to stderr.
+    The ``HOLON_COHERENCE_WEB_PASSWORD`` variable implies nothing: a shell profile may export it.
     """
     flag = getattr(args, "web", None)
+    password_given = getattr(args, "web_password", None) is not None
     if flag is not None:
+        if not flag and password_given:
+            print(
+                "⚠️  --web-password is ignored because --no-web disables the mitmweb inspector.",
+                file=sys.stderr,
+            )
         return bool(flag)
+    if password_given:
+        return True
     if in_container:
         return False
     return os.getenv(WEB_INSPECTOR_ENV_VAR, "").lower().strip() in ("1", "true", "yes", "on")
