@@ -1,4 +1,4 @@
-"""Web dashboard token management and credential persistence."""
+"""mitmweb inspector token management and credential persistence."""
 
 from __future__ import annotations
 
@@ -54,14 +54,25 @@ def get_active_web_token(token_path: str = WEB_TOKEN_PATH) -> str | None:
 
 
 def handle_web_token(args: Any = None, token_path: str = WEB_TOKEN_PATH) -> int:
-    """Displays active web dashboard authentication token."""
+    """Displays the active mitmweb inspector token and, when it is running, its resolved URL."""
+    # Imported lazily: docker_ops and endpoints both import this module.
+    from holon_coherence.commands.docker_ops import get_container_mapped_port, get_container_name, is_container_running
+    from holon_coherence.commands.endpoints import INSPECTOR_CONTAINER_PORT, INSPECTOR_LABEL, inspector_url
+
     cli = get_cli()
     tok_getter = getattr(cli, "get_active_web_token", get_active_web_token)
+    is_running = getattr(cli, "is_container_running", is_container_running)
+    get_mapped_port = getattr(cli, "get_container_mapped_port", get_container_mapped_port)
     token = tok_getter(token_path)
     if token:
-        print(f"🔑 Active web dashboard token: {token}")
-        print(f"🌐 Access URL: http://127.0.0.1:8081/?token={token} (or configured --web-port)")
+        print(f"🔑 Active mitmweb inspector token: {token}")
+        name = getattr(args, "name", None) or get_container_name()
+        web_port = get_mapped_port(name, INSPECTOR_CONTAINER_PORT) if is_running(name) else None
+        if web_port is not None:
+            print(f"🌐 {INSPECTOR_LABEL}: {inspector_url(web_port, token)}")
+        else:
+            print("🌐 mitmweb inspector: not running (start the proxy with 'holon-coherence start')")
         return 0
-    print("No active web dashboard session token found.")
-    print("Start the proxy with '--web' to generate one: holon-coherence start --web")
+    print("No active mitmweb inspector token found.")
+    print("Start the proxy with 'holon-coherence start' (the inspector is on by default) to generate one.")
     return 1

@@ -155,12 +155,14 @@ class HybridCacheStore:
         """
         if self.ttl_seconds <= 0:
             return 0
-        now = time.time()
-        if not force and now < self._next_prune_at:
+        # The sweep gate is an in-process interval, so it runs on the monotonic clock; the cutoff is
+        # compared with persisted epoch ``created_at`` values, so it stays on wall-clock time.
+        tick = time.monotonic()
+        if not force and tick < self._next_prune_at:
             return 0
-        self._next_prune_at = now + self.prune_interval_seconds
+        self._next_prune_at = tick + self.prune_interval_seconds
         self._sweep_count += 1
-        cutoff = now - self.ttl_seconds
+        cutoff = time.time() - self.ttl_seconds
         removed = 0
 
         with self._connect() as conn:

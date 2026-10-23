@@ -9,9 +9,16 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from holon_coherence.commands._dispatch import get_cli
 from holon_coherence.commands.docker_ops import (
     get_container_mapped_port,
     get_container_name,
+)
+from holon_coherence.commands.endpoints import (
+    ExposedEndpoints,
+    format_endpoint_rows,
+    format_table_row,
+    resolve_container_endpoints,
 )
 from holon_coherence.commands.start import DEFAULT_PROXY_PORT
 from holon_coherence.metrics_math import (
@@ -239,6 +246,8 @@ def handle_metrics(
     Returns:
         int: Process exit code (0 on success, 1 on failure).
     """
+    container = getattr(args, "name", None) if args is not None else None
+    container = container or get_container_name()
     target_port = getattr(args, "port", None) if args is not None else None
     if target_port is None:
         target_port = port
@@ -250,7 +259,6 @@ def handle_metrics(
             except ValueError:
                 target_port = DEFAULT_PROXY_PORT
         else:
-            container = getattr(args, "name", None) or get_container_name()
             mapped = get_container_mapped_port(container, DEFAULT_PROXY_PORT)
             target_port = mapped if mapped is not None else DEFAULT_PROXY_PORT
 
@@ -287,6 +295,7 @@ def handle_metrics(
         print("  The holon-coherence proxy container is not running.")
         print("  Start it with 'holon-coherence start' or run an agent.")
         print("  (To view historical metrics from wire logs, pass --offline)")
+        print("  mitmweb inspector: not running")
         print("================================================================")
         return 1
 
@@ -318,7 +327,7 @@ def handle_metrics(
             )
         return 1
 
-    # 4. JSON output
+    # 4. JSON output (deliberately endpoint-free, so machine output never carries the inspector token)
     if is_json:
         print(json.dumps(metrics, indent=2))
         return 0
@@ -350,37 +359,42 @@ def handle_metrics(
         provider_cache_rate = (total_cache_read / total_in) if total_in > 0 else 0.0
     provider_cache_pct = provider_cache_rate * 100.0
 
-    def _format_metric_row(label: str, value: str, label_width: int = 28) -> str:
-        return f"  {label:<{label_width}} : {value}"
+    resolve_endpoints = getattr(get_cli(), "resolve_container_endpoints", resolve_container_endpoints)
+    endpoints = resolve_endpoints(container, fallback_proxy_port=target_port)
+    if is_live:
+        # The live proxy answered on target_port, so that is the address to report, even when an
+        # explicit --port points somewhere other than the container's mapping.
+        endpoints = ExposedEndpoints(proxy_port=target_port, web_port=endpoints.web_port, web_token=endpoints.web_token)
 
     print("=" * 64)
     print("              HOLON COHERENCE OPTIMIZATION METRICS")
     print(f"  Source: {source_label}  |  Port: {target_port}")
     print("=" * 64)
-    print(_format_metric_row("Tool Calls Saved / Pruned", f"{tool_calls_pruned:,}"))
-    print(_format_metric_row("Tokens Reduced", f"{tokens_reduced:,} (Chars Saved: {chars_saved:,})"))
-    print(_format_metric_row("Cache Hit Rate", f"{hit_rate_pct:.1f}% ({cache_hits:,} hits / {total_requests:,} total)"))
-    print(_format_metric_row("Average TTFT", f"{avg_ttft:.2f} ms"))
+    print(format_table_row("Tool Calls Saved / Pruned", f"{tool_calls_pruned:,}"))
+    print(format_table_row("Tokens Reduced", f"{tokens_reduced:,} (Chars Saved: {chars_saved:,})"))
+    print(format_table_row("Cache Hit Rate", f"{hit_rate_pct:.1f}% ({cache_hits:,} hits / {total_requests:,} total)"))
+    print(format_table_row("Average TTFT", f"{avg_ttft:.2f} ms"))
     prefill_val = f"{avg_prefill_tps:.2f} tokens/sec (Latest: {latest_prefill_tps:.2f} t/s)"
-    print(_format_metric_row("Prefill Throughput", prefill_val))
+    print(format_table_row("Prefill Throughput", prefill_val))
     if avg_tail_prefill_tps > 0:
-        print(_format_metric_row("Tail Prefill Throughput", f"{avg_tail_prefill_tps:.2f} tokens/sec"))
+        print(format_table_row("Tail Prefill Throughput", f"{avg_tail_prefill_tps:.2f} tokens/sec"))
     decode_suffix = f" (latest: {latest_decode_tps:.2f} t/s)" if latest_decode_tps else ""
     if not decode_samples and avg_decode_tps == 0:
         decode_suffix += "  [no streaming samples yet]"
-    print(_format_metric_row("Decode Throughput", f"{avg_decode_tps:.2f} tokens/sec{decode_suffix}"))
+    print(format_table_row("Decode Throughput", f"{avg_decode_tps:.2f} tokens/sec{decode_suffix}"))
     print("-" * 64)
-    print(_format_metric_row("Total Turns", f"{total_turns:,}"))
+    print(format_table_row("Total Turns", f"{total_turns:,}"))
     req_val = f"{total_requests:,} ({cache_hits:,} cached, {cache_misses:,} upstream)"
-    print(_format_metric_row("Total Requests", req_val))
-    print(_format_metric_row("Total Input Tokens", f"{total_in:,}"))
-    print(_format_metric_row("Total Output Tokens", f"{total_out:,}"))
-    print(_format_metric_row("Cache Read Tokens", f"{total_cache_read:,} ({provider_cache_pct:.1f}% KV hit)"))
+    print(format_table_row("Total Requests", req_val))
+    print(format_table_row("Total Input Tokens", f"{total_in:,}"))
+    print(format_table_row("Total Output Tokens", f"{total_out:,}"))
+    print(format_table_row("Cache Read Tokens", f"{total_cache_read:,} ({provider_cache_pct:.1f}% KV hit)"))
     if total_cache_create > 0:
-        print(_format_metric_row("Cache Write Tokens", f"{total_cache_create:,}"))
+        print(format_table_row("Cache Write Tokens", f"{total_cache_create:,}"))
     if total_reasoning > 0:
-        print(_format_metric_row("Reasoning Tokens", f"{total_reasoning:,}"))
-    print("=" * 64)
-    print(f"Live Web Dashboard: http://127.0.0.1:{target_port}/holon/")
+        print(format_table_row("Reasoning Tokens", f"{total_reasoning:,}"))
+    print("-" * 64)
+    for row in format_endpoint_rows(endpoints):
+        print(row)
     print("=" * 64)
     return 0

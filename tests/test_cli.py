@@ -11,6 +11,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -25,6 +26,7 @@ from holon_coherence.cli import (
     DOCKER_BUILD_TIMEOUT_SECONDS,
     NO_PROXY_HOSTS,
     SUPPORTED_AGENTS,
+    ExposedEndpoints,
     build_agent_env,
     build_proxy_env,
     check_docker_daemon,
@@ -35,6 +37,7 @@ from holon_coherence.cli import (
     execute_interactive_process,
     extract_runner_flags,
     find_system_ca_bundle,
+    format_endpoint_rows,
     get_active_web_token,
     get_or_create_merged_ca_bundle,
     handle_metrics,
@@ -57,6 +60,13 @@ from holon_coherence.cli import (
 from holon_coherence.commands.metrics import _read_offline_metrics
 from holon_coherence.host_local import HOST_LOCAL_ENV_VAR, decode_targets
 from holon_coherence.mitm_addon import CumulativeMetrics
+
+
+@pytest.fixture(autouse=True)
+def _never_persist_real_web_token() -> Iterator[MagicMock]:
+    """A plain host ``start`` now resolves an inspector token; keep it out of the real ~/.holon/web-token."""
+    with patch("holon_coherence.cli.save_web_token") as mock_save:
+        yield mock_save
 
 
 class TestExtractRunnerFlags:
@@ -1470,16 +1480,17 @@ class TestCLIDispatchAndMain:
             web_port_idx = docker_cmd.index("--web-port") + 1
             assert docker_cmd[web_port_idx] == "8081"
 
-    def test_start_command_without_web_flag_omits_web_port(self) -> None:
+    def test_start_command_with_no_web_flag_omits_web_port(self) -> None:
         with (
             patch("holon_coherence.cli.is_in_container", return_value=False),
             patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", return_value=False),
             patch("holon_coherence.cli.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch("subprocess.run") as mock_run,
         ):
-            main(["start", "-d"])
+            main(["start", "-d", "--no-web"])
             assert mock_run.call_count == 2
             docker_cmd = mock_run.call_args_list[1][0][0]
             assert "--web" not in docker_cmd
@@ -1581,7 +1592,7 @@ class TestWaitForProxyReady:
     def test_wait_for_proxy_ready_timeout(self) -> None:
         clock = [0.0]
         fake_time = MagicMock()
-        fake_time.time.side_effect = lambda: clock[0]
+        fake_time.monotonic.side_effect = lambda: clock[0]
         fake_time.sleep.side_effect = lambda s: clock.__setitem__(0, clock[0] + 1.0)
         with (
             patch("holon_coherence.cli.is_container_running", return_value=True),
@@ -1631,6 +1642,83 @@ class TestWaitForProxyReady:
         handler = mock_build.call_args[0][0]
         assert isinstance(handler, urllib.request.ProxyHandler)
         assert handler.proxies == {}
+
+    @staticmethod
+    def _stepping_clock(wall_step: float) -> tuple[MagicMock, list[float], list[float]]:
+        """Fake ``time`` module whose wall clock jumps by ``wall_step`` on the first sleep.
+
+        Both clocks advance 0.25s per poll, as real clocks would; only the wall clock is stepped.
+        A quarter-second tick keeps the monotonic arithmetic exact in binary floating point.
+        """
+        wall = [1_000_000.0]
+        mono = [0.0]
+        fake_time = MagicMock()
+        fake_time.time.side_effect = lambda: wall[0]
+        fake_time.monotonic.side_effect = lambda: mono[0]
+
+        def fake_sleep(_seconds: float) -> None:
+            if fake_time.sleep.call_count == 1:
+                wall[0] += wall_step
+            wall[0] += 0.25
+            mono[0] += 0.25
+
+        fake_time.sleep.side_effect = fake_sleep
+        return fake_time, wall, mono
+
+    def test_wait_for_proxy_ready_backwards_wall_step_does_not_extend(self) -> None:
+        fake_time, _wall, _mono = self._stepping_clock(-3600.0)
+        with (
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch(
+                "holon_coherence.commands.start._urlopen_no_proxy",
+                side_effect=urllib.error.URLError(ConnectionRefusedError()),
+            ) as mock_urlopen,
+            patch("holon_coherence.commands.start.time", fake_time),
+        ):
+            assert wait_for_proxy_ready(8080, timeout=1.0) is False
+        # 1.0s budget at 0.25s per poll: exactly four attempts, regardless of the wall-clock step.
+        assert mock_urlopen.call_count == 4
+        assert fake_time.time.call_count == 0
+
+    def test_wait_for_proxy_ready_forwards_wall_step_does_not_short_circuit(self) -> None:
+        fake_time, _wall, _mono = self._stepping_clock(+3600.0)
+        with (
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch(
+                "holon_coherence.commands.start._urlopen_no_proxy",
+                side_effect=urllib.error.URLError(ConnectionRefusedError()),
+            ) as mock_urlopen,
+            patch("holon_coherence.commands.start.time", fake_time),
+        ):
+            assert wait_for_proxy_ready(8080, timeout=1.0) is False
+        assert mock_urlopen.call_count == 4
+        assert fake_time.time.call_count == 0
+
+    def test_wait_for_proxy_ready_returns_on_first_200_despite_wall_steps(self) -> None:
+        fake_time, wall, _mono = self._stepping_clock(+3600.0)
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        refused = urllib.error.URLError(ConnectionRefusedError("Connection refused"))
+
+        attempts = [0]
+
+        def flaky_open(_req: urllib.request.Request, timeout: float) -> Any:
+            # Step the wall clock backwards on every attempt as well.
+            wall[0] -= 7200.0
+            attempts[0] += 1
+            if attempts[0] <= 2:
+                raise refused
+            return mock_resp
+
+        with (
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch("holon_coherence.commands.start._urlopen_no_proxy", side_effect=flaky_open) as mock_urlopen,
+            patch("holon_coherence.commands.start.time", fake_time),
+        ):
+            assert wait_for_proxy_ready(8080, timeout=15.0) is True
+        assert mock_urlopen.call_count == 3
+        assert fake_time.sleep.call_count == 2
+        assert fake_time.time.call_count == 0
 
 
 class TestEnsureDockerImage:
@@ -2479,13 +2567,14 @@ class TestWebTokenAndDashboardAuth:
     def test_status_command_displays_web_token(self, capsys: pytest.CaptureFixture[str]) -> None:
         with (
             patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch("holon_coherence.cli.get_container_mapped_port", side_effect=lambda _name, port: port),
             patch("holon_coherence.cli.get_active_web_token", return_value="active-session-tok"),
             patch("subprocess.run", return_value=MagicMock(returncode=0)),
+            patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")),
         ):
             main(["status"])
             captured = capsys.readouterr()
-            assert "active-session-tok" in captured.out
-            assert "Web Dashboard Token:" in captured.out
+            assert "mitmweb Req/Resp Inspector   : http://127.0.0.1:8081/?token=active-session-tok" in captured.out
 
     def test_status_command_when_down_displays_explicit_indicator(self, capsys: pytest.CaptureFixture[str]) -> None:
         with (
@@ -2510,22 +2599,28 @@ class TestWebTokenAndDashboardAuth:
         # Token exists: web-token
         with (
             patch("holon_coherence.cli.get_active_web_token", return_value="existing-key-999"),
+            patch("holon_coherence.cli.is_container_running", return_value=False),
             pytest.raises(SystemExit) as exc,
         ):
             main(["web-token"])
         assert exc.value.code == 0
         captured = capsys.readouterr()
-        assert "Active web dashboard token: existing-key-999" in captured.out
+        assert "Active mitmweb inspector token: existing-key-999" in captured.out
+        assert "mitmweb inspector: not running" in captured.out
+        assert "?token=" not in captured.out
 
         # Token exists: web-key alias
         with (
             patch("holon_coherence.cli.get_active_web_token", return_value="existing-key-999"),
+            patch("holon_coherence.cli.is_container_running", return_value=False),
             pytest.raises(SystemExit) as exc,
         ):
             main(["web-key"])
         assert exc.value.code == 0
         captured = capsys.readouterr()
-        assert "Active web dashboard token: existing-key-999" in captured.out
+        assert "Active mitmweb inspector token: existing-key-999" in captured.out
+        assert "mitmweb inspector: not running" in captured.out
+        assert "?token=" not in captured.out
 
         # Token missing
         with (
@@ -2535,11 +2630,17 @@ class TestWebTokenAndDashboardAuth:
             main(["web-token"])
         assert exc.value.code == 1
         captured = capsys.readouterr()
-        assert "No active web dashboard session token found" in captured.out
+        assert "No active mitmweb inspector token found" in captured.out
 
 
 class TestCLIMetricsCommand:
     """Tests for holon-coherence metrics command and status integration (Bean 0043)."""
+
+    @pytest.fixture(autouse=True)
+    def _no_docker_queries(self) -> Iterator[None]:
+        """Endpoint rows query Docker for the container's ports; these tests run with no container."""
+        with patch("holon_coherence.cli.is_container_running", return_value=False):
+            yield
 
     def test_handle_metrics_live_formatted(self, capsys: pytest.CaptureFixture[str]) -> None:
         mock_payload = json.dumps(
@@ -3104,3 +3205,293 @@ class TestOfflineTelemetryThroughputBean0097:
         ]
         for key in shared_keys:
             assert offline[key] == live_dict[key], f"{key}: offline={offline[key]} live={live_dict[key]}"
+
+
+def _free_ports(port: int, host: str = "127.0.0.1") -> bool:
+    return False
+
+
+class TestMitmwebInspectorDefaultBean0129:
+    """A plain host ``start`` exposes the token-protected mitmweb inspector; ``--no-web`` opts out."""
+
+    @staticmethod
+    def _host_start(
+        argv: list[str],
+        in_use: Any = _free_ports,
+        token: str = "tok123",
+    ) -> tuple[list[str], MagicMock, MagicMock]:
+        with (
+            patch("holon_coherence.cli.is_in_container", return_value=False),
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", side_effect=in_use),
+            patch("holon_coherence.cli.resolve_web_password", return_value=token) as mock_resolve,
+            patch("holon_coherence.cli.save_web_token") as mock_save,
+            patch("holon_coherence.cli.ensure_docker_image"),
+            patch("os.makedirs"),
+            patch("os.path.exists", return_value=True),
+            patch("subprocess.run") as mock_run,
+        ):
+            main(argv)
+        return mock_run.call_args_list[-1][0][0], mock_resolve, mock_save
+
+    @staticmethod
+    def _in_container_start(argv: list[str], monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        launched: list[list[str]] = []
+
+        def fake_run(cmd: list[str], *args: Any, **kwargs: Any) -> MagicMock:
+            launched.append(list(cmd))
+            return MagicMock(returncode=0)
+
+        monkeypatch.setattr("holon_coherence.cli.is_in_container", lambda: True)
+        with (
+            patch("holon_coherence.cli.resolve_web_password", return_value="tok123"),
+            patch("subprocess.run", side_effect=fake_run),
+        ):
+            main(argv)
+        assert len(launched) == 1, "no Docker command may run inside the container"
+        return launched[0]
+
+    def test_start_default_selects_mitmweb_and_passes_token(self) -> None:
+        docker_cmd, mock_resolve, mock_save = self._host_start(["start", "-d"])
+
+        assert "127.0.0.1:8081:8081" in docker_cmd
+        assert "HOLON_COHERENCE_WEB_PASSWORD=tok123" in docker_cmd
+        tail = docker_cmd[docker_cmd.index("holon-coherence:latest") :]
+        assert tail == ["holon-coherence:latest", "start", "--port", "8080", "--web", "--web-port", "8081"]
+        mock_resolve.assert_called_once_with(None)
+        mock_save.assert_called_once_with("tok123")
+
+    def test_start_default_binds_inspector_to_loopback_only(self) -> None:
+        docker_cmd, _resolve, _save = self._host_start(["start", "-d"])
+        mappings = [docker_cmd[i + 1] for i, arg in enumerate(docker_cmd) if arg == "-p"]
+        assert mappings and all(mapping.startswith("127.0.0.1:") for mapping in mappings)
+
+    def test_start_no_web_selects_mitmdump(self) -> None:
+        docker_cmd, mock_resolve, mock_save = self._host_start(["start", "-d", "--no-web"])
+
+        assert not any(arg.endswith(":8081") for arg in docker_cmd)
+        assert not any(arg.startswith("HOLON_COHERENCE_WEB_PASSWORD=") for arg in docker_cmd)
+        tail = docker_cmd[docker_cmd.index("holon-coherence:latest") :]
+        assert tail == ["holon-coherence:latest", "start", "--port", "8080"]
+        mock_resolve.assert_not_called()
+        mock_save.assert_not_called()
+
+    def test_start_default_inspector_port_falls_back(self, capsys: pytest.CaptureFixture[str]) -> None:
+        docker_cmd, _resolve, _save = self._host_start(
+            ["start", "-d"], in_use=lambda port, host="127.0.0.1": port == 8081
+        )
+
+        assert "127.0.0.1:8082:8081" in docker_cmd
+        assert "127.0.0.1:8080:8080" in docker_cmd
+        out = capsys.readouterr().out
+        assert "Mapping mitmweb inspector to host port 8082 instead." in out
+        assert "http://127.0.0.1:8082/?token=tok123" in out
+
+    def test_start_custom_inspector_port_falls_back(self) -> None:
+        docker_cmd, _resolve, _save = self._host_start(
+            ["start", "-d", "--web-port", "9090"], in_use=lambda port, host="127.0.0.1": port == 9090
+        )
+        assert "127.0.0.1:9091:8081" in docker_cmd
+
+    def test_start_inspector_fallback_skips_local_llm_port(self) -> None:
+        docker_cmd, _resolve, _save = self._host_start(
+            ["start", "-d", "--local-llm-base", "localhost:8082"],
+            in_use=lambda port, host="127.0.0.1": port == 8081,
+        )
+        assert "127.0.0.1:8083:8081" in docker_cmd
+        assert not any(arg == "127.0.0.1:8082:8081" for arg in docker_cmd)
+
+    def test_start_inspector_never_lands_on_the_requested_local_llm_port(self) -> None:
+        docker_cmd, _resolve, _save = self._host_start(["start", "-d", "--local-llm-base", "localhost:8081"])
+        assert "127.0.0.1:8082:8081" in docker_cmd
+
+    def test_start_prints_all_endpoints(self, capsys: pytest.CaptureFixture[str]) -> None:
+        self._host_start(["start", "-d"])
+        out = capsys.readouterr().out
+        assert "Proxy Listen Address         : 127.0.0.1:8080" in out
+        assert "Coherence Live Dashboard     : http://127.0.0.1:8080/holon/" in out
+        assert "mitmweb Req/Resp Inspector   : http://127.0.0.1:8081/?token=tok123" in out
+        assert "Web API Key" not in out
+
+    def test_start_no_web_reports_inspector_not_running(self, capsys: pytest.CaptureFixture[str]) -> None:
+        self._host_start(["start", "-d", "--no-web"])
+        out = capsys.readouterr().out
+        assert "Proxy Listen Address         : 127.0.0.1:8080" in out
+        assert "mitmweb Req/Resp Inspector   : not running (headless start or --no-web)" in out
+        assert "?token=" not in out
+
+    def test_in_container_web_runs_mitmweb_with_password_without_printing_it(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        cmd = self._in_container_start(["start", "--port", "8080", "--web", "--web-port", "8081"], monkeypatch)
+
+        assert cmd[0].endswith("mitmweb")
+        assert cmd[cmd.index("--web-host") + 1] == "0.0.0.0"
+        assert cmd[cmd.index("--web-port") + 1] == "8081"
+        set_values = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--set"]
+        assert "web_password=tok123" in set_values
+        assert "web_open_browser=false" in set_values
+        # In-container stdout is kept by `docker logs`; the raw token must never reach it.
+        out = capsys.readouterr().out
+        assert "tok123" not in out
+        assert "mitmweb inspector listening on container port 8081" in out
+
+    def test_in_container_no_web_runs_mitmdump(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        cmd = self._in_container_start(["start", "--port", "8080", "--no-web"], monkeypatch)
+        assert cmd[0].endswith("mitmdump")
+        assert not any("web_password" in arg for arg in cmd)
+
+    def test_in_container_default_stays_headless(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The Dockerfile CMD and run/run-agent containers publish no inspector port."""
+        cmd = self._in_container_start(["start", "--port", "8080"], monkeypatch)
+        assert cmd[0].endswith("mitmdump")
+        assert "--web-port" not in cmd
+
+    def test_ensure_proxy_running_stays_headless(self) -> None:
+        with (
+            patch("holon_coherence.cli.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.cli.is_port_in_use", return_value=False),
+            patch("holon_coherence.cli.is_container_running", return_value=False),
+            patch("holon_coherence.cli.resolve_web_password") as mock_resolve,
+            patch("os.makedirs"),
+            patch("os.path.exists", return_value=True),
+            patch("subprocess.run", return_value=MagicMock(returncode=0)) as mock_run,
+            patch("holon_coherence.cli.wait_for_proxy_ready", return_value=True),
+        ):
+            assert ensure_proxy_running(port=8080) is True
+        docker_cmd = mock_run.call_args_list[-1][0][0]
+        assert "--web" not in docker_cmd
+        assert not any(arg.endswith(":8081") for arg in docker_cmd)
+        assert not any(arg.startswith("HOLON_COHERENCE_WEB_PASSWORD=") for arg in docker_cmd)
+        mock_resolve.assert_not_called()
+
+
+class TestEndpointReportingBean0129:
+    """``status``, ``metrics`` and ``web-token`` report the resolved endpoints, never a stale URL."""
+
+    @staticmethod
+    def _mapped_ports(mapping: dict[int, int | None]) -> Any:
+        return lambda _name, container_port: mapping.get(container_port)
+
+    def test_format_endpoint_rows_alignment(self) -> None:
+        rows = format_endpoint_rows(ExposedEndpoints(proxy_port=8080, web_port=8081, web_token="tok"))
+        assert rows == [
+            "  Proxy Listen Address         : 127.0.0.1:8080",
+            "  Coherence Live Dashboard     : http://127.0.0.1:8080/holon/",
+            "  mitmweb Req/Resp Inspector   : http://127.0.0.1:8081/?token=tok",
+        ]
+
+    def test_format_endpoint_rows_without_token_gives_a_hint_not_a_url(self) -> None:
+        rows = format_endpoint_rows(ExposedEndpoints(proxy_port=8080, web_port=8081, web_token=None))
+        assert "?token=" not in rows[2]
+        assert "running on 127.0.0.1:8081 (token unavailable; run 'holon-coherence web-token')" in rows[2]
+
+    def test_format_endpoint_rows_when_down(self) -> None:
+        rows = format_endpoint_rows(ExposedEndpoints(proxy_port=None, web_port=None, web_token="stale"))
+        assert all(row.endswith(": not running") for row in rows)
+
+    def test_status_prints_all_endpoints_when_running(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch(
+                "holon_coherence.cli.get_container_mapped_port",
+                side_effect=self._mapped_ports({8080: 8080, 8081: 8082}),
+            ),
+            patch("holon_coherence.cli.get_active_web_token", return_value="tok"),
+            patch("subprocess.run", return_value=MagicMock(returncode=0)),
+            patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")),
+        ):
+            main(["status"])
+        out = capsys.readouterr().out
+        assert "Proxy Listen Address         : 127.0.0.1:8080" in out
+        assert "Coherence Live Dashboard     : http://127.0.0.1:8080/holon/" in out
+        assert "mitmweb Req/Resp Inspector   : http://127.0.0.1:8082/?token=tok" in out
+
+    def test_status_reports_inspector_not_running_without_stale_url(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("holon_coherence.cli.is_container_running", return_value=False),
+            patch("holon_coherence.cli.get_active_web_token", return_value="stale-token"),
+            patch("subprocess.run", return_value=MagicMock(returncode=0)),
+        ):
+            main(["status"])
+        out = capsys.readouterr().out
+        assert "mitmweb inspector: not running" in out
+        assert "?token=" not in out
+        assert "stale-token" not in out
+
+    def test_status_headless_container_reports_inspector_not_running(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch("holon_coherence.cli.get_container_mapped_port", side_effect=self._mapped_ports({8080: 8080})),
+            patch("holon_coherence.cli.get_active_web_token", return_value="stale-token"),
+            patch("subprocess.run", return_value=MagicMock(returncode=0)),
+            patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")),
+        ):
+            main(["status"])
+        out = capsys.readouterr().out
+        assert "Proxy Listen Address         : 127.0.0.1:8080" in out
+        assert "mitmweb Req/Resp Inspector   : not running (headless start or --no-web)" in out
+        assert "stale-token" not in out
+
+    @staticmethod
+    def _empty_metrics_response() -> MagicMock:
+        # Transport fixture only: zero counters exercise the table layout, no figures are asserted.
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = json.dumps({}).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+        return mock_resp
+
+    def test_metrics_table_prints_all_endpoints(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("urllib.request.urlopen", return_value=self._empty_metrics_response()),
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch(
+                "holon_coherence.cli.get_container_mapped_port",
+                side_effect=self._mapped_ports({8080: 8080, 8081: 8083}),
+            ),
+            patch("holon_coherence.cli.get_active_web_token", return_value="tok"),
+        ):
+            assert handle_metrics(port=9000) == 0
+        out = capsys.readouterr().out
+        # An explicit --port is honoured for the proxy rows; the inspector comes from the container.
+        assert "Proxy Listen Address         : 127.0.0.1:9000" in out
+        assert "Coherence Live Dashboard     : http://127.0.0.1:9000/holon/" in out
+        assert "mitmweb Req/Resp Inspector   : http://127.0.0.1:8083/?token=tok" in out
+
+    def test_metrics_json_does_not_include_token(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("urllib.request.urlopen", return_value=self._empty_metrics_response()),
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch(
+                "holon_coherence.cli.get_container_mapped_port",
+                side_effect=self._mapped_ports({8080: 8080, 8081: 8081}),
+            ),
+            patch("holon_coherence.cli.get_active_web_token", return_value="tok-secret"),
+        ):
+            assert handle_metrics(port=8080, json_output=True) == 0
+        out = capsys.readouterr().out
+        assert "tok-secret" not in out
+        assert json.loads(out) == {}
+
+    def test_metrics_down_reports_inspector_not_running(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")),
+            patch("holon_coherence.cli.get_active_web_token", return_value="stale-token"),
+        ):
+            assert handle_metrics(port=8080) == 1
+        out = capsys.readouterr().out
+        assert "PROXY STATUS: DOWN" in out
+        assert "mitmweb inspector: not running" in out
+        assert "stale-token" not in out
+
+    def test_web_token_prints_resolved_inspector_url(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("holon_coherence.cli.get_active_web_token", return_value="tok"),
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch("holon_coherence.cli.get_container_mapped_port", side_effect=self._mapped_ports({8081: 8084})),
+            pytest.raises(SystemExit) as exc,
+        ):
+            main(["web-token"])
+        assert exc.value.code == 0
+        assert "mitmweb Req/Resp Inspector: http://127.0.0.1:8084/?token=tok" in capsys.readouterr().out

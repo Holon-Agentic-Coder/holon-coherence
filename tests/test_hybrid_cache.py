@@ -4,6 +4,7 @@ import json
 import sqlite3
 import threading
 import time
+from unittest.mock import patch
 
 import pytest
 
@@ -306,3 +307,16 @@ def test_ttl_zero_disables_expiry_entirely(tmp_path) -> None:
 
     assert store.get(_payload("refactor the parser"), provider="openai") == {"content": "kept"}
     assert store._prune_expired(force=True) == 0
+
+
+def test_sweep_gate_ignores_wall_clock_steps(tmp_path) -> None:
+    """The sweep interval is a duration: a forward wall-clock jump must not trigger extra sweeps."""
+    store = HybridCacheStore(cache_dir=str(tmp_path), ttl_seconds=60, prune_interval_seconds=600)
+    store.put(_payload("first shared words"), {"content": "1"}, provider="openai")
+    assert store._sweep_count == 1
+
+    real_time = time.time
+    with patch("holon_coherence.hybrid_cache.time.time", side_effect=lambda: real_time() + 86_400.0):
+        store.put(_payload("second shared words"), {"content": "2"}, provider="openai")
+
+    assert store._sweep_count == 1, "a wall-clock step must not reopen the monotonic sweep gate"

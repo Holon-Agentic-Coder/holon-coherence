@@ -24,6 +24,7 @@ from holon_coherence.commands.docker_ops import (
     is_container_running,
     stop_proxy_container,
 )
+from holon_coherence.commands.endpoints import ExposedEndpoints, print_endpoints
 from holon_coherence.commands.runner import merge_no_proxy_values
 from holon_coherence.commands.web_token import resolve_web_password, save_web_token
 from holon_coherence.host_local import (
@@ -40,6 +41,7 @@ from holon_coherence.host_local import (
 )
 
 DEFAULT_PROXY_PORT = 8080
+DEFAULT_WEB_PORT = 8081
 PROXY_READY_TIMEOUT_SECONDS = 15.0
 PROXY_POLL_INTERVAL_SECONDS = 0.2
 
@@ -102,6 +104,21 @@ def is_in_container() -> bool:
     return os.path.exists("/.dockerenv") or os.environ.get("HOLON_IN_CONTAINER") == "1"
 
 
+def is_web_inspector_enabled(args: Any, in_container: bool) -> bool:
+    """Decide whether ``start`` launches the mitmweb inspector (Bean 0129).
+
+    An explicit ``--web`` / ``--no-web`` always wins. Without either, a host start exposes the
+    inspector by default, while the in-container entrypoint stays headless (mitmdump only): the
+    Dockerfile ``CMD`` and the background ``run`` / ``run-agent`` containers publish no inspector
+    port, so a mitmweb there would be unreachable and its token never shown to anyone. The host
+    ``start`` always passes ``--web`` explicitly when it wants the inspector.
+    """
+    flag = getattr(args, "web", None)
+    if flag is None:
+        return not in_container
+    return bool(flag)
+
+
 def is_start_passive(passive_flag: bool = False) -> bool:
     """Return True if proxy should run in passive monitoring mode (baseline)."""
     if passive_flag:
@@ -147,16 +164,20 @@ def _urlopen_no_proxy(req: urllib.request.Request, timeout: float) -> Any:
 def wait_for_proxy_ready(
     port: int, timeout: float = PROXY_READY_TIMEOUT_SECONDS, container_name: str | None = None
 ) -> bool:
-    """Poll the proxy HTTP metrics endpoint until it returns HTTP 200 or timeout occurs."""
+    """Poll the proxy HTTP metrics endpoint until it returns HTTP 200 or timeout occurs.
+
+    ``timeout`` is a duration measured on the monotonic clock, so a wall-clock step (NTP
+    correction, VM resume, a manual ``date``) can neither stretch nor cut short the cold-start wait.
+    """
     cli = get_cli()
     is_running = getattr(cli, "is_container_running", is_container_running)
     name = container_name or get_container_name()
-    deadline = time.time() + timeout
+    deadline = time.monotonic() + timeout
     candidate_urls = (
         f"http://127.0.0.1:{port}/holon/api/metrics",
         f"http://127.0.0.1:{port}/_holon/metrics",
     )
-    while time.time() < deadline:
+    while time.monotonic() < deadline:
         if not is_running(name):
             return False
 
@@ -497,6 +518,8 @@ def ensure_proxy_running(
         f"HOLON_PASSIVE_MONITORING={'1' if is_start_passive() else '0'}",
         *get_host_local_args(host_local_spec),
         image,
+        # No --web: the in-container start defaults to headless mitmdump, so `run` / `run-agent`
+        # proxies publish no inspector port and generate no token (see is_web_inspector_enabled).
         "start",
         "--port",
         "8080",
@@ -534,6 +557,7 @@ def handle_start(args: Any) -> None:
     save_tok = getattr(cli, "save_web_token", save_web_token)
 
     start_host_local_spec = os.environ.get(HOST_LOCAL_ENV_VAR, "").strip()
+    start_route: LocalLlmRoute | None = None
     if getattr(args, "local_llm_base", None):
         start_route = plan_route(args.local_llm_base)
         if start_route is None:
@@ -559,13 +583,13 @@ def handle_start(args: Any) -> None:
         os.environ[HOST_LOCAL_ENV_VAR] = start_host_local_spec
         pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         addon_path = os.path.join(pkg_dir, "mitm_addon.py")
-        tool = "mitmweb" if args.web else "mitmdump"
+        web_enabled = is_web_inspector_enabled(args, in_container=True)
+        tool = "mitmweb" if web_enabled else "mitmdump"
         tool_candidate = os.path.join(os.path.dirname(sys.executable), tool)
         tool_path = tool_candidate if os.path.isfile(tool_candidate) else (shutil.which(tool) or tool)
 
         cmd = [tool_path, "-s", addon_path, "--listen-port", str(args.port)]
-        web_password = None
-        if args.web:
+        if web_enabled:
             web_password = resolve_pwd(getattr(args, "web_password", None))
             save_tok(web_password)
             cmd.extend(
@@ -576,12 +600,18 @@ def handle_start(args: Any) -> None:
                     str(args.web_port),
                     "--set",
                     f"web_password={web_password}",
+                    "--set",
+                    "web_open_browser=false",
                 ]
             )
         print(f"🚀 Starting holon-coherence proxy via {tool} on port {args.port}...")
-        if args.web and web_password:
-            print(f"🌐 Web dashboard exposed at http://127.0.0.1:{args.web_port}/?token={web_password}")
-            print(f"🔑 Web API Key / Password: {web_password}")
+        if web_enabled:
+            # This stdout is kept by `docker logs`, so the token is never printed here; the host-side
+            # `start`, `status` and `web-token` commands show the full URL on the user's terminal.
+            print(
+                f"🌐 mitmweb inspector listening on container port {args.web_port} (token hidden; run "
+                "'holon-coherence web-token' or 'holon-coherence status' on the host for the full URL)"
+            )
         try:
             subprocess.run(cmd, check=True)
         except KeyboardInterrupt:
@@ -649,21 +679,28 @@ def handle_start(args: Any) -> None:
         *get_host_local_args(start_host_local_spec),
     ]
 
+    # mitmweb inspector (on by default for host starts; --no-web keeps the container headless)
+    web_enabled = is_web_inspector_enabled(args, in_container=False)
     web_password = None
-    actual_web_port = getattr(args, "web_port", 8081)
-    if args.web:
+    requested_web_port = getattr(args, "web_port", DEFAULT_WEB_PORT)
+    actual_web_port: int | None = None
+    if web_enabled:
         web_password = resolve_pwd(getattr(args, "web_password", None))
         save_tok(web_password)
-        if in_use(actual_web_port) or actual_web_port == actual_proxy_port:
-            candidate_start = actual_web_port + 1
-            actual_web_port = find_port(candidate_start)
-            while actual_web_port == actual_proxy_port or in_use(actual_web_port):
+        # Never hand the inspector a port the proxy or a host-local model server already owns.
+        reserved_ports = {actual_proxy_port}
+        if start_route is not None and start_route.target.port is not None:
+            reserved_ports.add(start_route.target.port)
+        actual_web_port = requested_web_port
+        if actual_web_port in reserved_ports or in_use(actual_web_port):
+            actual_web_port = find_port(actual_web_port + 1)
+            while actual_web_port in reserved_ports or in_use(actual_web_port):
                 actual_web_port = find_port(actual_web_port + 1)
             print(
-                f"⚠️  Port {args.web_port} is already in use on host. "
-                f"Mapping web dashboard to host port {actual_web_port} instead."
+                f"⚠️  Port {requested_web_port} is unavailable on host (in use, or taken by the proxy or the "
+                f"local LLM endpoint). Mapping mitmweb inspector to host port {actual_web_port} instead."
             )
-        docker_cmd.extend(["-p", f"127.0.0.1:{actual_web_port}:8081"])
+        docker_cmd.extend(["-p", f"127.0.0.1:{actual_web_port}:{DEFAULT_WEB_PORT}"])
         docker_cmd.extend(["-e", f"HOLON_COHERENCE_WEB_PASSWORD={web_password}"])
 
     if args.detach:
@@ -673,13 +710,12 @@ def handle_start(args: Any) -> None:
 
     docker_cmd.append(args.image)
     docker_cmd.extend(["start", "--port", "8080"])
-    if args.web:
-        docker_cmd.extend(["--web", "--web-port", "8081"])
+    if web_enabled:
+        docker_cmd.extend(["--web", "--web-port", str(DEFAULT_WEB_PORT)])
 
     print(f"🐳 Starting holon-coherence proxy via Docker container on port {actual_proxy_port}...")
-    if args.web and web_password:
-        print(f"🌐 Web dashboard exposed at http://127.0.0.1:{actual_web_port}/?token={web_password}")
-        print(f"🔑 Web API Key / Password: {web_password}")
+    # Host terminal only: this process is not captured by `docker logs` or the wire logs.
+    print_endpoints(ExposedEndpoints(proxy_port=actual_proxy_port, web_port=actual_web_port, web_token=web_password))
 
     if args.detach:
         try:
@@ -689,7 +725,7 @@ def handle_start(args: Any) -> None:
         except subprocess.CalledProcessError as e:
             print(
                 f"❌ Error: Failed to start Docker container on ports "
-                f"(proxy={actual_proxy_port}, web={actual_web_port if args.web else 'N/A'}): {e}",
+                f"(proxy={actual_proxy_port}, web={actual_web_port if web_enabled else 'N/A'}): {e}",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -699,7 +735,7 @@ def handle_start(args: Any) -> None:
         except subprocess.CalledProcessError as e:
             print(
                 f"❌ Error: Failed to start Docker container on ports "
-                f"(proxy={actual_proxy_port}, web={actual_web_port if args.web else 'N/A'}): {e}",
+                f"(proxy={actual_proxy_port}, web={actual_web_port if web_enabled else 'N/A'}): {e}",
                 file=sys.stderr,
             )
             sys.exit(1)

@@ -226,7 +226,9 @@ that appends full transaction details to `${WIRE_LOG_DIR}/turn_{turn_id}_{flow_i
 
 #### Interactive Development (`mitmweb`)
 
-For local development and real-time request inspection, expose `mitmweb` with the web interface on port `8081`:
+For local development and real-time request inspection, expose `mitmweb` with the web interface on port `8081`.
+`holon-coherence start` does this by default (token-protected, with port fallback; `--no-web` opts out). The manual
+invocation below is the equivalent without the CLI:
 
 ```bash
 # Obtain repository root to ensure mounts are directory-agnostic

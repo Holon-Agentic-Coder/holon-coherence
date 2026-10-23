@@ -12,7 +12,6 @@ import urllib.request
 from typing import Any
 
 from holon_coherence.commands._dispatch import get_cli
-from holon_coherence.commands.web_token import get_active_web_token
 
 DEFAULT_CONTAINER_NAME = "holon-coherence-proxy"
 CONTAINER_NAME = DEFAULT_CONTAINER_NAME
@@ -273,32 +272,32 @@ def handle_status(args: Any = None) -> int:
     is_default = target_container in (DEFAULT_CONTAINER_NAME, "holon-coherence")
     display_name = "holon-coherence" if is_default else target_container
     cli = get_cli()
+    # Imported lazily: the endpoints helper imports this module.
+    from holon_coherence.commands.endpoints import print_endpoints, resolve_container_endpoints
+
     is_running = getattr(cli, "is_container_running", is_container_running)
-    get_token = getattr(cli, "get_active_web_token", get_active_web_token)
-    get_mapped_port = getattr(cli, "get_container_mapped_port", get_container_mapped_port)
+    resolve_endpoints = getattr(cli, "resolve_container_endpoints", resolve_container_endpoints)
     try:
         res = subprocess.run(["docker", "ps", "-a", "--filter", f"name=^{target_container}$"])
         retcode = res.returncode
     except (subprocess.SubprocessError, OSError):
         retcode = 1
-    token = get_token()
 
     if not is_running(target_container):
         print(f"\n🔴 {display_name} is down (not running).")
+        # Never echo ~/.holon/web-token here: it outlives the container and would be a stale URL.
+        print("   mitmweb inspector: not running")
         return retcode
 
-    web_port = get_mapped_port(target_container, 8081)
-    if token and web_port:
-        print(f"\n🔑 Web Dashboard Token: {token}")
-        print(f"🌐 Access URL: http://127.0.0.1:{web_port}/?token={token}")
-
-    proxy_port = get_mapped_port(target_container, 8080)
-    if proxy_port is None:
-        proxy_port_str = os.getenv("HOLON_PROXY_PORT", "8080")
-        try:
-            proxy_port = int(proxy_port_str)
-        except ValueError:
-            proxy_port = 8080
+    proxy_port_str = os.getenv("HOLON_PROXY_PORT", "8080")
+    try:
+        fallback_proxy_port = int(proxy_port_str)
+    except ValueError:
+        fallback_proxy_port = 8080
+    endpoints = resolve_endpoints(target_container, fallback_proxy_port=fallback_proxy_port)
+    proxy_port = endpoints.proxy_port or fallback_proxy_port
+    print()
+    print_endpoints(endpoints)
 
     try:
         req = urllib.request.Request(
@@ -318,7 +317,6 @@ def handle_status(args: Any = None) -> int:
                     f"   Tool Calls Saved: {pruned:,} | Tokens Reduced: {reduced:,} | "
                     f"Cache Hit Rate: {hit_rate:.1f}% | Prefill: {prefill_tps:.1f} t/s | Output: {tps:.1f} t/s"
                 )
-                print(f"   🌐 Live Dashboard: http://127.0.0.1:{proxy_port}/holon/")
     except Exception:
         pass
     return retcode

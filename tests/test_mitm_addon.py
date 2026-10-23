@@ -28,6 +28,7 @@ from holon_coherence.mitm_addon import (
     normalize_anthropic_request,
     render_dashboard_html,
     resolve_flow_timing,
+    scrub_string,
     translate_gemini_to_openai_request,
     translate_openai_sse_chunk_to_gemini,
     translate_openai_to_gemini_response,
@@ -870,3 +871,10 @@ class TestTelemetryThroughputBean0097:
         assert positive_rate(None) is None
         assert format_rate(None) == UNMEASURED
         assert format_rate(12.3456, 2) == "12.35"
+
+
+def test_scrub_string_redacts_mitmweb_inspector_token() -> None:
+    """Bean 0129: an inspector URL that ever lands in a logged request or response is redacted."""
+    scrubbed = scrub_string("GET http://127.0.0.1:8081/?token=abcDEF123 HTTP/1.1")
+    assert "abcDEF123" not in scrubbed
+    assert "?token=[REDACTED]" in scrubbed
