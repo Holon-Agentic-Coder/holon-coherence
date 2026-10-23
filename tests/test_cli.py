@@ -2613,7 +2613,9 @@ class TestWebTokenAndDashboardAuth:
             main(["web-token"])
         assert exc.value.code == 0
         captured = capsys.readouterr()
-        assert "Active mitmweb inspector token: existing-key-999" in captured.out
+        assert "Last saved mitmweb inspector token" in captured.out
+        assert "existing-key-999" in captured.out
+        assert "Active mitmweb inspector token" not in captured.out
         assert "mitmweb inspector: not running" in captured.out
         assert "?token=" not in captured.out
 
@@ -2626,7 +2628,9 @@ class TestWebTokenAndDashboardAuth:
             main(["web-key"])
         assert exc.value.code == 0
         captured = capsys.readouterr()
-        assert "Active mitmweb inspector token: existing-key-999" in captured.out
+        assert "Last saved mitmweb inspector token" in captured.out
+        assert "existing-key-999" in captured.out
+        assert "Active mitmweb inspector token" not in captured.out
         assert "mitmweb inspector: not running" in captured.out
         assert "?token=" not in captured.out
 

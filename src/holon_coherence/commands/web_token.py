@@ -8,6 +8,18 @@ import secrets
 from typing import Any
 
 from holon_coherence.commands._dispatch import get_cli
+from holon_coherence.commands.docker_ops import (
+    get_container_mapped_port,
+    get_container_name,
+    get_container_web_token,
+    is_container_running,
+)
+from holon_coherence.commands.endpoints import (
+    INSPECTOR_CONTAINER_PORT,
+    INSPECTOR_LABEL,
+    inspector_url,
+    token_recovery_command,
+)
 
 WEB_TOKEN_PATH = os.path.expanduser("~/.holon/web-token")
 
@@ -55,20 +67,6 @@ def get_active_web_token(token_path: str = WEB_TOKEN_PATH) -> str | None:
 
 def handle_web_token(args: Any = None, token_path: str = WEB_TOKEN_PATH) -> int:
     """Displays the active mitmweb inspector token and, when it is running, its resolved URL."""
-    # Imported lazily: docker_ops and endpoints both import this module.
-    from holon_coherence.commands.docker_ops import (
-        get_container_mapped_port,
-        get_container_name,
-        get_container_web_token,
-        is_container_running,
-    )
-    from holon_coherence.commands.endpoints import (
-        INSPECTOR_CONTAINER_PORT,
-        INSPECTOR_LABEL,
-        inspector_url,
-        token_recovery_command,
-    )
-
     cli = get_cli()
     tok_getter = getattr(cli, "get_active_web_token", get_active_web_token)
     container_tok_getter = getattr(cli, "get_container_web_token", get_container_web_token)
@@ -88,7 +86,7 @@ def handle_web_token(args: Any = None, token_path: str = WEB_TOKEN_PATH) -> int:
         return 1
     token = tok_getter(token_path)
     if token:
-        print(f"🔑 Active mitmweb inspector token: {token}")
+        print(f"🔑 Last saved mitmweb inspector token ({token_path}): {token}")
         print(
             f"🌐 mitmweb inspector: not running for container '{name}' (start it with 'holon-coherence start --web', "
             "or pass --name for another container)"
