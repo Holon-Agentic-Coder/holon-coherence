@@ -62,7 +62,12 @@ def handle_web_token(args: Any = None, token_path: str = WEB_TOKEN_PATH) -> int:
         get_container_web_token,
         is_container_running,
     )
-    from holon_coherence.commands.endpoints import INSPECTOR_CONTAINER_PORT, INSPECTOR_LABEL, inspector_url
+    from holon_coherence.commands.endpoints import (
+        INSPECTOR_CONTAINER_PORT,
+        INSPECTOR_LABEL,
+        inspector_url,
+        token_recovery_command,
+    )
 
     cli = get_cli()
     tok_getter = getattr(cli, "get_active_web_token", get_active_web_token)
@@ -79,12 +84,16 @@ def handle_web_token(args: Any = None, token_path: str = WEB_TOKEN_PATH) -> int:
             print(f"🌐 {INSPECTOR_LABEL}: {inspector_url(web_port, container_token)}")
             return 0
         print(f"🌐 mitmweb inspector: running on 127.0.0.1:{web_port} (token unavailable for container '{name}')")
+        print(f"   Recover the token the container saved with: {token_recovery_command(name)}")
         return 1
     token = tok_getter(token_path)
     if token:
         print(f"🔑 Active mitmweb inspector token: {token}")
-        print("🌐 mitmweb inspector: not running (start the proxy with 'holon-coherence start')")
+        print(
+            f"🌐 mitmweb inspector: not running for container '{name}' (start it with 'holon-coherence start --web', "
+            "or pass --name for another container)"
+        )
         return 0
     print("No active mitmweb inspector token found.")
-    print("Start the proxy with 'holon-coherence start' (the inspector is on by default) to generate one.")
+    print("Start the proxy with 'holon-coherence start --web' (or HOLON_COHERENCE_WEB=1) to generate one.")
     return 1

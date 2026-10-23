@@ -225,8 +225,8 @@ def main(argv: list[str] | None = None) -> None:
         "--web",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Launch the mitmweb raw request/response inspector (default: on; use --no-web for a headless "
-        "mitmdump-only start)",
+        help="Launch the mitmweb raw request/response inspector (default: off, or on when HOLON_COHERENCE_WEB=1; "
+        "mitmweb keeps every flow in memory, so leave it off for long-running proxies)",
     )
     start_parser.add_argument(
         "--web-port",
@@ -291,9 +291,17 @@ def main(argv: list[str] | None = None) -> None:
     ca_parser = subparsers.add_parser("init-ca", help="Bootstrap self-signed Root CA certificates")
     ca_parser.add_argument("--output-dir", default=os.path.expanduser("~/.holon/proxy-ca"), help="Target CA directory")
 
-    # Web dashboard token helpers
-    subparsers.add_parser("web-token", help="Display active web dashboard authentication token")
-    subparsers.add_parser("web-key", help="Alias for web-token")
+    # mitmweb inspector token helpers
+    for token_command, token_help in (
+        ("web-token", "Display the active mitmweb inspector token and URL"),
+        ("web-key", "Alias for web-token"),
+    ):
+        token_parser = subparsers.add_parser(token_command, help=token_help)
+        token_parser.add_argument(
+            "--name",
+            default=None,
+            help="Container name (defaults to HOLON_CONTAINER_NAME or holon-coherence-proxy)",
+        )
 
     # Metrics reporting
     metrics_parser = subparsers.add_parser("metrics", help="Display cumulative optimization metrics")

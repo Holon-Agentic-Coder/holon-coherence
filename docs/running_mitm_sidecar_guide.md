@@ -31,9 +31,16 @@ Start the proxy container via the CLI:
 holon-coherence start -d
 ```
 
-This also starts the token-protected `mitmweb` raw request/response inspector on host port `8081`. If `8081` is busy
-(or is the proxy port or the `--local-llm-base` port), the CLI falls back to the next free port and says so. `start`
-prints every exposed endpoint with the ports it actually resolved:
+That starts a headless (mitmdump-only) proxy. To also start the token-protected `mitmweb` raw request/response
+inspector, opt in with `--web` (or set `HOLON_COHERENCE_WEB=1` in your shell):
+
+```bash
+holon-coherence start -d --web
+```
+
+The inspector listens on host port `8081`. If `8081` is busy (or is the proxy port or the `--local-llm-base` port), the
+CLI falls back to the next free port and says so. `start` prints every exposed endpoint with the ports it actually
+resolved:
 
 ```text
 ----------------------------------------------------------------
@@ -46,17 +53,20 @@ prints every exposed endpoint with the ports it actually resolved:
 
 Open the inspector URL to see each flow's method, URL, headers, bodies, status code, the `X-Holon-*` cache and timing
 headers and the TLS connection details. `holon-coherence status`, `holon-coherence metrics` and
-`holon-coherence web-token` print the same endpoints later. They read the running container's port mappings and report
-the inspector as `not running` when the container is down or headless.
+`holon-coherence web-token` print the same endpoints later (`--name` selects a named container). They read the running
+container's port mappings and report the inspector as `not running` when the container is down or headless.
 
-The token comes from `--web-password`, then `HOLON_COHERENCE_WEB_PASSWORD`, then a generated random token. It is
-saved to `~/.holon/web-token` (mode `0600`) and is never written to `docker logs`, `metrics --json` output or the wire
-logs. The inspector shows raw, unscrubbed traffic, including credentials, so it is published on `127.0.0.1` only.
+mitmweb keeps every captured flow, bodies included, in memory with no retention cap, so a long-running `--web` proxy
+grows without bound. Enable it for debugging sessions and leave it off for long-lived proxies.
 
-To choose another inspector port, or to run headless (mitmdump only, no inspector port and no token):
+The token comes from `--web-password`, then `HOLON_COHERENCE_WEB_PASSWORD`, then a generated random token. It is saved
+to `~/.holon/web-token` (mode `0600`) and is never written to `docker logs`, `metrics --json` output or the wire logs.
+The inspector shows raw, unscrubbed traffic, including credentials, so it is published on `127.0.0.1` only.
+
+To choose another inspector port, or to force a headless start when `HOLON_COHERENCE_WEB=1` is set:
 
 ```bash
-holon-coherence start -d --web-port 9090
+holon-coherence start -d --web --web-port 9090
 holon-coherence start -d --no-web
 ```
 

@@ -394,7 +394,7 @@ def handle_metrics(
     if total_reasoning > 0:
         print(format_table_row("Reasoning Tokens", f"{total_reasoning:,}"))
     print("-" * 64)
-    for row in format_endpoint_rows(endpoints):
+    for row in format_endpoint_rows(endpoints, container_name=container):
         print(row)
     print("=" * 64)
     return 0

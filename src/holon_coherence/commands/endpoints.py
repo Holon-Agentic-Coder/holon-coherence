@@ -47,6 +47,16 @@ def inspector_url(web_port: int, token: str) -> str:
     return f"http://127.0.0.1:{web_port}/?token={token}"
 
 
+def token_recovery_command(container_name: str) -> str:
+    """Return the command that prints a container's own saved inspector token (never the token itself).
+
+    The in-container ``start`` saves the token it hands mitmweb to ``~/.holon/web-token`` inside the
+    container, so a manual ``docker run ... start --web`` without ``HOLON_COHERENCE_WEB_PASSWORD``
+    (whose token ``status`` therefore cannot read from the container environment) can still recover it.
+    """
+    return f"docker exec {container_name} sh -c 'cat \"$HOME/.holon/web-token\"'"
+
+
 def resolve_container_endpoints(container_name: str, fallback_proxy_port: int | None = None) -> ExposedEndpoints:
     """Resolve the endpoints a proxy container really exposes from its Docker port mappings.
 
@@ -69,7 +79,11 @@ def resolve_container_endpoints(container_name: str, fallback_proxy_port: int | 
     return ExposedEndpoints(proxy_port=proxy_port, web_port=web_port, web_token=web_token)
 
 
-def format_endpoint_rows(endpoints: ExposedEndpoints, label_width: int = ENDPOINT_LABEL_WIDTH) -> list[str]:
+def format_endpoint_rows(
+    endpoints: ExposedEndpoints,
+    label_width: int = ENDPOINT_LABEL_WIDTH,
+    container_name: str = "<container>",
+) -> list[str]:
     """Render the proxy, Coherence dashboard and mitmweb inspector rows for terminal output."""
     if endpoints.proxy_port is not None:
         proxy_value = f"127.0.0.1:{endpoints.proxy_port}"
@@ -81,10 +95,11 @@ def format_endpoint_rows(endpoints: ExposedEndpoints, label_width: int = ENDPOIN
         inspector_value = inspector_url(endpoints.web_port, endpoints.web_token)
     elif endpoints.web_port is not None:
         inspector_value = (
-            f"running on 127.0.0.1:{endpoints.web_port} (token unavailable; run 'holon-coherence web-token')"
+            f"running on 127.0.0.1:{endpoints.web_port} (token unavailable; recover it with: "
+            f"{token_recovery_command(container_name)})"
         )
     elif endpoints.proxy_port is not None:
-        inspector_value = "not running (headless start or --no-web)"
+        inspector_value = "not running (headless; enable with --web or HOLON_COHERENCE_WEB=1)"
     else:
         inspector_value = "not running"
 
@@ -95,10 +110,12 @@ def format_endpoint_rows(endpoints: ExposedEndpoints, label_width: int = ENDPOIN
     ]
 
 
-def print_endpoints(endpoints: ExposedEndpoints, header: str = "Exposed Endpoints") -> None:
+def print_endpoints(
+    endpoints: ExposedEndpoints, header: str = "Exposed Endpoints", container_name: str = "<container>"
+) -> None:
     """Print the endpoint rows framed by a rule, as ``start`` and ``status`` report them."""
     print("-" * 64)
     print(f"  {header}")
-    for row in format_endpoint_rows(endpoints):
+    for row in format_endpoint_rows(endpoints, container_name=container_name):
         print(row)
     print("-" * 64)

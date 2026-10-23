@@ -333,7 +333,7 @@ def handle_status(args: Any = None) -> int:
     endpoints = resolve_endpoints(target_container, fallback_proxy_port=fallback_proxy_port)
     proxy_port = endpoints.proxy_port or fallback_proxy_port
     print()
-    print_endpoints(endpoints)
+    print_endpoints(endpoints, container_name=target_container)
 
     try:
         req = urllib.request.Request(

@@ -24,7 +24,7 @@ from holon_coherence.commands.docker_ops import (
     is_container_running,
     stop_proxy_container,
 )
-from holon_coherence.commands.endpoints import ExposedEndpoints, print_endpoints
+from holon_coherence.commands.endpoints import ExposedEndpoints, print_endpoints, token_recovery_command
 from holon_coherence.commands.runner import merge_no_proxy_values
 from holon_coherence.commands.web_token import resolve_web_password, save_web_token
 from holon_coherence.host_local import (
@@ -104,19 +104,29 @@ def is_in_container() -> bool:
     return os.path.exists("/.dockerenv") or os.environ.get("HOLON_IN_CONTAINER") == "1"
 
 
+WEB_INSPECTOR_ENV_VAR = "HOLON_COHERENCE_WEB"
+
+
 def is_web_inspector_enabled(args: Any, in_container: bool) -> bool:
     """Decide whether ``start`` launches the mitmweb inspector (Bean 0129).
 
-    An explicit ``--web`` / ``--no-web`` always wins. Without either, a host start exposes the
-    inspector by default, while the in-container entrypoint stays headless (mitmdump only): the
-    Dockerfile ``CMD`` and the background ``run`` / ``run-agent`` containers publish no inspector
-    port, so a mitmweb there would be unreachable and its token never shown to anyone. The host
-    ``start`` always passes ``--web`` explicitly when it wants the inspector.
+    The inspector is opt-in: mitmweb keeps every captured flow (request and response bodies
+    included) in memory for the life of the process and mitmproxy offers no option to cap that, so
+    a long-running ``start -d`` proxy would grow without bound if it ran by default.
+
+    An explicit ``--web`` / ``--no-web`` always wins. Without either, a host start enables the
+    inspector only when ``HOLON_COHERENCE_WEB`` is truthy (``1``/``true``/``yes``/``on``), so it can
+    be switched on once in a shell profile. The in-container entrypoint ignores that variable and
+    stays headless (mitmdump only) unless ``--web`` is passed: the Dockerfile ``CMD`` and the
+    background ``run`` / ``run-agent`` containers publish no inspector port. The host ``start``
+    always passes ``--web`` explicitly when it wants the inspector.
     """
     flag = getattr(args, "web", None)
-    if flag is None:
-        return not in_container
-    return bool(flag)
+    if flag is not None:
+        return bool(flag)
+    if in_container:
+        return False
+    return os.getenv(WEB_INSPECTOR_ENV_VAR, "").lower().strip() in ("1", "true", "yes", "on")
 
 
 def is_start_passive(passive_flag: bool = False) -> bool:
@@ -518,8 +528,8 @@ def ensure_proxy_running(
         f"HOLON_PASSIVE_MONITORING={'1' if is_start_passive() else '0'}",
         *get_host_local_args(host_local_spec),
         image,
-        # No --web: the in-container start defaults to headless mitmdump, so `run` / `run-agent`
-        # proxies publish no inspector port and generate no token (see is_web_inspector_enabled).
+        # No --web: the in-container start is headless mitmdump, so `run` / `run-agent` proxies
+        # publish no inspector port and generate no token (see is_web_inspector_enabled).
         "start",
         "--port",
         "8080",
@@ -610,7 +620,8 @@ def handle_start(args: Any) -> None:
             # `start`, `status` and `web-token` commands show the full URL on the user's terminal.
             print(
                 f"🌐 mitmweb inspector listening on container port {args.web_port} (token hidden; run "
-                "'holon-coherence web-token' or 'holon-coherence status' on the host for the full URL)"
+                "'holon-coherence web-token --name <container>' on the host for the full URL, or recover the "
+                f"token with: {token_recovery_command('<container>')})"
             )
         try:
             subprocess.run(cmd, check=True)
@@ -679,7 +690,7 @@ def handle_start(args: Any) -> None:
         *get_host_local_args(start_host_local_spec),
     ]
 
-    # mitmweb inspector (on by default for host starts; --no-web keeps the container headless)
+    # mitmweb inspector (opt-in via --web or HOLON_COHERENCE_WEB; the default start is headless)
     web_enabled = is_web_inspector_enabled(args, in_container=False)
     web_password = None
     requested_web_port = getattr(args, "web_port", DEFAULT_WEB_PORT)

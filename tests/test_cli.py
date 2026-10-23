@@ -65,8 +65,15 @@ from holon_coherence.mitm_addon import CumulativeMetrics
 
 @pytest.fixture(autouse=True)
 def _never_persist_real_web_token() -> Iterator[MagicMock]:
-    """A plain host ``start`` now resolves an inspector token; keep it out of the real ~/.holon/web-token."""
-    with patch("holon_coherence.cli.save_web_token") as mock_save:
+    """A ``start --web`` resolves an inspector token; keep it out of the real ~/.holon/web-token.
+
+    ``HOLON_COHERENCE_WEB`` is cleared so a developer's shell opt-in cannot flip the headless default under test.
+    """
+    with (
+        patch.dict(os.environ, {}, clear=False),
+        patch("holon_coherence.cli.save_web_token") as mock_save,
+    ):
+        os.environ.pop("HOLON_COHERENCE_WEB", None)
         yield mock_save
 
 
@@ -3214,7 +3221,10 @@ def _free_ports(port: int, host: str = "127.0.0.1") -> bool:
 
 
 class TestMitmwebInspectorDefaultBean0129:
-    """A plain host ``start`` exposes the token-protected mitmweb inspector; ``--no-web`` opts out."""
+    """The mitmweb inspector is opt-in (``--web`` or ``HOLON_COHERENCE_WEB``); a plain ``start`` stays headless.
+
+    mitmweb keeps every flow in memory with no retention cap, so a long-running default proxy must not run it.
+    """
 
     @staticmethod
     def _host_start(
@@ -3253,8 +3263,8 @@ class TestMitmwebInspectorDefaultBean0129:
         assert len(launched) == 1, "no Docker command may run inside the container"
         return launched[0]
 
-    def test_start_default_selects_mitmweb_and_passes_token(self) -> None:
-        docker_cmd, mock_resolve, mock_save = self._host_start(["start", "-d"])
+    def test_start_web_selects_mitmweb_and_passes_token(self) -> None:
+        docker_cmd, mock_resolve, mock_save = self._host_start(["start", "-d", "--web"])
 
         assert "127.0.0.1:8081:8081" in docker_cmd
         assert "HOLON_COHERENCE_WEB_PASSWORD=tok123" in docker_cmd
@@ -3263,13 +3273,14 @@ class TestMitmwebInspectorDefaultBean0129:
         mock_resolve.assert_called_once_with(None)
         mock_save.assert_called_once_with("tok123")
 
-    def test_start_default_binds_inspector_to_loopback_only(self) -> None:
-        docker_cmd, _resolve, _save = self._host_start(["start", "-d"])
+    def test_start_web_binds_inspector_to_loopback_only(self) -> None:
+        docker_cmd, _resolve, _save = self._host_start(["start", "-d", "--web"])
         mappings = [docker_cmd[i + 1] for i, arg in enumerate(docker_cmd) if arg == "-p"]
         assert mappings and all(mapping.startswith("127.0.0.1:") for mapping in mappings)
 
-    def test_start_no_web_selects_mitmdump(self) -> None:
-        docker_cmd, mock_resolve, mock_save = self._host_start(["start", "-d", "--no-web"])
+    @pytest.mark.parametrize("argv", [["start", "-d"], ["start", "-d", "--no-web"]])
+    def test_start_default_and_no_web_select_mitmdump(self, argv: list[str]) -> None:
+        docker_cmd, mock_resolve, mock_save = self._host_start(argv)
 
         assert not any(arg.endswith(":8081") for arg in docker_cmd)
         assert not any(arg.startswith("HOLON_COHERENCE_WEB_PASSWORD=") for arg in docker_cmd)
@@ -3278,9 +3289,29 @@ class TestMitmwebInspectorDefaultBean0129:
         mock_resolve.assert_not_called()
         mock_save.assert_not_called()
 
-    def test_start_default_inspector_port_falls_back(self, capsys: pytest.CaptureFixture[str]) -> None:
+    @pytest.mark.parametrize("value", ["1", "true", "YES", "on"])
+    def test_start_env_opt_in_selects_mitmweb(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HOLON_COHERENCE_WEB", value)
+        docker_cmd, _resolve, mock_save = self._host_start(["start", "-d"])
+        assert "127.0.0.1:8081:8081" in docker_cmd
+        assert docker_cmd[-3:] == ["--web", "--web-port", "8081"]
+        mock_save.assert_called_once_with("tok123")
+
+    @pytest.mark.parametrize("value", ["", "0", "false", "off"])
+    def test_start_env_falsy_stays_headless(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HOLON_COHERENCE_WEB", value)
+        docker_cmd, _resolve, _save = self._host_start(["start", "-d"])
+        assert "--web" not in docker_cmd
+
+    def test_start_no_web_overrides_env_opt_in(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HOLON_COHERENCE_WEB", "1")
+        docker_cmd, mock_resolve, _save = self._host_start(["start", "-d", "--no-web"])
+        assert "--web" not in docker_cmd
+        mock_resolve.assert_not_called()
+
+    def test_start_web_inspector_port_falls_back(self, capsys: pytest.CaptureFixture[str]) -> None:
         docker_cmd, _resolve, _save = self._host_start(
-            ["start", "-d"], in_use=lambda port, host="127.0.0.1": port == 8081
+            ["start", "-d", "--web"], in_use=lambda port, host="127.0.0.1": port == 8081
         )
 
         assert "127.0.0.1:8082:8081" in docker_cmd
@@ -3291,35 +3322,40 @@ class TestMitmwebInspectorDefaultBean0129:
 
     def test_start_custom_inspector_port_falls_back(self) -> None:
         docker_cmd, _resolve, _save = self._host_start(
-            ["start", "-d", "--web-port", "9090"], in_use=lambda port, host="127.0.0.1": port == 9090
+            ["start", "-d", "--web", "--web-port", "9090"], in_use=lambda port, host="127.0.0.1": port == 9090
         )
         assert "127.0.0.1:9091:8081" in docker_cmd
 
     def test_start_inspector_fallback_skips_local_llm_port(self) -> None:
         docker_cmd, _resolve, _save = self._host_start(
-            ["start", "-d", "--local-llm-base", "localhost:8082"],
+            ["start", "-d", "--web", "--local-llm-base", "localhost:8082"],
             in_use=lambda port, host="127.0.0.1": port == 8081,
         )
         assert "127.0.0.1:8083:8081" in docker_cmd
         assert not any(arg == "127.0.0.1:8082:8081" for arg in docker_cmd)
 
     def test_start_inspector_never_lands_on_the_requested_local_llm_port(self) -> None:
-        docker_cmd, _resolve, _save = self._host_start(["start", "-d", "--local-llm-base", "localhost:8081"])
+        docker_cmd, _resolve, _save = self._host_start(["start", "-d", "--web", "--local-llm-base", "localhost:8081"])
         assert "127.0.0.1:8082:8081" in docker_cmd
 
     def test_start_prints_all_endpoints(self, capsys: pytest.CaptureFixture[str]) -> None:
-        self._host_start(["start", "-d"])
+        self._host_start(["start", "-d", "--web"])
         out = capsys.readouterr().out
         assert "Proxy Listen Address         : 127.0.0.1:8080" in out
         assert "Coherence Live Dashboard     : http://127.0.0.1:8080/holon/" in out
         assert "mitmweb Req/Resp Inspector   : http://127.0.0.1:8081/?token=tok123" in out
         assert "Web API Key" not in out
 
-    def test_start_no_web_reports_inspector_not_running(self, capsys: pytest.CaptureFixture[str]) -> None:
-        self._host_start(["start", "-d", "--no-web"])
+    @pytest.mark.parametrize("argv", [["start", "-d"], ["start", "-d", "--no-web"]])
+    def test_start_headless_reports_inspector_not_running(
+        self, argv: list[str], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._host_start(argv)
         out = capsys.readouterr().out
         assert "Proxy Listen Address         : 127.0.0.1:8080" in out
-        assert "mitmweb Req/Resp Inspector   : not running (headless start or --no-web)" in out
+        assert "mitmweb Req/Resp Inspector   : not running (headless; enable with --web or HOLON_COHERENCE_WEB=1)" in (
+            out
+        )
         assert "?token=" not in out
 
     def test_in_container_web_runs_mitmweb_with_password_without_printing_it(
@@ -3337,6 +3373,8 @@ class TestMitmwebInspectorDefaultBean0129:
         out = capsys.readouterr().out
         assert "tok123" not in out
         assert "mitmweb inspector listening on container port 8081" in out
+        # A manual `docker run ... start --web` has no host-side token; the message names the recovery path.
+        assert "docker exec <container> sh -c 'cat \"$HOME/.holon/web-token\"'" in out
 
     def test_in_container_no_web_runs_mitmdump(self, monkeypatch: pytest.MonkeyPatch) -> None:
         cmd = self._in_container_start(["start", "--port", "8080", "--no-web"], monkeypatch)
@@ -3348,6 +3386,12 @@ class TestMitmwebInspectorDefaultBean0129:
         cmd = self._in_container_start(["start", "--port", "8080"], monkeypatch)
         assert cmd[0].endswith("mitmdump")
         assert "--web-port" not in cmd
+
+    def test_in_container_ignores_env_opt_in(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The env opt-in is a host preference; only an explicit --web turns on an in-container mitmweb."""
+        monkeypatch.setenv("HOLON_COHERENCE_WEB", "1")
+        cmd = self._in_container_start(["start", "--port", "8080"], monkeypatch)
+        assert cmd[0].endswith("mitmdump")
 
     def test_ensure_proxy_running_stays_headless(self) -> None:
         with (
@@ -3386,7 +3430,11 @@ class TestEndpointReportingBean0129:
     def test_format_endpoint_rows_without_token_gives_a_hint_not_a_url(self) -> None:
         rows = format_endpoint_rows(ExposedEndpoints(proxy_port=8080, web_port=8081, web_token=None))
         assert "?token=" not in rows[2]
-        assert "running on 127.0.0.1:8081 (token unavailable; run 'holon-coherence web-token')" in rows[2]
+        assert "running on 127.0.0.1:8081 (token unavailable; recover it with: " in rows[2]
+        assert "docker exec <container> sh -c 'cat \"$HOME/.holon/web-token\"'" in rows[2]
+        no_token = ExposedEndpoints(proxy_port=8080, web_port=8081, web_token=None)
+        named = format_endpoint_rows(no_token, container_name="a")
+        assert "docker exec a sh -c" in named[2]
 
     def test_format_endpoint_rows_when_down(self) -> None:
         rows = format_endpoint_rows(ExposedEndpoints(proxy_port=None, web_port=None, web_token="stale"))
@@ -3432,7 +3480,9 @@ class TestEndpointReportingBean0129:
             main(["status"])
         out = capsys.readouterr().out
         assert "Proxy Listen Address         : 127.0.0.1:8080" in out
-        assert "mitmweb Req/Resp Inspector   : not running (headless start or --no-web)" in out
+        assert "mitmweb Req/Resp Inspector   : not running (headless; enable with --web or HOLON_COHERENCE_WEB=1)" in (
+            out
+        )
         assert "stale-token" not in out
 
     @staticmethod
@@ -3497,6 +3547,36 @@ class TestEndpointReportingBean0129:
             main(["web-token"])
         assert exc.value.code == 0
         assert "mitmweb Req/Resp Inspector: http://127.0.0.1:8084/?token=tok" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("command", ["web-token", "web-key"])
+    def test_web_token_name_selects_container(self, command: str, capsys: pytest.CaptureFixture[str]) -> None:
+        ports = {"a": {8081: 8081}, "b": {8081: 8091}}
+        tokens = {"a": "tok-a", "b": "tok-b"}
+        with (
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch("holon_coherence.cli.get_container_mapped_port", side_effect=lambda name, port: ports[name][port]),
+            patch("holon_coherence.cli.get_container_web_token", side_effect=lambda name: tokens[name]),
+            pytest.raises(SystemExit) as exc,
+        ):
+            main([command, "--name", "b"])
+        assert exc.value.code == 0
+        out = capsys.readouterr().out
+        assert "http://127.0.0.1:8091/?token=tok-b" in out
+        assert "tok-a" not in out
+
+    def test_web_token_unavailable_names_recovery_command(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch("holon_coherence.cli.get_container_mapped_port", side_effect=self._mapped_ports({8081: 8081})),
+            patch("holon_coherence.cli.get_container_web_token", return_value=None),
+            pytest.raises(SystemExit) as exc,
+        ):
+            main(["web-token", "--name", "manual-proxy"])
+        assert exc.value.code == 1
+        out = capsys.readouterr().out
+        assert "token unavailable for container 'manual-proxy'" in out
+        assert "docker exec manual-proxy sh -c 'cat \"$HOME/.holon/web-token\"'" in out
+        assert "?token=" not in out
 
     def test_two_named_containers_each_report_their_own_token(
         self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
