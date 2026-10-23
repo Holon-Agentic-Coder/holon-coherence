@@ -266,6 +266,42 @@ def get_container_mapped_port(container_name: str | None = None, container_port:
     return None
 
 
+WEB_PASSWORD_ENV_VAR = "HOLON_COHERENCE_WEB_PASSWORD"
+
+
+def get_container_web_token(container_name: str | None = None) -> str | None:
+    """Return the mitmweb inspector token a container was started with, read from its own environment.
+
+    ``~/.holon/web-token`` holds only the token of the most recent host ``start``, whatever its
+    ``--name``; the container's ``HOLON_COHERENCE_WEB_PASSWORD`` is the token its mitmweb actually
+    accepts. The value is returned to the caller only, never printed or logged here.
+    """
+    name = container_name or get_container_name()
+    try:
+        res = subprocess.run(
+            ["docker", "inspect", "-f", "{{json .Config.Env}}", name],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if res.returncode != 0:
+        return None
+    try:
+        env = json.loads(res.stdout.strip() or "null")
+    except ValueError:
+        return None
+    if not isinstance(env, list):
+        return None
+    prefix = f"{WEB_PASSWORD_ENV_VAR}="
+    for entry in env:
+        if isinstance(entry, str) and entry.startswith(prefix):
+            return entry[len(prefix) :].strip() or None
+    return None
+
+
 def handle_status(args: Any = None) -> int:
     """Check status of holon-coherence Docker container."""
     target_container = getattr(args, "name", None) or get_container_name()

@@ -446,7 +446,10 @@ and says so. `start`, `status` and `metrics` print the ports actually in use, in
 
 `status` and `metrics` read the ports from the running container's Docker port mappings. When the container is down,
 or was started with `--no-web`, the inspector row reads `not running` rather than repeating an old URL from
-`~/.holon/web-token`.
+`~/.holon/web-token`. For a running inspector, `status`, `metrics` and `web-token` read the token from that container's
+own `HOLON_COHERENCE_WEB_PASSWORD` environment rather than from `~/.holon/web-token`, which holds only the token of the
+most recent `start` whatever its `--name`; with several named containers each URL carries the token that container
+accepts.
 
 ---
 

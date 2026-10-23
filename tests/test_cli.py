@@ -39,6 +39,7 @@ from holon_coherence.cli import (
     find_system_ca_bundle,
     format_endpoint_rows,
     get_active_web_token,
+    get_container_web_token,
     get_or_create_merged_ca_bundle,
     handle_metrics,
     host_local_container_args,
@@ -2568,7 +2569,7 @@ class TestWebTokenAndDashboardAuth:
         with (
             patch("holon_coherence.cli.is_container_running", return_value=True),
             patch("holon_coherence.cli.get_container_mapped_port", side_effect=lambda _name, port: port),
-            patch("holon_coherence.cli.get_active_web_token", return_value="active-session-tok"),
+            patch("holon_coherence.cli.get_container_web_token", return_value="active-session-tok"),
             patch("subprocess.run", return_value=MagicMock(returncode=0)),
             patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")),
         ):
@@ -2625,6 +2626,7 @@ class TestWebTokenAndDashboardAuth:
         # Token missing
         with (
             patch("holon_coherence.cli.get_active_web_token", return_value=None),
+            patch("holon_coherence.cli.is_container_running", return_value=False),
             pytest.raises(SystemExit) as exc,
         ):
             main(["web-token"])
@@ -3397,7 +3399,7 @@ class TestEndpointReportingBean0129:
                 "holon_coherence.cli.get_container_mapped_port",
                 side_effect=self._mapped_ports({8080: 8080, 8081: 8082}),
             ),
-            patch("holon_coherence.cli.get_active_web_token", return_value="tok"),
+            patch("holon_coherence.cli.get_container_web_token", return_value="tok"),
             patch("subprocess.run", return_value=MagicMock(returncode=0)),
             patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")),
         ):
@@ -3450,7 +3452,7 @@ class TestEndpointReportingBean0129:
                 "holon_coherence.cli.get_container_mapped_port",
                 side_effect=self._mapped_ports({8080: 8080, 8081: 8083}),
             ),
-            patch("holon_coherence.cli.get_active_web_token", return_value="tok"),
+            patch("holon_coherence.cli.get_container_web_token", return_value="tok"),
         ):
             assert handle_metrics(port=9000) == 0
         out = capsys.readouterr().out
@@ -3467,7 +3469,7 @@ class TestEndpointReportingBean0129:
                 "holon_coherence.cli.get_container_mapped_port",
                 side_effect=self._mapped_ports({8080: 8080, 8081: 8081}),
             ),
-            patch("holon_coherence.cli.get_active_web_token", return_value="tok-secret"),
+            patch("holon_coherence.cli.get_container_web_token", return_value="tok-secret"),
         ):
             assert handle_metrics(port=8080, json_output=True) == 0
         out = capsys.readouterr().out
@@ -3487,7 +3489,7 @@ class TestEndpointReportingBean0129:
 
     def test_web_token_prints_resolved_inspector_url(self, capsys: pytest.CaptureFixture[str]) -> None:
         with (
-            patch("holon_coherence.cli.get_active_web_token", return_value="tok"),
+            patch("holon_coherence.cli.get_container_web_token", return_value="tok"),
             patch("holon_coherence.cli.is_container_running", return_value=True),
             patch("holon_coherence.cli.get_container_mapped_port", side_effect=self._mapped_ports({8081: 8084})),
             pytest.raises(SystemExit) as exc,
@@ -3495,3 +3497,61 @@ class TestEndpointReportingBean0129:
             main(["web-token"])
         assert exc.value.code == 0
         assert "mitmweb Req/Resp Inspector: http://127.0.0.1:8084/?token=tok" in capsys.readouterr().out
+
+    def test_two_named_containers_each_report_their_own_token(
+        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # ``start --name a`` then ``start --name b``: the shared file holds b's token, but a's inspector accepts a's.
+        ports = {"a": {8080: 8080, 8081: 8081}, "b": {8080: 8090, 8081: 8091}}
+        tokens = {"a": "tok-a", "b": "tok-b"}
+        with (
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch("holon_coherence.cli.get_container_mapped_port", side_effect=lambda name, port: ports[name][port]),
+            patch("holon_coherence.cli.get_container_web_token", side_effect=lambda name: tokens[name]),
+            patch("holon_coherence.cli.get_active_web_token", return_value="tok-b"),
+            patch("subprocess.run", return_value=MagicMock(returncode=0)),
+            patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")),
+        ):
+            main(["status", "--name", "a"])
+            out_a = capsys.readouterr().out
+            main(["status", "--name", "b"])
+            out_b = capsys.readouterr().out
+            monkeypatch.setenv("HOLON_CONTAINER_NAME", "a")
+            with pytest.raises(SystemExit) as exc:
+                main(["web-token"])
+            out_web_a = capsys.readouterr().out
+        assert "mitmweb Req/Resp Inspector   : http://127.0.0.1:8081/?token=tok-a" in out_a
+        assert "tok-b" not in out_a
+        assert "mitmweb Req/Resp Inspector   : http://127.0.0.1:8091/?token=tok-b" in out_b
+        assert exc.value.code == 0
+        assert "mitmweb Req/Resp Inspector: http://127.0.0.1:8081/?token=tok-a" in out_web_a
+        assert "tok-b" not in out_web_a
+
+    def test_web_token_running_inspector_without_container_token_gives_no_stale_url(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with (
+            patch("holon_coherence.cli.is_container_running", return_value=True),
+            patch("holon_coherence.cli.get_container_mapped_port", side_effect=self._mapped_ports({8081: 8081})),
+            patch("holon_coherence.cli.get_container_web_token", return_value=None),
+            patch("holon_coherence.cli.get_active_web_token", return_value="stale-token"),
+            pytest.raises(SystemExit) as exc,
+        ):
+            main(["web-token"])
+        assert exc.value.code == 1
+        out = capsys.readouterr().out
+        assert "token unavailable for container 'holon-coherence-proxy'" in out
+        assert "stale-token" not in out
+        assert "?token=" not in out
+
+    def test_get_container_web_token_reads_container_env(self) -> None:
+        env = '["PATH=/usr/bin","HOLON_COHERENCE_WEB_PASSWORD=tok-from-env","OTHER=x"]\n'
+        with patch("subprocess.run", return_value=MagicMock(returncode=0, stdout=env)) as mock_run:
+            assert get_container_web_token("a") == "tok-from-env"
+        assert mock_run.call_args[0][0] == ["docker", "inspect", "-f", "{{json .Config.Env}}", "a"]
+        with patch("subprocess.run", return_value=MagicMock(returncode=0, stdout='["PATH=/usr/bin"]')):
+            assert get_container_web_token("a") is None
+        with patch("subprocess.run", return_value=MagicMock(returncode=1, stdout="")):
+            assert get_container_web_token("a") is None
+        with patch("subprocess.run", side_effect=FileNotFoundError("docker")):
+            assert get_container_web_token("a") is None

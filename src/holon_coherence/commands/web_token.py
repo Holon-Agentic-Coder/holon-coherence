@@ -56,22 +56,34 @@ def get_active_web_token(token_path: str = WEB_TOKEN_PATH) -> str | None:
 def handle_web_token(args: Any = None, token_path: str = WEB_TOKEN_PATH) -> int:
     """Displays the active mitmweb inspector token and, when it is running, its resolved URL."""
     # Imported lazily: docker_ops and endpoints both import this module.
-    from holon_coherence.commands.docker_ops import get_container_mapped_port, get_container_name, is_container_running
+    from holon_coherence.commands.docker_ops import (
+        get_container_mapped_port,
+        get_container_name,
+        get_container_web_token,
+        is_container_running,
+    )
     from holon_coherence.commands.endpoints import INSPECTOR_CONTAINER_PORT, INSPECTOR_LABEL, inspector_url
 
     cli = get_cli()
     tok_getter = getattr(cli, "get_active_web_token", get_active_web_token)
+    container_tok_getter = getattr(cli, "get_container_web_token", get_container_web_token)
     is_running = getattr(cli, "is_container_running", is_container_running)
     get_mapped_port = getattr(cli, "get_container_mapped_port", get_container_mapped_port)
+    name = getattr(args, "name", None) or get_container_name()
+    web_port = get_mapped_port(name, INSPECTOR_CONTAINER_PORT) if is_running(name) else None
+    if web_port is not None:
+        # A running inspector accepts only its own container's token, not the last-written file.
+        container_token = container_tok_getter(name)
+        if container_token:
+            print(f"🔑 Active mitmweb inspector token: {container_token}")
+            print(f"🌐 {INSPECTOR_LABEL}: {inspector_url(web_port, container_token)}")
+            return 0
+        print(f"🌐 mitmweb inspector: running on 127.0.0.1:{web_port} (token unavailable for container '{name}')")
+        return 1
     token = tok_getter(token_path)
     if token:
         print(f"🔑 Active mitmweb inspector token: {token}")
-        name = getattr(args, "name", None) or get_container_name()
-        web_port = get_mapped_port(name, INSPECTOR_CONTAINER_PORT) if is_running(name) else None
-        if web_port is not None:
-            print(f"🌐 {INSPECTOR_LABEL}: {inspector_url(web_port, token)}")
-        else:
-            print("🌐 mitmweb inspector: not running (start the proxy with 'holon-coherence start')")
+        print("🌐 mitmweb inspector: not running (start the proxy with 'holon-coherence start')")
         return 0
     print("No active mitmweb inspector token found.")
     print("Start the proxy with 'holon-coherence start' (the inspector is on by default) to generate one.")
