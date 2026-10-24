@@ -13,12 +13,14 @@ from holon_coherence.commands import (
     CA_ENV_VARS,
     CONTAINER_NAME,
     DEFAULT_PROXY_PORT,
+    DEFAULT_WEB_PORT,
     DOCKER_BUILD_TIMEOUT_SECONDS,
     NO_PROXY_HOSTS,
     PROXY_POLL_INTERVAL_SECONDS,
     PROXY_READY_TIMEOUT_SECONDS,
     SUPPORTED_AGENTS,
     WEB_TOKEN_PATH,
+    ExposedEndpoints,
     LocalLlmRoute,
     RunnerFlags,
     _print_agent_help,
@@ -34,7 +36,10 @@ from holon_coherence.commands import (
     extract_runner_flags,
     find_available_port,
     find_system_ca_bundle,
+    format_endpoint_rows,
     get_active_web_token,
+    get_container_mapped_port,
+    get_container_web_token,
     get_or_create_merged_ca_bundle,
     handle_ab_test,
     handle_build,
@@ -52,11 +57,14 @@ from holon_coherence.commands import (
     is_container_running,
     is_in_container,
     is_port_in_use,
+    is_web_inspector_enabled,
     merge_no_proxy_values,
     plan_local_llm_route,
+    print_endpoints,
     probe_host_local_reachable,
     report_local_llm_route,
     resolve_agent_binary,
+    resolve_container_endpoints,
     resolve_web_password,
     run_agent,
     save_web_token,
@@ -70,6 +78,7 @@ __all__ = [
     "CA_ENV_VARS",
     "CONTAINER_NAME",
     "DEFAULT_PROXY_PORT",
+    "DEFAULT_WEB_PORT",
     "DOCKER_BUILD_TIMEOUT_SECONDS",
     "NO_PROXY_HOSTS",
     "PROXY_POLL_INTERVAL_SECONDS",
@@ -77,6 +86,7 @@ __all__ = [
     "SUPPORTED_AGENTS",
     "WEB_TOKEN_PATH",
     "_CONTAINER_GATEWAY_PROBE",
+    "ExposedEndpoints",
     "LocalLlmRoute",
     "RunnerFlags",
     "_print_agent_help",
@@ -93,8 +103,11 @@ __all__ = [
     "extract_runner_flags",
     "find_available_port",
     "find_system_ca_bundle",
+    "format_endpoint_rows",
     "generate_root_ca",
     "get_active_web_token",
+    "get_container_mapped_port",
+    "get_container_web_token",
     "get_or_create_merged_ca_bundle",
     "handle_ab_test",
     "handle_build",
@@ -112,12 +125,15 @@ __all__ = [
     "is_container_running",
     "is_in_container",
     "is_port_in_use",
+    "is_web_inspector_enabled",
     "main",
     "merge_no_proxy_values",
     "plan_local_llm_route",
+    "print_endpoints",
     "probe_host_local_reachable",
     "report_local_llm_route",
     "resolve_agent_binary",
+    "resolve_container_endpoints",
     "resolve_web_password",
     "run_agent",
     "save_web_token",
@@ -205,12 +221,24 @@ def main(argv: list[str] | None = None) -> None:
         default=os.getenv("HOLON_LOCAL_LLM_BASE"),
         help=f"Host-local model server (e.g. localhost:8081) to intercept and route via {GATEWAY_HOSTNAME}",
     )
-    start_parser.add_argument("--web", action="store_true", help="Launch mitmweb dashboard on port 8081")
-    start_parser.add_argument("--web-port", type=int, default=8081, help="Web dashboard port (default: 8081)")
+    start_parser.add_argument(
+        "--web",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Launch the mitmweb raw request/response inspector (default: off, or on when HOLON_COHERENCE_WEB=1; "
+        "mitmweb keeps every flow in memory, so leave it off for long-running proxies)",
+    )
+    start_parser.add_argument(
+        "--web-port",
+        type=int,
+        default=DEFAULT_WEB_PORT,
+        help=f"mitmweb inspector host port (default: {DEFAULT_WEB_PORT}; falls back to the next free port if occupied)",
+    )
     start_parser.add_argument(
         "--web-password",
         default=None,
-        help="Password to protect web dashboard (defaults to HOLON_COHERENCE_WEB_PASSWORD or auto-generated token)",
+        help="Token protecting the mitmweb inspector (defaults to HOLON_COHERENCE_WEB_PASSWORD or an "
+        "auto-generated token); implies --web unless --no-web is given",
     )
     start_parser.add_argument("-d", "--detach", action="store_true", help="Run Docker container in background")
     start_parser.add_argument(
@@ -263,9 +291,17 @@ def main(argv: list[str] | None = None) -> None:
     ca_parser = subparsers.add_parser("init-ca", help="Bootstrap self-signed Root CA certificates")
     ca_parser.add_argument("--output-dir", default=os.path.expanduser("~/.holon/proxy-ca"), help="Target CA directory")
 
-    # Web dashboard token helpers
-    subparsers.add_parser("web-token", help="Display active web dashboard authentication token")
-    subparsers.add_parser("web-key", help="Alias for web-token")
+    # mitmweb inspector token helpers
+    for token_command, token_help in (
+        ("web-token", "Display the active mitmweb inspector token and URL"),
+        ("web-key", "Alias for web-token"),
+    ):
+        token_parser = subparsers.add_parser(token_command, help=token_help)
+        token_parser.add_argument(
+            "--name",
+            default=None,
+            help="Container name (defaults to HOLON_CONTAINER_NAME or holon-coherence-proxy)",
+        )
 
     # Metrics reporting
     metrics_parser = subparsers.add_parser("metrics", help="Display cumulative optimization metrics")

@@ -1,4 +1,4 @@
-"""Web dashboard token management and credential persistence."""
+"""mitmweb inspector token management and credential persistence."""
 
 from __future__ import annotations
 
@@ -8,6 +8,18 @@ import secrets
 from typing import Any
 
 from holon_coherence.commands._dispatch import get_cli
+from holon_coherence.commands.docker_ops import (
+    get_container_mapped_port,
+    get_container_name,
+    get_container_web_token,
+    is_container_running,
+)
+from holon_coherence.commands.endpoints import (
+    INSPECTOR_CONTAINER_PORT,
+    INSPECTOR_LABEL,
+    inspector_url,
+    token_recovery_command,
+)
 
 WEB_TOKEN_PATH = os.path.expanduser("~/.holon/web-token")
 
@@ -54,14 +66,32 @@ def get_active_web_token(token_path: str = WEB_TOKEN_PATH) -> str | None:
 
 
 def handle_web_token(args: Any = None, token_path: str = WEB_TOKEN_PATH) -> int:
-    """Displays active web dashboard authentication token."""
+    """Displays the active mitmweb inspector token and, when it is running, its resolved URL."""
     cli = get_cli()
     tok_getter = getattr(cli, "get_active_web_token", get_active_web_token)
+    container_tok_getter = getattr(cli, "get_container_web_token", get_container_web_token)
+    is_running = getattr(cli, "is_container_running", is_container_running)
+    get_mapped_port = getattr(cli, "get_container_mapped_port", get_container_mapped_port)
+    name = getattr(args, "name", None) or get_container_name()
+    web_port = get_mapped_port(name, INSPECTOR_CONTAINER_PORT) if is_running(name) else None
+    if web_port is not None:
+        # A running inspector accepts only its own container's token, not the last-written file.
+        container_token = container_tok_getter(name)
+        if container_token:
+            print(f"🔑 Active mitmweb inspector token: {container_token}")
+            print(f"🌐 {INSPECTOR_LABEL}: {inspector_url(web_port, container_token)}")
+            return 0
+        print(f"🌐 mitmweb inspector: running on 127.0.0.1:{web_port} (token unavailable for container '{name}')")
+        print(f"   Recover the token the container saved with: {token_recovery_command(name)}")
+        return 1
     token = tok_getter(token_path)
     if token:
-        print(f"🔑 Active web dashboard token: {token}")
-        print(f"🌐 Access URL: http://127.0.0.1:8081/?token={token} (or configured --web-port)")
+        print(f"🔑 Last saved mitmweb inspector token ({token_path}): {token}")
+        print(
+            f"🌐 mitmweb inspector: not running for container '{name}' (start it with 'holon-coherence start --web', "
+            "or pass --name for another container)"
+        )
         return 0
-    print("No active web dashboard session token found.")
-    print("Start the proxy with '--web' to generate one: holon-coherence start --web")
+    print("No active mitmweb inspector token found.")
+    print("Start the proxy with 'holon-coherence start --web' (or HOLON_COHERENCE_WEB=1) to generate one.")
     return 1

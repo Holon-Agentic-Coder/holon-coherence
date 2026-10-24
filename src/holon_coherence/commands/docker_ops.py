@@ -12,7 +12,6 @@ import urllib.request
 from typing import Any
 
 from holon_coherence.commands._dispatch import get_cli
-from holon_coherence.commands.web_token import get_active_web_token
 
 DEFAULT_CONTAINER_NAME = "holon-coherence-proxy"
 CONTAINER_NAME = DEFAULT_CONTAINER_NAME
@@ -267,38 +266,74 @@ def get_container_mapped_port(container_name: str | None = None, container_port:
     return None
 
 
+WEB_PASSWORD_ENV_VAR = "HOLON_COHERENCE_WEB_PASSWORD"
+
+
+def get_container_web_token(container_name: str | None = None) -> str | None:
+    """Return the mitmweb inspector token a container was started with, read from its own environment.
+
+    ``~/.holon/web-token`` holds only the token of the most recent host ``start``, whatever its
+    ``--name``; the container's ``HOLON_COHERENCE_WEB_PASSWORD`` is the token its mitmweb actually
+    accepts. The value is returned to the caller only, never printed or logged here.
+    """
+    name = container_name or get_container_name()
+    try:
+        res = subprocess.run(
+            ["docker", "inspect", "-f", "{{json .Config.Env}}", name],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if res.returncode != 0:
+        return None
+    try:
+        env = json.loads(res.stdout.strip() or "null")
+    except ValueError:
+        return None
+    if not isinstance(env, list):
+        return None
+    prefix = f"{WEB_PASSWORD_ENV_VAR}="
+    for entry in env:
+        if isinstance(entry, str) and entry.startswith(prefix):
+            return entry[len(prefix) :].strip() or None
+    return None
+
+
 def handle_status(args: Any = None) -> int:
     """Check status of holon-coherence Docker container."""
     target_container = getattr(args, "name", None) or get_container_name()
     is_default = target_container in (DEFAULT_CONTAINER_NAME, "holon-coherence")
     display_name = "holon-coherence" if is_default else target_container
     cli = get_cli()
+    # Imported lazily: the endpoints helper imports this module.
+    from holon_coherence.commands.endpoints import print_endpoints, resolve_container_endpoints
+
     is_running = getattr(cli, "is_container_running", is_container_running)
-    get_token = getattr(cli, "get_active_web_token", get_active_web_token)
-    get_mapped_port = getattr(cli, "get_container_mapped_port", get_container_mapped_port)
+    resolve_endpoints = getattr(cli, "resolve_container_endpoints", resolve_container_endpoints)
     try:
         res = subprocess.run(["docker", "ps", "-a", "--filter", f"name=^{target_container}$"])
         retcode = res.returncode
     except (subprocess.SubprocessError, OSError):
         retcode = 1
-    token = get_token()
 
     if not is_running(target_container):
         print(f"\n🔴 {display_name} is down (not running).")
+        # Never echo ~/.holon/web-token here: it outlives the container and would be a stale URL.
+        print("   mitmweb inspector: not running")
         return retcode
 
-    web_port = get_mapped_port(target_container, 8081)
-    if token and web_port:
-        print(f"\n🔑 Web Dashboard Token: {token}")
-        print(f"🌐 Access URL: http://127.0.0.1:{web_port}/?token={token}")
-
-    proxy_port = get_mapped_port(target_container, 8080)
-    if proxy_port is None:
-        proxy_port_str = os.getenv("HOLON_PROXY_PORT", "8080")
-        try:
-            proxy_port = int(proxy_port_str)
-        except ValueError:
-            proxy_port = 8080
+    proxy_port_str = os.getenv("HOLON_PROXY_PORT", "8080")
+    try:
+        fallback_proxy_port = int(proxy_port_str)
+    except ValueError:
+        fallback_proxy_port = 8080
+    endpoints = resolve_endpoints(target_container, fallback_proxy_port=fallback_proxy_port)
+    proxy_port = endpoints.proxy_port or fallback_proxy_port
+    print()
+    print_endpoints(endpoints, container_name=target_container)
 
     try:
         req = urllib.request.Request(
@@ -318,7 +353,6 @@ def handle_status(args: Any = None) -> int:
                     f"   Tool Calls Saved: {pruned:,} | Tokens Reduced: {reduced:,} | "
                     f"Cache Hit Rate: {hit_rate:.1f}% | Prefill: {prefill_tps:.1f} t/s | Output: {tps:.1f} t/s"
                 )
-                print(f"   🌐 Live Dashboard: http://127.0.0.1:{proxy_port}/holon/")
     except Exception:
         pass
     return retcode

@@ -169,23 +169,27 @@ uv tool install --editable .
 The `holon-coherence` CLI automatically manages Docker images, volumes, certificates, and web credentials for you:
 
 ```bash
-# Start proxy container (port 8080)
+# Start proxy container (headless mitmdump proxy on 8080, no inspector)
 holon-coherence start
 
 # Run in background (detached)
 holon-coherence start -d
 
-# Start with password-protected interactive web inspection dashboard (port 8081)
+# Opt in to the token-protected mitmweb inspector on 8081 (or set HOLON_COHERENCE_WEB=1 once in your shell)
 holon-coherence start --web
 
-# Start with explicit web password (defaults to HOLON_COHERENCE_WEB_PASSWORD or auto-generated token)
+# Start the inspector with an explicit token (defaults to HOLON_COHERENCE_WEB_PASSWORD or an auto-generated token;
+# --web-password alone also enables the inspector, and is ignored with a warning under --no-web)
 holon-coherence start --web --web-password "custom-secret-key"
 
-# Display active web dashboard authentication token
+# Publish the inspector on another host port (falls back to the next free port if occupied)
+holon-coherence start --web --web-port 9090
+
+# Display the active inspector token and its URL (--name selects a named container)
 holon-coherence web-token
 # (alias: holon-coherence web-key)
 
-# Check container status (and display web dashboard token and live optimisation summary)
+# Check container status (prints every exposed endpoint and a live optimisation summary)
 holon-coherence status
 
 # Display cumulative optimisation metrics (tool calls pruned, cache hit rate, TTFT, tokens reduced)
@@ -357,8 +361,9 @@ handles both:
   ```
   Nothing prunes `NO_PROXY` for you in this mode, because no runner is launching the agent: your shell's `NO_PROXY` must
   not match the local endpoint (drop `localhost` / `127.0.0.1` from it) or the host client bypasses the proxy entirely.
-  Note also that `start --web` publishes the dashboard on port 8081, so a model server on 8081 needs a different
-  `--web-port` or a different server port.
+  Note also that `start --web` publishes the mitmweb inspector on port 8081. When `--local-llm-base` names a port, the
+  inspector never takes it and falls back to the next free port instead, so a model server on 8081 keeps its port. Pass
+  `--web-port` to choose another inspector port.
 
 ---
 
@@ -392,6 +397,76 @@ holon-coherence metrics --json
 If the proxy is offline, `holon-coherence metrics` automatically falls back to calculating cumulative statistics from
 the persisted wire transaction ledger (`transactions.jsonl`).
 
+#### Inspecting Live Traffic with mitmweb
+
+`holon-coherence start --web` also runs the plain mitmweb request/response inspector next to the proxy. Use it to look
+at individual flows as they happen, before any aggregation:
+
+- **Requests**: method, full URL, request headers and the request body as Coherence forwards it, after payload cleaning.
+- **Responses**: status code, response headers and the response body. Streamed (SSE) responses are relayed to the agent
+  as they arrive, so for those mitmweb shows the status and headers but not the streamed body.
+- **Cache status**: responses carry `X-Holon-*` telemetry headers. A response served from the Coherence cache has a
+  `200` status with `X-Holon-TTFT-Ms: 0.00` and `X-Holon-Total-Time-Ms: 0.00`, while an upstream response carries the
+  measured `X-Holon-TTFT-Ms`, `X-Holon-Streaming` and throughput headers. `X-Holon-Cache-Hit-Rate` shows the running hit
+  rate. Provider-side prompt caching shows up in the response body's `usage` block.
+- **TLS details**: the flow's Connection tab shows the client and server connections, including TLS version, cipher, SNI
+  and the upstream server certificate.
+
+**Enabling it.** The inspector is opt-in: pass `--web` to `start`, or set `HOLON_COHERENCE_WEB=1` (also `true`, `yes`,
+`on`) in your shell so every host `start` enables it. `--no-web` overrides the variable for one start. Passing
+`--web-password` on its own also enables the inspector; combined with `--no-web` the password is ignored and `start`
+warns. A plain `start` runs a headless, mitmdump-only proxy with no inspector port and no token. The background proxies
+started by `holon-coherence run`, `run-agent` and the agent shortcuts (for example `holon-coherence claude`) are always
+headless.
+
+> [!IMPORTANT] **Memory trade-off.** mitmweb keeps every captured flow, including request and response bodies, in memory
+> for the life of the process, and mitmproxy 12 has no option to cap that (`view_filter` only hides flows; it does not
+> drop them). A long-running `start -d --web` proxy carrying large LLM payloads therefore grows without bound. Turn the
+> inspector on for a debugging session, clear flows from its UI as you go, and restart without `--web` (or with
+> `--no-web`) for long-lived proxies.
+
+**Opening it.** `start` prints the URL, in the form `http://127.0.0.1:<web_port>/?token=<token>`, in its endpoint block.
+Open that URL in a browser. `holon-coherence web-token` (or `status`) prints it again later; pass `--name` to either for
+a container started with `start --name`.
+
+**How the token is resolved.** The first of these wins: `--web-password`, then the `HOLON_COHERENCE_WEB_PASSWORD`
+environment variable, then a freshly generated random token (`secrets.token_urlsafe(16)`). It is saved to
+`~/.holon/web-token` with mode `0600` and passed to mitmweb as `web_password`, so the UI never runs unauthenticated. The
+full URL with the token is printed only to your terminal by `start`, `status`, the `metrics` table and `web-token`. It
+is never printed in `metrics --json` output, in the container's own output (`docker logs` shows the token as hidden), or
+in the wire logs, where `token=` query values are redacted by the existing secret scrubbing.
+
+> [!WARNING] The inspector shows **raw, unscrubbed traffic**, including `Authorization` headers and API keys, because it
+> renders the live flows themselves. Wire-log scrubbing applies to what is persisted and is unaffected. The inspector is
+> published on `127.0.0.1` only and is token-gated. Do not re-publish it on another interface. Leave it off when you do
+> not need it, for example on shared machines.
+
+**Recovering the token of a manual `docker run`.** A container started by hand with `start --web` but without
+`HOLON_COHERENCE_WEB_PASSWORD` in its environment generates its own token, which the host commands cannot read from the
+container environment. `status` and `web-token` then report the inspector as running with the token unavailable and
+print the recovery command, which reads the token the container saved:
+`docker exec <container> sh -c 'cat "$HOME/.holon/web-token"'`.
+
+**How endpoints and ports are reported.** The inspector defaults to host port `8081` (`--web-port` overrides it). If
+that port is busy, or it is the proxy port or the `--local-llm-base` port, `start` falls back to the next free port and
+says so. `start`, `status` and `metrics` print the ports actually in use, in the same table layout:
+
+```text
+----------------------------------------------------------------
+  Exposed Endpoints
+  Proxy Listen Address         : 127.0.0.1:8080
+  Coherence Live Dashboard     : http://127.0.0.1:8080/holon/
+  mitmweb Req/Resp Inspector   : http://127.0.0.1:8081/?token=<token>
+----------------------------------------------------------------
+```
+
+`status` and `metrics` read the ports from the running container's Docker port mappings. When the container is down, or
+was started headless (without `--web`), the inspector row reads `not running` rather than repeating an old URL from
+`~/.holon/web-token`. For a running inspector, `status`, `metrics` and `web-token` read the token from that container's
+own `HOLON_COHERENCE_WEB_PASSWORD` environment rather than from `~/.holon/web-token`, which holds only the token of the
+most recent `start` whatever its `--name`; with several named containers each URL carries the token that container
+accepts.
+
 ---
 
 ### 5. A/B Testing & Token Reduction Verification Suite
@@ -424,14 +499,23 @@ If you prefer to invoke Docker directly without using the Python CLI wrapper:
 # Build local container
 docker build -t holon-coherence:latest .
 
-# Run container
+# Run container (headless: the image's default command runs mitmdump only)
 docker run --name holon-coherence --rm -it \
   -p 127.0.0.1:8080:8080 \
-  -p 127.0.0.1:8081:8081 \
   -v ~/.holon/proxy-ca:/home/mitmproxy/.mitmproxy \
   -v ~/.holon/cache:/home/mitmproxy/.holon/cache \
   -v ~/.holon/logs:/tmp/wire_logs \
   holon-coherence:latest
+
+# Run container with the mitmweb inspector at http://127.0.0.1:8081/?token=<token>
+docker run --name holon-coherence --rm -it \
+  -p 127.0.0.1:8080:8080 \
+  -p 127.0.0.1:8081:8081 \
+  -e HOLON_COHERENCE_WEB_PASSWORD="<token>" \
+  -v ~/.holon/proxy-ca:/home/mitmproxy/.mitmproxy \
+  -v ~/.holon/cache:/home/mitmproxy/.holon/cache \
+  -v ~/.holon/logs:/tmp/wire_logs \
+  holon-coherence:latest start --port 8080 --web --web-port 8081
 ```
 
 ### 7. Connect Any Agent (Inline Execution)

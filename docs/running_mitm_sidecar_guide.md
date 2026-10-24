@@ -31,14 +31,47 @@ Start the proxy container via the CLI:
 holon-coherence start -d
 ```
 
-To enable the interactive `mitmweb` web dashboard on port `8081`:
+That starts a headless (mitmdump-only) proxy. To also start the token-protected `mitmweb` raw request/response
+inspector, opt in with `--web` (or set `HOLON_COHERENCE_WEB=1` in your shell):
 
 ```bash
-holon-coherence start -d --web --web-port 8081
+holon-coherence start -d --web
 ```
 
-The web dashboard binds to `0.0.0.0` internally inside the container and is exposed safely at `http://127.0.0.1:8081` on
-the host.
+The inspector listens on host port `8081`. If `8081` is busy (or is the proxy port or the `--local-llm-base` port), the
+CLI falls back to the next free port and says so. `start` prints every exposed endpoint with the ports it actually
+resolved:
+
+```text
+----------------------------------------------------------------
+  Exposed Endpoints
+  Proxy Listen Address         : 127.0.0.1:8080
+  Coherence Live Dashboard     : http://127.0.0.1:8080/holon/
+  mitmweb Req/Resp Inspector   : http://127.0.0.1:8081/?token=<token>
+----------------------------------------------------------------
+```
+
+Open the inspector URL to see each flow's method, URL, headers, bodies, status code, the `X-Holon-*` cache and timing
+headers and the TLS connection details. `holon-coherence status`, `holon-coherence metrics` and
+`holon-coherence web-token` print the same endpoints later (`--name` selects a named container). They read the running
+container's port mappings and report the inspector as `not running` when the container is down or headless.
+
+mitmweb keeps every captured flow, bodies included, in memory with no retention cap, so a long-running `--web` proxy
+grows without bound. Enable it for debugging sessions and leave it off for long-lived proxies.
+
+The token comes from `--web-password`, then `HOLON_COHERENCE_WEB_PASSWORD`, then a generated random token. It is saved
+to `~/.holon/web-token` (mode `0600`) and is never written to `docker logs`, `metrics --json` output or the wire logs.
+The inspector shows raw, unscrubbed traffic, including credentials, so it is published on `127.0.0.1` only.
+
+To choose another inspector port, or to force a headless start when `HOLON_COHERENCE_WEB=1` is set:
+
+```bash
+holon-coherence start -d --web --web-port 9090
+holon-coherence start -d --no-web
+```
+
+The inspector binds to `0.0.0.0` internally inside the container and is exposed only at `127.0.0.1` on the host.
+Background proxies started by `holon-coherence run`, `run-agent` and the agent shortcuts are always headless.
 
 ### Direct Docker Run (Manual)
 
@@ -59,8 +92,9 @@ docker run --rm --name host-mitm-proxy \
            --set ignore_hosts='^(api\.github\.com|github\.com):443$'
 ```
 
-> [!TIP] **Enabling Web Dashboard**: When using direct `docker run`, map `-p 127.0.0.1:8081:8081`, replace `mitmdump`
-> with `mitmweb`, and pass `--web-host 0.0.0.0 --web-port 8081` to inspect live traffic at `http://127.0.0.1:8081`.
+> [!TIP] **Enabling the mitmweb Inspector**: When using direct `docker run`, map `-p 127.0.0.1:8081:8081`, replace
+> `mitmdump` with `mitmweb`, and pass `--web-host 0.0.0.0 --web-port 8081 --set web_password=<token>` to inspect live
+> traffic at `http://127.0.0.1:8081/?token=<token>`.
 
 > [!TIP] **Enabling Debug Logging**: Add `-e MITM_DEBUG=1` to the `docker run` command and
 > `--set termlog_verbosity=debug --set flow_detail=3` to `mitmdump` to inspect detailed request/response payloads and
