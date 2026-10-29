@@ -199,7 +199,7 @@ cat .holon/mitm_wire_logs/transactions.jsonl | jq '{
 
 ### 2. Live Verification Scorecard from Empirical Run
 
-From our high-volume multi-turn benchmark run (`ab_measure_all_methods.py`):
+From our high-volume multi-turn benchmark run (A/B measurement on captured wire logs; see [README](README.md)):
 
 |   Turn #   | Model                   | Status  | Input Tokens | Cache Read Tokens | Output Tokens | Duration |
 | :--------: | :---------------------- | :-----: | :----------: | :---------------: | :-----------: | :------: |

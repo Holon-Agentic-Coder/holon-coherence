@@ -158,11 +158,12 @@ OpenAI, Gemini, custom endpoints) and **arbitrary agent harnesses** (Antigravity
      (`holon-coherence ab-test --trace-file .holon/mitm_wire_logs/transactions.jsonl`) to confirm turns, usage and
      timings are read correctly, without making network calls or incurring API costs.
 3. **Tier 3: Live Network Socket Proxy A/B Test for Arbitrary LLM APIs**
-   - Spawns the official Docker mitmproxy sidecar container (`mitmproxy/mitmproxy:12.2.3` running `mitm_addon.py`),
-     routes real HTTP client socket POST traffic through the container to **arbitrary target LLM URLs** via a strictly
-     required `--url` parameter (zero hardcoded default URLs), and records real upstream response payloads and provider
-     billing headers (`cache_read_input_tokens`, `prompt_tokens`).
+   - Starts the official Docker mitmproxy sidecar container (`mitmproxy/mitmproxy:12.2.3` running `mitm_addon.py`) and
+     routes a real client workload through it twice (`holon-coherence start --passive` for the baseline, then
+     `holon-coherence start`), launching the client with `holon-coherence run -- <client command>`. Real upstream
+     response payloads and provider billing usage (`cache_read_input_tokens`, `prompt_tokens`) are recorded in
+     `.holon/mitm_wire_logs/`.
 4. **Tier 4: End-to-End Agent A/B Test for Arbitrary Agents**
-   - Executes containerized agent workloads in Docker sandbox across **arbitrary agents**
-     (`--agent antigravity|claude|pi|codex|gemini`) and **arbitrary models** with mitmproxy sidecar (`--token-reduce`),
-     Root CA trust injection, and live container socket proxying comparing baseline vs. token-reduced runs.
+   - Runs a real coding agent (`agy`, `claude`, `codex`, `opencode`, `pi`) on any model twice through the mitmproxy
+     sidecar via `holon-coherence ab-test --command "<agent workload>"`, and compares the baseline and optimised turns
+     captured in the wire log.

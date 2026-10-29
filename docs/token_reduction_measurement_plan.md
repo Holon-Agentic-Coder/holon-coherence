@@ -936,7 +936,7 @@ gantt
      `process_payload_with_stats()`) to avoid redundant post-hoc AST diffing or tree traversals.
 2. **Update
    [`mitm_addon.py`](../src/holon_coherence/mitm_addon.py)**:
-   - Parameterize log directory using `WIRE_LOG_DIR` environment variable (default: `.holon/mitm_wire_logs/`) and cache
+   - Parameterise log directory using `WIRE_LOG_DIR` environment variable (default: `.holon/mitm_wire_logs/`) and cache
      directory using `CACHE_DIR` environment variable (default: `~/.holon/cache/`) so SQLite cache persistence can be
      mapped to host directories (`-e CACHE_DIR=/tmp/cache -v "${REPO_ROOT}/.holon/cache":/tmp/cache`).
    - Implement `dump_wire_transaction()` to write full raw request, cleaned request, and response payloads to

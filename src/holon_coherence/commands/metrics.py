@@ -148,9 +148,9 @@ def _read_offline_metrics(wire_log_dir: str) -> dict[str, Any] | None:
                 if total_sec is not None:
                     latest_total_time_ms = total_sec * 1000.0
 
-                # Prefill is prompt tokens over the measured TTFT. Records written with measured timings and
-                # later carry the computed rate explicitly, so live and offline readings agree even
-                # when the two disagree with a naive re-derivation from rounded millisecond values.
+                # Prefill is prompt tokens over the measured TTFT. Records that include measured timings
+                # carry the computed rate explicitly, so live and offline readings agree even when the
+                # two disagree with a naive re-derivation from rounded millisecond values.
                 prefill_tps = _stored_rate(timing.get("prefill_tps"), compute_prefill_tps(in_toks, ttft_sec))
                 if prefill_tps is not None:
                     sum_prefill_throughput_tps += prefill_tps

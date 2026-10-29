@@ -116,7 +116,7 @@ HTML5 skeleton (`index.html`):
 ```bash
 agy exec --model "${tier1_model}" << 'EOF'
 Role: System Architect (Tier 1)
-Analyze the Holon token reduction proxy and draft the complete architectural specification in .holon/artifacts/generate_website/dashboard_design.md with Mermaid diagrams.
+Analyse the Holon token reduction proxy and draft the complete architectural specification in .holon/artifacts/generate_website/dashboard_design.md with Mermaid diagrams.
 Next, produce the standalone HTML5 dashboard structure in .holon/artifacts/generate_website/index.html.
 EOF
 ```
@@ -185,7 +185,8 @@ print("Compressed Output passed to Architect:\n", result.summary)
 
 ### 1. Empirical Workload Telemetry Log
 
-From our live benchmark run across both workload suites (`ab_measure_all_methods.py`):
+From our live benchmark run across both workload suites (A/B measurement on captured wire logs; see
+[README](README.md)):
 
 |   Turn #   | Model                   |      Role      | Input Tokens | Output Tokens | Thinking Tokens | Cache Reads |
 | :--------: | :---------------------- | :------------: | :----------: | :-----------: | :-------------: | :---------: |
@@ -214,7 +215,7 @@ From our live benchmark run across both workload suites (`ab_measure_all_methods
 2. **Functional Quality Guarantee**: All generated code must pass 100% of automated tests:
    ```bash
    DASHBOARD_DIR=.holon/artifacts/generate_website uv run pytest .holon/artifacts/generate_website/test_dashboard.py
-   # Output: Ran 4 tests in 0.001s ... OK (100% pass)
+   # Output: 4 passed (100% pass)
    ```
 3. **Artifact Completeness**: Full-scale deliverables generated without truncations:
    - `dashboard_design.md` (94 KB)
