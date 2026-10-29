@@ -21,6 +21,7 @@ import argparse
 import http.client
 import io
 import json
+import math
 import os
 import statistics
 import sys
@@ -82,8 +83,23 @@ class TimingRecord:
         if data.get("schema") != SCHEMA:
             notice(f"ignoring timing record with unknown schema {data.get('schema')!r}")
             return None
+        if not _valid_values(data):
+            notice("ignoring timing record with a non-numeric duration or test time")
+            return None
         known = {f.name for f in fields(cls)}
         return cls(**{key: value for key, value in data.items() if key in known})
+
+
+def _finite_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _valid_values(data: Mapping) -> bool:
+    """A positive finite `duration_s` and a `tests` mapping of names to finite numbers."""
+    duration, tests = data.get("duration_s"), data.get("tests", {})
+    if not (_finite_number(duration) and duration > 0 and isinstance(tests, dict)):
+        return False
+    return all(isinstance(name, str) and _finite_number(seconds) for name, seconds in tests.items())
 
 
 def artefact_name(job: str, os_name: str) -> str:
@@ -448,6 +464,8 @@ def run_compare(args: argparse.Namespace, fetchers: Fetchers, now: float, env: M
 def _test_report(args: argparse.Namespace, current: TimingRecord, baseline: list[TimingRecord]) -> list[str]:
     if args.junit is None:
         return []
+    if not baseline:
+        return ["no main baseline yet; per-test comparison skipped"]
     offenders = test_offenders(
         current.tests, baseline, tolerance=args.test_tolerance, min_delta=args.test_min_delta, limit=args.test_limit
     )

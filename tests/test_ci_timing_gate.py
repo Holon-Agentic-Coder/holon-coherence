@@ -295,6 +295,15 @@ def test_report_printed_on_passing_run_without_changing_exit(tmp_path, capsys):
     assert "::error::" not in out
 
 
+def test_report_without_baseline_skips_per_test_comparison(tmp_path, capsys):
+    junit = write_junit(tmp_path / "junit.xml", {"t.m::slow": 40.0})
+    assert run_compare(tmp_path, 60, fake_fetchers([]), "--junit", str(junit)) == 0
+    out = capsys.readouterr().out
+    assert "no main baseline yet; per-test comparison skipped" in out
+    assert "no test grew" not in out
+    assert "new tests without a baseline" not in out
+
+
 def test_report_appended_to_failure_message(tmp_path, capsys):
     junit = write_junit(tmp_path / "junit.xml", {"t.m::slow": 40.0, "t.m::new": 1.0})
     records = [make_record(60, {"t.m::slow": 10.0})] * 5
@@ -380,6 +389,32 @@ def test_record_round_trip_and_unknown_schema(capsys):
     assert "unknown schema 2" in capsys.readouterr().out
     assert TimingRecord.from_json("[]") is None
     assert "not a JSON object" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"duration_s": None},
+        {"duration_s": "53"},
+        {"duration_s": True},
+        {"duration_s": 0},
+        {"duration_s": float("nan")},
+        {"tests": ["a::b"]},
+        {"tests": {"a::b": "1.0"}},
+        {"tests": {"a::b": None}},
+    ],
+)
+def test_record_with_malformed_values_is_ignored(overrides, capsys):
+    data = {**json.loads(make_record(53, {"a::b": 1.0}).to_json()), **overrides}
+    assert TimingRecord.from_json(json.dumps(data)) is None
+    assert "non-numeric duration or test time" in capsys.readouterr().out
+
+
+def test_malformed_record_shrinks_the_baseline(tmp_path, capsys):
+    bad = TimingRecord.from_json(json.dumps({**json.loads(make_record(60).to_json()), "duration_s": None}))
+    assert bad is None
+    assert run_compare(tmp_path, 200, fake_fetchers([bad] + [make_record(60)] * 4)) == 0
+    assert "only 4 of 5 main records" in capsys.readouterr().out
 
 
 def test_artefact_name():

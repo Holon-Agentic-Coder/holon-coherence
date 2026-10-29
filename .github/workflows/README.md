@@ -60,8 +60,9 @@ were +38 %/+24 s (`unit` ubuntu), +31 %/+22 s (`integration`) and +28 %/+26 s (`
 one of the two thresholds, so replaying the window produces no failures, while doubling the latest `unit` ubuntu job (53
 s to 106 s) fails. The 300 s ceiling is more than double the largest job.
 
-For the shortest jobs (`make` on ubuntu at about 29 s, `docker-build` at about 39 s) a doubling stays below the 30 s
+For jobs whose median is at or below 30 s (today only `make` on ubuntu, at about 29 s) a doubling stays within the 30 s
 floor, so only the ceiling catches them. This is deliberate: those jobs are dominated by runner and network noise.
+Longer jobs such as `docker-build` (about 39 s) fail once they grow by more than both 50 % and 30 s.
 
 ### Reading the report
 
@@ -78,6 +79,10 @@ floor, so only the ceiling catches them. This is deliberate: those jobs are domi
 Add the label `timing-regression-accepted` to the pull request and re-run the failed job. Labels are read live from the
 API, so a re-run honours a label added after the first run. A relative failure then becomes a warning naming the
 label. The label never overrides the ceiling, which can only change by editing `--ceiling` in the workflow file.
+
+Not every failure is a slow-down worth accepting. When `docker-build` fails after its Buildx cache was evicted or
+invalidated, the cold cache is transient: re-run the job first, and add the label only if a warm-cache re-run still
+fails.
 
 ### Permissions
 
