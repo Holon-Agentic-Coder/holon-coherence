@@ -17,16 +17,18 @@ NESTED_FORBIDDEN_DIRS = frozenset({"." + "sub" + "agent", "." + "be" + "ans"})
 PROVENANCE_PREFIXES = ("holon-knowledge/ledger/", "plans/", "executions/", "intents/")
 CONTENT_PATTERNS = (
     re.compile(r"(?<![\w.-])" + "to" + r"do/"),
-    # A quoted bare name only counts in a path context: any argument of a path join() (qualified or imported bare) or
-    # Path(), including after an argument that is itself a call (one level of nested parentheses), or next to a "/"
-    # operator; a plain str.join() (a join preceded by a dot) is not a path context.
+    # A quoted bare name only counts in a path context: any argument of a path join() (qualified or imported bare),
+    # joinpath() or Path(), including after an argument that is itself a call (one level of nested parentheses), or
+    # next to a "/" operator; a plain str.join() (a join preceded by a dot) is not a path context.
     re.compile(
-        r"""(?:(?:(?<![\w.])join|path\.join|Path)\((?:[^()]|\([^()]*\))*|/\s*)["']"""
+        r"""(?:(?:(?<![\w.])join|path\.join|joinpath|Path)\((?:[^()]|\([^()]*\))*|/\s*)["']"""
         + "to"
         + r"""do["']|["']"""
         + "to"
         + r"""do["']\s*/"""
     ),
+    # A quoted path whose last segment is the bare name ("../x", f"{root}/x", "~/x").
+    re.compile(r"""["'`][^"'`\s]*/""" + "to" + r"""do["'`]"""),
     re.compile(r"(?<![\w-])\." + "sub" + r"agent/"),
     re.compile(r"(?<![\w-])\." + "be" + r"ans/"),
     re.compile(r"/(?:Users|home)/[^/\s]+/git/"),
@@ -133,6 +135,9 @@ def test_forbidden_dirs_are_detected(path: str) -> None:
         'help="one of: " + "|".join(("done", "' + "to" + 'do"))',
         'sep.join(["done", "' + "to" + 'do"])',
         '"/".join(("done", "' + "to" + 'do"))',
+        '"/api/' + "to" + 'dos"',
+        '"/' + "to" + 'do-list"',
+        "'x.joinpath'",
     ],
 )
 def test_benign_text_is_allowed(text: str) -> None:
@@ -171,6 +176,12 @@ def test_benign_text_is_allowed(text: str) -> None:
         'join(Path.home(), "' + "to" + 'do")',
         'root / "' + "to" + 'do"',
         '"' + "to" + 'do" / "cache"',
+        'Path.home().joinpath("' + "to" + 'do")',
+        "root.joinpath('" + "to" + "do', 'x')",
+        'os.getenv("D", "../' + "to" + 'do")',
+        'f"{root}/' + "to" + 'do"',
+        '"~/' + "to" + 'do"',
+        "`../" + "to" + "do`",
         "TestFoo" + "Be" + "an0097",
         "fix_" + "be" + "an_0097",
     ],
