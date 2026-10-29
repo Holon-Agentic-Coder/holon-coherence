@@ -60,9 +60,10 @@ were +38 %/+24 s (`unit` ubuntu), +31 %/+22 s (`integration`) and +28 %/+26 s (`
 one of the two thresholds, so replaying the window produces no failures, while doubling the latest `unit` ubuntu job (53
 s to 106 s) fails. The 300 s ceiling is more than double the largest job.
 
-For jobs whose median is at or below 30 s (today only `make` on ubuntu, at about 29 s) a doubling stays within the 30 s
-floor, so only the ceiling catches them. This is deliberate: those jobs are dominated by runner and network noise.
-Longer jobs such as `docker-build` (about 39 s) fail once they grow by more than both 50 % and 30 s.
+For jobs whose median is at or below 30 s (for example `make` on ubuntu, at 29 s on the latest `main` run, and at times
+`docker-build`, whose runs ranged from 25 s to 63 s) a doubling stays within the 30 s floor, so only the ceiling catches
+them. This is deliberate: those jobs are dominated by runner and network noise. Once a job's median is above 30 s, as
+for `docker-build` at 39 s on the latest `main` run, it fails when it grows by more than both 50 % and 30 s.
 
 ### Reading the report
 

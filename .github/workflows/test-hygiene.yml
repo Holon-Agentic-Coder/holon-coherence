@@ -99,3 +99,4 @@ jobs:
           path: ${{ runner.temp }}/ci-timing/timing.json
           retention-days: 90
           if-no-files-found: warn
+          overwrite: true

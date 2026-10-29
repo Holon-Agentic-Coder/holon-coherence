@@ -303,11 +303,12 @@ def _download_zip(url: str, token: str) -> bytes:
 
 
 def _event_labels(event_path: str) -> list[str]:
+    """Labels from the event payload; a missing or malformed payload yields no labels, never a crash."""
     try:
         event = json.loads(Path(event_path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        return [label["name"] for label in (event.get("pull_request") or {}).get("labels", [])]
+    except FETCH_ERRORS:
         return []
-    return [label["name"] for label in (event.get("pull_request") or {}).get("labels", [])]
 
 
 def github_fetchers(api_url: str, repo: str, token: str, event_path: str = "") -> Fetchers:
@@ -328,7 +329,8 @@ def github_fetchers(api_url: str, repo: str, token: str, event_path: str = "") -
         # Read live so that re-running a job after adding the label honours it; the event payload of a re-run is stale.
         try:
             return [label["name"] for label in _get_json(f"{base}/issues/{number}/labels", token)]
-        except FETCH_ERRORS:
+        except FETCH_ERRORS as exc:
+            notice(f"live label lookup for #{number} failed ({exc}); using the event payload labels")
             return _event_labels(event_path)
 
     return Fetchers(list_artifacts, download_record, pr_labels)
@@ -342,11 +344,12 @@ def _percent(text: str) -> float:
 
 
 def _epoch(text: str) -> float | None:
-    """An empty or non-numeric start timestamp becomes None so the gate can skip with a notice."""
+    """An empty, non-numeric or non-finite start timestamp becomes None so the gate can skip with a notice."""
     try:
-        return float(text)
+        value = float(text)
     except ValueError:
         return None
+    return value if math.isfinite(value) else None
 
 
 def build_parser() -> argparse.ArgumentParser:

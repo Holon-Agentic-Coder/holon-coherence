@@ -185,7 +185,7 @@ def test_truncated_http_response_degrades_to_cold_start(tmp_path, capsys):
     assert "treating as 0 main records" in capsys.readouterr().out
 
 
-def test_pr_labels_fall_back_to_event_on_truncated_response(monkeypatch, tmp_path):
+def test_pr_labels_fall_back_to_event_on_truncated_response(monkeypatch, tmp_path, capsys):
     def truncated(url, token):
         raise http.client.IncompleteRead(b"")
 
@@ -193,6 +193,14 @@ def test_pr_labels_fall_back_to_event_on_truncated_response(monkeypatch, tmp_pat
     event.write_text(json.dumps({"pull_request": {"labels": [{"name": ACCEPT_LABEL}]}}))
     monkeypatch.setattr(ci_timing_gate, "_get_json", truncated)
     assert github_fetchers("https://example.invalid", "o/r", "", str(event)).pr_labels(7) == [ACCEPT_LABEL]
+    assert "using the event payload labels" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("payload", [[], {"pull_request": {"labels": [{"id": 1}]}}, {"pull_request": {"labels": 3}}])
+def test_malformed_event_payload_yields_no_labels(tmp_path, payload):
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps(payload))
+    assert ci_timing_gate._event_labels(str(event)) == []
 
 
 def test_download_record_skips_truncated_archive(monkeypatch, capsys):
@@ -214,9 +222,11 @@ def test_download_attempts_are_capped(tmp_path, capsys):
     assert "stopped after 10 artefact downloads" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("started_at", ["", "nan", "inf"])
 @pytest.mark.parametrize("command", ["record", "compare"])
-def test_missing_start_timestamp_skips_the_gate(tmp_path, capsys, command):
-    argv = [command, "--workflow", "w", "--job", "unit", "--os", "Linux", "--started-at", "", "--out", str(tmp_path)]
+def test_missing_start_timestamp_skips_the_gate(tmp_path, capsys, command, started_at):
+    argv = [command, "--workflow", "w", "--job", "unit", "--os", "Linux", "--started-at", started_at]
+    argv += ["--out", str(tmp_path)]
     assert main(argv, fetchers=fake_fetchers([]), now=lambda: 1000, env={}) == 0
     assert "no start timestamp; gate skipped" in capsys.readouterr().out
     assert not (tmp_path / "timing.json").exists()
