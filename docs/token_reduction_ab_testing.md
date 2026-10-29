@@ -41,10 +41,10 @@ graph TD
 Automated unit tests verify individual proxy, cleaner, caching, RAG, and orchestrator components before running
 benchmark tests.
 
-- **Test Suite Path**: `apps/sandbox-executor/tests/test_token_reduction.py`
+- **Test Suite Path**: `tests/`
 - **Execution Command**:
   ```bash
-  uv run pytest apps/sandbox-executor/tests/test_token_reduction.py
+  uv run pytest
   ```
 - **Verification Target**: 100% pass rate across 54+ test cases covering CA generation, trust injection, payload
   cleaner, hybrid SQLite caching, BM25/AST indexing, and ringer delegation.
@@ -62,57 +62,51 @@ Codex, Gemini).
 
 #### Tier 1: Automated Unit Component Verification
 
-Run unit tests verifying core algorithms (CA generation, cleaner policies, SQLite caching):
+Run unit tests verifying core algorithms (CA generation, cleaner policies, SQLite caching) from the repository root:
 
 ```bash
-cd holon-agentic-coder-ref/develop
-uv run pytest apps/sandbox-executor/tests/test_token_reduction.py
+uv run pytest
 ```
 
-#### Tier 2: Offline Deterministic Mocked Payload Benchmark
+#### Tier 2: Offline Parser Smoke Check
 
-Run in-memory payload transformation and cache matching benchmarks (zero API cost):
+Replay a captured wire log through the comparison parser to confirm that turns, usage blocks and timings are read
+correctly (zero API cost). This check only validates parsing; it is never used to report efficacy figures:
 
 ```bash
-cd holon-agentic-coder-ref/develop
-uv run python ../../todo/ab_benchmark_mock_api.py
+holon-coherence ab-test --trace-file .holon/mitm_wire_logs/transactions.jsonl
 ```
 
 #### Tier 3: Live Network Socket Proxy A/B Test (Arbitrary LLM Provider APIs)
 
-Performs a raw `curl` pre-check against the target URL, spawns the Docker mitmproxy sidecar container
-(`mitmproxy/mitmproxy:12.2.3` running `mitm_addon.py`), routes real client socket traffic through the container to
-**arbitrary target LLM URLs** via a strictly required `--url` parameter (zero hardcoded default URLs), standardizes on
-`HOLON_AGENT_KEY`, and outputs all structured execution logs and response payloads into the `todo/` directory
-(`todo/ab_real_api_results.json` and `todo/ab_real_api_results.md`):
+Route a real client workload through the proxy twice: once with the proxy in passive monitoring mode (baseline, logging
+only) and once with optimisation enabled. Credentials are standardised on `HOLON_AGENT_KEY` (or native host auth), and
+every turn is recorded in `.holon/mitm_wire_logs` (`transactions.jsonl` plus per-turn `turn_*.json` files):
 
 ```bash
-export HOLON_AGENT_KEY="sk-..."
-cd holon-agentic-coder-ref/develop
+# Baseline: passive monitoring, no optimisation
+holon-coherence start --passive
+HOLON_AGENT_KEY="sk-..." holon-coherence run -- <client command against the target LLM URL>
 
-# Test Anthropic Endpoint
-uv run python ../../todo/ab_benchmark_real_api.py --url "https://api.anthropic.com/v1/messages" -p "Write a python function to compute fibonacci numbers."
+# Optimised: restart the proxy with optimisation enabled and repeat the same workload
+holon-coherence stop && holon-coherence start
+HOLON_AGENT_KEY="sk-..." holon-coherence run -- <client command against the target LLM URL>
 
-# Test OpenAI / OpenRouter Endpoint
-uv run python ../../todo/ab_benchmark_real_api.py --url "https://openrouter.ai/api/v1/chat/completions" -f payload_openai.json
+# Inspect live cumulative totals
+holon-coherence metrics --json
 ```
 
-#### Tier 4: End-to-End Sandbox A/B Test (Arbitrary Agents & Models)
+#### Tier 4: End-to-End Agent A/B Test (Arbitrary Agents & Models)
 
-Executes containerized agent workloads in Docker sandbox across **arbitrary agent harnesses** (`antigravity`, `claude`,
-`pi`, `codex`, `gemini`) and **arbitrary models** with mitmproxy sidecar (`--token-reduce`), Root CA trust injection,
-and live container socket proxying:
+Run a real coding agent (`agy`, `claude`, `codex`, `opencode`, `pi`) through the proxy with any model. `ab-test` runs
+the same workload twice (passive baseline, then optimised) and compares the captured turns:
 
 ```bash
-cd holon-agentic-coder-ref/develop
+# Paired baseline/optimised agent run with a comparison scorecard
+holon-coherence ab-test --command "<agent workload command>"
 
-# E2E Agent execution benchmark runner (arbitrary agent & model)
-uv run python ../../todo/ab_benchmark_holon_agent.py --plan-branch develop --agent antigravity-agent --model gemini-3.5-flash
-uv run python ../../todo/ab_benchmark_holon_agent.py --plan-branch develop --agent claude-agent --model claude-3-5-sonnet
-
-# Direct Holon CLI invocation with --token-reduce
-uv run python -m sandbox_executor.cli execute develop --agent antigravity-agent --model gemini-3.5-flash --token-reduce
-uv run python -m sandbox_executor.cli execute develop --agent claude-agent --model claude-3-5-sonnet --token-reduce
+# Compare two previously captured wire-log directories
+holon-coherence ab-test --baseline <baseline wire-log dir> --optimized <optimised wire-log dir> --json
 ```
 
 ### Metrics Framework & Indicators
@@ -156,7 +150,7 @@ installation required):
 ```bash
 docker run --rm -it \
   -p 127.0.0.1:8080:8080 \
-  -v $(pwd)/apps/sandbox-executor/src/sandbox_executor/token_reduction/mitm_addon.py:/tmp/mitm_addon.py:ro \
+  -v $(pwd)/src/holon_coherence/mitm_addon.py:/tmp/mitm_addon.py:ro \
   mitmproxy/mitmproxy:12.2.3 \
   mitmdump -s /tmp/mitm_addon.py --listen-port 8080
 ```

@@ -108,7 +108,7 @@ WEB_INSPECTOR_ENV_VAR = "HOLON_COHERENCE_WEB"
 
 
 def is_web_inspector_enabled(args: Any, in_container: bool) -> bool:
-    """Decide whether ``start`` launches the mitmweb inspector (Bean 0129).
+    """Decide whether ``start`` launches the mitmweb inspector.
 
     The inspector is opt-in: mitmweb keeps every captured flow (request and response bodies
     included) in memory for the life of the process and mitmproxy offers no option to cap that, so

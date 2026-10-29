@@ -2487,7 +2487,7 @@ class TestPlanAndReportLocalLlmRoute:
 
 
 class TestWebTokenAndDashboardAuth:
-    """Tests for web dashboard token management and password protection (Bean 0042)."""
+    """Tests for web dashboard token management and password protection."""
 
     def test_web_token_resolution_and_generation(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # 1. Explicit CLI argument
@@ -2647,7 +2647,7 @@ class TestWebTokenAndDashboardAuth:
 
 
 class TestCLIMetricsCommand:
-    """Tests for holon-coherence metrics command and status integration (Bean 0043)."""
+    """Tests for holon-coherence metrics command and status integration."""
 
     @pytest.fixture(autouse=True)
     def _no_docker_queries(self) -> Iterator[None]:
@@ -2757,6 +2757,7 @@ class TestCLIMetricsCommand:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
+        monkeypatch.chdir(tmp_path)
         monkeypatch.delenv("WIRE_LOG_DIR", raising=False)
         fake_home = tmp_path / "home"
         holon_logs = fake_home / ".holon" / "logs"
@@ -2793,6 +2794,47 @@ class TestCLIMetricsCommand:
         assert data["avg_decode_throughput_tps"] == 50.0  # 50 / 1.0s
         assert data["total_cache_creation_tokens"] == 10
         assert data["total_reasoning_tokens"] == 5
+
+    def test_handle_metrics_offline_fallback_default_wire_log_dir(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("WIRE_LOG_DIR", raising=False)
+        wire_logs = tmp_path / ".holon" / "mitm_wire_logs"
+        wire_logs.mkdir(parents=True)
+        record = {
+            "turn_id": 1,
+            "cache_action": "MISS",
+            "delta": {"tool_outputs_omitted": 1, "chars_saved": 40},
+            "response": {"usage": {"input_tokens": 100, "output_tokens": 50}},
+            "timing": {"ttft_ms": 200.0, "total_ms": 1200.0},
+        }
+        (wire_logs / "transactions.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+        with (
+            patch("os.path.expanduser", side_effect=lambda p: str(tmp_path / "absent") if "~/.holon/logs" in p else p),
+            patch("urllib.request.urlopen", side_effect=OSError("connection refused")),
+        ):
+            ret = handle_metrics(json_output=True)
+        assert ret == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["source"] == "offline_wire_log"
+        assert data["avg_prefill_throughput_tps"] == 500.0  # 100 / 0.2s
+
+    def test_wire_log_dir_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import importlib
+
+        import holon_coherence.commands.metrics as metrics_module
+
+        monkeypatch.delenv("WIRE_LOG_DIR", raising=False)
+        assert importlib.reload(metrics_module).WIRE_LOG_DIR == ".holon/mitm_wire_logs"
+        monkeypatch.setenv("WIRE_LOG_DIR", "/tmp/custom-wire-logs")
+        assert importlib.reload(metrics_module).WIRE_LOG_DIR == "/tmp/custom-wire-logs"
+        monkeypatch.undo()
+        importlib.reload(metrics_module)
 
     def test_handle_metrics_prefill_and_kv_cache_terminal_output(
         self,
@@ -2856,7 +2898,7 @@ class TestCLIMetricsCommand:
 
 
 class TestLocalLlmRunnerFlagsAndEnvs:
-    """Tests for --model and local LLM runner flags/environments (Bean 0051)."""
+    """Tests for --model and local LLM runner flags/environments."""
 
     def test_extract_runner_flags_model(self) -> None:
         flags = extract_runner_flags(["--model", "qwen2.5-coder", "run.py"])
@@ -2886,7 +2928,7 @@ class TestLocalLlmRunnerFlagsAndEnvs:
         monkeypatch.setenv("HOLON_AGENT_KEY", "test-agy-key")
         monkeypatch.delenv("USER", raising=False)
         env = build_agent_env("agy", port=8080, model="gemini-flash", local_llm_base="localhost:11434")
-        # Bean 0051: sets AGY_GATEWAY_URL with non-loopback alias (NOT GOOGLE_GEMINI_BASE_URL)
+        # Local LLM runner sets AGY_GATEWAY_URL with non-loopback alias (NOT GOOGLE_GEMINI_BASE_URL)
         assert env["AGY_GATEWAY_URL"] == "http://127.0.0.1.nip.io:8080"
         assert "GOOGLE_GEMINI_BASE_URL" not in env
         assert env["AGY_MODEL"] == "gemini-flash"
@@ -2916,8 +2958,8 @@ class TestLocalLlmRunnerFlagsAndEnvs:
         assert "AGY_MODEL" not in agy_env
 
 
-class TestOfflineTelemetryThroughputBean0097:
-    """Offline wire-log throughput arithmetic must mirror the live proxy (Bean 0097)."""
+class TestOfflineTelemetryThroughput:
+    """Offline wire-log throughput arithmetic must mirror the live proxy."""
 
     @staticmethod
     def _write_records(tmp_path: Path, records: list[dict[str, Any]]) -> str:
@@ -3224,7 +3266,7 @@ def _free_ports(port: int, host: str = "127.0.0.1") -> bool:
     return False
 
 
-class TestMitmwebInspectorDefaultBean0129:
+class TestMitmwebInspectorDefault:
     """The mitmweb inspector is opt-in (``--web`` or ``HOLON_COHERENCE_WEB``); a plain ``start`` stays headless.
 
     mitmweb keeps every flow in memory with no retention cap, so a long-running default proxy must not run it.
@@ -3453,7 +3495,7 @@ class TestMitmwebInspectorDefaultBean0129:
         mock_resolve.assert_not_called()
 
 
-class TestEndpointReportingBean0129:
+class TestEndpointReporting:
     """``status``, ``metrics`` and ``web-token`` report the resolved endpoints, never a stale URL."""
 
     @staticmethod

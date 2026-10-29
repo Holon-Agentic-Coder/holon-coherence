@@ -162,7 +162,7 @@ class TestEquivalenceClass:
 
 
 class TestRewriteDecision:
-    """The container-side decision table (Bean 0027)."""
+    """The container-side decision table."""
 
     TARGETS = decode_targets("localhost:8081,127.0.0.1:8081,[::1]:8081,192.168.2.13:8081")
 

@@ -33,7 +33,6 @@ ENV/
 htmlcov/
 
 # Local cache & logs
-todo/
 cache/
 *.db
 *.db-shm

@@ -26,7 +26,7 @@ proxy and execution harness. When an outgoing request matches an existing entry:
 | :------------------------- | :------------------------------------ | :------------------------------------------------- |
 | **Hybrid Cache Store**     | `src/holon_coherence/hybrid_cache.py` | `HybridCacheStore.get()`, `HybridCacheStore.put()` |
 | **MITM Interception Hook** | `src/holon_coherence/mitm_addon.py`   | `MitmproxyAddon.request()` short-circuiting        |
-| **Database Storage**       | `todo/cache/llm_cache.db`             | Table `prompt_cache` (WAL mode enabled)            |
+| **Database Storage**       | `.holon/cache/llm_cache.db`           | Table `prompt_cache` (WAL mode enabled)            |
 
 ---
 
@@ -49,7 +49,7 @@ Ensure the SQLite cache directory exists:
 
 ```bash
 REPO_ROOT=$(git rev-parse --show-toplevel)
-mkdir -p "${REPO_ROOT}/todo/cache"
+mkdir -p "${REPO_ROOT}/.holon/cache"
 ```
 
 ### 3. Normalization Invariants
@@ -82,7 +82,7 @@ sys.path.insert(0, str(repo_root / "src"))
 from holon_coherence import HybridCacheStore
 
 cache_store = HybridCacheStore(
-    cache_dir=str(repo_root / "todo/cache"),
+    cache_dir=str(repo_root / ".holon/cache"),
     similarity_threshold=0.85,
     candidate_limit=100,
 )
@@ -150,7 +150,7 @@ else:
 Inspect the SQLite database directly to verify stored records, hit counters, and timestamps:
 
 ```bash
-sqlite3 todo/cache/llm_cache.db << 'EOF'
+sqlite3 .holon/cache/llm_cache.db << 'EOF'
 .mode column
 .headers on
 SELECT
@@ -173,10 +173,10 @@ e8a4d70b31f298c1  gemini      1            2026-09-12 09:44:46    96240
 
 ### 2. Verify Proxy Wire Log Telemetry
 
-If running via the MITM proxy sidecar, verify the wire transaction record in `todo/mitm_wire_logs/transactions.jsonl`:
+If running via the MITM proxy sidecar, verify the wire transaction record in `.holon/mitm_wire_logs/transactions.jsonl`:
 
 ```bash
-cat todo/mitm_wire_logs/transactions.jsonl | jq 'select(.cache_hit == true) | {
+cat .holon/mitm_wire_logs/transactions.jsonl | jq 'select(.cache_hit == true) | {
   timestamp: .timestamp,
   model: .request.model,
   cache_hit: .cache_hit,
@@ -213,7 +213,7 @@ The output confirms:
 - **Cache Drift**: If prompt instructions are modified during active debugging, stale cache entries can return outdated
   results. Flush the local cache between clean benchmark runs via:
   ```bash
-  rm -f todo/cache/llm_cache.db*
+  rm -f .holon/cache/llm_cache.db*
   ```
 - **Semantic False Positives**: Setting `similarity_threshold` too low ($<0.75$) may cause prompts with subtle
   differences (e.g., different file names) to incorrectly return cached code for the wrong file. Maintain threshold $\ge

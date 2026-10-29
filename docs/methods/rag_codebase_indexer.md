@@ -24,11 +24,11 @@ unrelated codebase noise.
 
 ## 🏛️ Codebase Architecture & Source Locations
 
-| Component                     | Repository Path                      | Core Function / Class                                          |
-| :---------------------------- | :----------------------------------- | :------------------------------------------------------------- |
-| **AST & Keyword Indexer**     | `src/holon_coherence/rag_indexer.py` | `RAGCodebaseIndexer.build_index()`, `get_context_for_prompt()` |
-| **AST Symbol Parser**         | `src/holon_coherence/rag_indexer.py` | `_extract_ast_symbols()`                                       |
-| **Unified Benchmark Harness** | `todo/ab_measure_all_methods.py`     | Turn 0 context size comparison                                 |
+| Component                     | Repository Path                                                 | Core Function / Class                                          |
+| :---------------------------- | :-------------------------------------------------------------- | :------------------------------------------------------------- |
+| **AST & Keyword Indexer**     | `src/holon_coherence/rag_indexer.py`                            | `RAGCodebaseIndexer.build_index()`, `get_context_for_prompt()` |
+| **AST Symbol Parser**         | `src/holon_coherence/rag_indexer.py`                            | `_extract_ast_symbols()`                                       |
+| **Unified Benchmark Harness** | A/B measurement on captured wire logs (see [README](README.md)) | Turn 0 context size comparison                                 |
 
 ---
 

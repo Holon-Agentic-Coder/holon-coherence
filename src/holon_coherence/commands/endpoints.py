@@ -1,4 +1,4 @@
-"""Exposed endpoint resolution and reporting shared by ``start``, ``status`` and ``metrics`` (Bean 0129).
+"""Exposed endpoint resolution and reporting shared by ``start``, ``status`` and ``metrics``.
 
 Every command that tells the user where the proxy lives prints the same three rows: the proxy listen
 address, the Coherence live dashboard under ``/holon/`` and the plain mitmweb raw request/response

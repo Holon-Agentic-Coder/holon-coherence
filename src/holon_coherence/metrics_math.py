@@ -1,4 +1,4 @@
-"""Shared telemetry arithmetic for Holon Coherence (Bean 0097).
+"""Shared telemetry arithmetic for Holon Coherence.
 
 Every surface that reports a token rate -- the live in-memory proxy, the ``/holon/api/metrics`` JSON
 contract, the ``/holon/`` dashboard, the ``holon-coherence metrics`` terminal scorecard and the

@@ -1,4 +1,4 @@
-"""Tests for SSE stream parsing in mitm_addon (Bean 0074).
+"""Tests for SSE stream parsing in mitm_addon.
 
 These cover the aggregation the token-reduction accounting is built on: content reassembled from
 stream fragments, for each supported provider, including the cases where a naive parser silently

@@ -1,4 +1,4 @@
-"""Unit and integration tests for holon-coherence A/B testing suite (Bean 0098)."""
+"""Unit and integration tests for holon-coherence A/B testing suite."""
 
 from __future__ import annotations
 

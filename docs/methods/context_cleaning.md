@@ -75,11 +75,11 @@ never hashed or deduplicated, avoiding unnecessary tombstone clutter for trivial
 
 ## 🏛️ Codebase Architecture & Source Locations
 
-| Component                     | Repository Path                          | Core Function / Class                             |
-| :---------------------------- | :--------------------------------------- | :------------------------------------------------ |
-| **Payload Cleaner Engine**    | `src/holon_coherence/payload_cleaner.py` | `JSONContextCleaner.process_payload_with_stats()` |
-| **MITM Proxy Interceptor**    | `src/holon_coherence/mitm_addon.py`      | `MitmproxyAddon.request(flow)`                    |
-| **Unified Benchmark Harness** | `todo/ab_measure_all_methods.py`         | `clean_context_payload()`, Turn telemetry         |
+| Component                     | Repository Path                                                 | Core Function / Class                             |
+| :---------------------------- | :-------------------------------------------------------------- | :------------------------------------------------ |
+| **Payload Cleaner Engine**    | `src/holon_coherence/payload_cleaner.py`                        | `JSONContextCleaner.process_payload_with_stats()` |
+| **MITM Proxy Interceptor**    | `src/holon_coherence/mitm_addon.py`                             | `MitmproxyAddon.request(flow)`                    |
+| **Unified Benchmark Harness** | A/B measurement on captured wire logs (see [README](README.md)) | `clean_context_payload()`, Turn telemetry         |
 
 ---
 
@@ -101,9 +101,12 @@ Select the active Tier 1 Flagship Reasoning Model (e.g., `gemini-3.8-flash-high`
 
 ```bash
 REPO_ROOT=$(git rev-parse --show-toplevel)
-mkdir -p "${REPO_ROOT}/todo/mitm_wire_logs" "${REPO_ROOT}/todo/cache" ~/.holon/proxy-ca
+mkdir -p "${REPO_ROOT}/.holon/mitm_wire_logs" "${REPO_ROOT}/.holon/cache" ~/.holon/proxy-ca
 chmod 700 ~/.holon/proxy-ca
 ```
+
+> [!NOTE] Earlier releases wrote wire logs to a different default directory. Move those files into
+> `.holon/mitm_wire_logs`, or set `WIRE_LOG_DIR` to their location to keep reading them.
 
 ### 3. Launch the MITM Proxy Sidecar
 
@@ -117,8 +120,8 @@ docker run -d --name mitm-context-cleaner \
   -e PYTHONPATH=/tmp/src \
   -v "${REPO_ROOT}/src":/tmp/src:ro \
   -v "${REPO_ROOT}/src/holon_coherence/mitm_addon.py":/tmp/mitm_addon.py:ro \
-  -v "${REPO_ROOT}/todo/mitm_wire_logs":/tmp/wire_logs \
-  -v "${REPO_ROOT}/todo/cache":/tmp/cache \
+  -v "${REPO_ROOT}/.holon/mitm_wire_logs":/tmp/wire_logs \
+  -v "${REPO_ROOT}/.holon/cache":/tmp/cache \
   -v ~/.holon/proxy-ca:/home/mitmproxy/.mitmproxy \
   mitmproxy/mitmproxy:12.2.3 \
   mitmdump -s /tmp/mitm_addon.py --listen-port 8080 \
@@ -277,11 +280,11 @@ agy exec --model "${TIER1_MODEL}" "Implement a complete dark-mode responsive das
 
 ### 1. Inspect Wire Log Transactions
 
-The MITM proxy records every inbound request and modified body in `todo/mitm_wire_logs/transactions.jsonl`:
+The MITM proxy records every inbound request and modified body in `.holon/mitm_wire_logs/transactions.jsonl`:
 
 ```bash
 # Verify transaction logs exist and contain no synthetic data
-cat todo/mitm_wire_logs/transactions.jsonl | jq '{
+cat .holon/mitm_wire_logs/transactions.jsonl | jq '{
   timestamp: .timestamp,
   model: .request.model,
   tool_outputs_omitted: .reduction.tool_outputs_omitted,
@@ -296,7 +299,7 @@ cat todo/mitm_wire_logs/transactions.jsonl | jq '{
 Inspect the recorded outbound payload to ensure duplicates were replaced with valid structural pointers:
 
 ```bash
-cat todo/mitm_wire_logs/turn_*.json | grep -F "[Omitted: Tool result content is identical to Turn"
+cat .holon/mitm_wire_logs/turn_*.json | grep -F "[Omitted: Tool result content is identical to Turn"
 ```
 
 ### 3. Metric Assertions (Acceptance Criteria)

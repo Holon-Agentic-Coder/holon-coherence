@@ -1,7 +1,7 @@
 # AI Agent Token Reduction Architecture & Action Plan
 
-This document outlines the architecture, design decisions, and implementation plan for reducing token usage in the
-`holon-agentic-coder-ref` execution harness.
+This document outlines the architecture, design decisions, and implementation plan for reducing token usage in agent
+sessions routed through the `holon-coherence` proxy.
 
 ---
 
@@ -150,19 +150,19 @@ The core objective of A/B testing is to measure, compare, and empirically verify
 bandwidth savings, prompt caching efficiency, and local cache hit rates across **arbitrary LLM APIs** (Anthropic,
 OpenAI, Gemini, custom endpoints) and **arbitrary agent harnesses** (Antigravity, Claude, Pi, Codex, Gemini).
 
-1. **Tier 1: Automated Unit Verification** (`apps/sandbox-executor/tests/test_token_reduction.py`)
+1. **Tier 1: Automated Unit Verification** (`uv run pytest`)
    - Verifies CA generation, trust injection, cleaner payload transformations, hybrid SQLite caching, RAG indexing, and
      ringer delegation with 100% test pass rate.
-2. **Tier 2: Offline Deterministic Mocked Payload Benchmark** (`todo/ab_benchmark_mock_api.py`)
-   - Evaluates multi-turn payload cleaning, tool output deduplication, and local cache matching in memory without making
-     network calls or incurring API costs.
-3. **Tier 3: Live Network Socket Proxy A/B Test for Arbitrary LLM APIs** (`todo/ab_benchmark_real_api.py`)
+2. **Tier 2: Offline Parser Smoke Check** (not used for efficacy figures)
+   - Replays a captured wire log through the comparison parser
+     (`holon-coherence ab-test --trace-file .holon/mitm_wire_logs/transactions.jsonl`) to confirm turns, usage and
+     timings are read correctly, without making network calls or incurring API costs.
+3. **Tier 3: Live Network Socket Proxy A/B Test for Arbitrary LLM APIs**
    - Spawns the official Docker mitmproxy sidecar container (`mitmproxy/mitmproxy:12.2.3` running `mitm_addon.py`),
      routes real HTTP client socket POST traffic through the container to **arbitrary target LLM URLs** via a strictly
      required `--url` parameter (zero hardcoded default URLs), and records real upstream response payloads and provider
      billing headers (`cache_read_input_tokens`, `prompt_tokens`).
-4. **Tier 4: End-to-End Sandbox A/B Test for Arbitrary Agents** (`todo/ab_benchmark_holon_agent.py` &
-   `sandbox_executor.cli`)
+4. **Tier 4: End-to-End Agent A/B Test for Arbitrary Agents**
    - Executes containerized agent workloads in Docker sandbox across **arbitrary agents**
      (`--agent antigravity|claude|pi|codex|gemini`) and **arbitrary models** with mitmproxy sidecar (`--token-reduce`),
      Root CA trust injection, and live container socket proxying comparing baseline vs. token-reduced runs.

@@ -26,11 +26,11 @@ unnecessary tokens.
 
 ## 🏛️ Codebase Architecture & Source Locations
 
-| Component                     | Repository Path                           | Core Function / Class                                   |
-| :---------------------------- | :---------------------------------------- | :------------------------------------------------------ |
-| **Episodic Memory Registry**  | `src/holon_coherence/openbrain_memory.py` | `OpenBrainMemory.store_memory()`, `retrieve_memories()` |
-| **Database Storage**          | `todo/openbrain/openbrain.db`             | Table `memories`                                        |
-| **Unified Benchmark Harness** | `todo/ab_measure_all_methods.py`          | Episodic memory turn reduction measurement              |
+| Component                     | Repository Path                                                 | Core Function / Class                                   |
+| :---------------------------- | :-------------------------------------------------------------- | :------------------------------------------------------ |
+| **Episodic Memory Registry**  | `src/holon_coherence/openbrain_memory.py`                       | `OpenBrainMemory.store_memory()`, `retrieve_memories()` |
+| **Database Storage**          | `.holon/openbrain/openbrain.db`                                 | Table `memories`                                        |
+| **Unified Benchmark Harness** | A/B measurement on captured wire logs (see [README](README.md)) | Episodic memory turn reduction measurement              |
 
 ---
 
@@ -50,7 +50,7 @@ Select the active Executor or Architect model (e.g., `gemini-3.8-flash-low` or `
 
 ```bash
 REPO_ROOT=$(git rev-parse --show-toplevel)
-mkdir -p "${REPO_ROOT}/todo/openbrain"
+mkdir -p "${REPO_ROOT}/.holon/openbrain"
 ```
 
 ---
@@ -67,8 +67,8 @@ repo_root = Path(".").resolve()
 sys.path.insert(0, str(repo_root / "src"))
 from holon_coherence import OpenBrainMemory
 
-# Initialize database in todo/openbrain
-ob = OpenBrainMemory(db_dir=str(repo_root / "todo/openbrain"))
+# Initialise database in .holon/openbrain
+ob = OpenBrainMemory(db_dir=str(repo_root / ".holon/openbrain"))
 ```
 
 ### Step 2: Ingest Authentic Operational Lessons
@@ -137,13 +137,13 @@ agy exec --model "${TIER2_MODEL}" << 'EOF'
 Context from OpenBrain Episodic Memory:
 - [Memory: test_dashboard_cwd] The automated dashboard integrity test suite requires DASHBOARD_DIR environment variable set to the directory containing index.html, and tests must be executed with cwd=DASHBOARD_DIR.
 
-Task: Execute the dashboard test suite in todo/artifacts/generate_website.
+Task: Execute the dashboard test suite in .holon/artifacts/generate_website.
 EOF
 ```
 
 3. **Turn 1 Outcome**: The agent immediately issues the correct one-line command on Turn 1:
    ```bash
-   DASHBOARD_DIR=todo/artifacts/generate_website python3 -m unittest todo/artifacts/generate_website/test_dashboard.py
+   DASHBOARD_DIR=.holon/artifacts/generate_website uv run pytest .holon/artifacts/generate_website/test_dashboard.py
    ```
    **Result**: Task succeeds on Turn 1 with **0 exploratory turns** and **0 error recovery cycles**.
 
@@ -156,7 +156,7 @@ EOF
 Verify stored memory records and categories using `sqlite3`:
 
 ```bash
-sqlite3 todo/openbrain/openbrain.db << 'EOF'
+sqlite3 .holon/openbrain/openbrain.db << 'EOF'
 .mode column
 .headers on
 SELECT
