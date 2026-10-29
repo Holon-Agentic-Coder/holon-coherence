@@ -156,7 +156,8 @@ uv tool install git+https://github.com/Holon-Agentic-Coder/holon-coherence.git
 
 #### For Local Contributors & Development:
 
-For local contributors modifying `holon-coherence` (developed on Python 3.13), install from a local checkout using `--editable`:
+For local contributors modifying `holon-coherence` (developed on Python 3.13), install from a local checkout using
+`--editable`:
 
 ```bash
 git clone https://github.com/Holon-Agentic-Coder/holon-coherence.git
