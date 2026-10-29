@@ -156,7 +156,8 @@ uv tool install git+https://github.com/Holon-Agentic-Coder/holon-coherence.git
 
 #### For Local Contributors & Development:
 
-For local contributors modifying `holon-coherence`, install from a local checkout using `--editable`:
+For local contributors modifying `holon-coherence` (developed on Python 3.13), install from a local checkout using
+`--editable`:
 
 ```bash
 git clone https://github.com/Holon-Agentic-Coder/holon-coherence.git
@@ -559,6 +560,11 @@ altering your terminal's persistent state.
 
 ## 🛠 Development & Worktree Workflow
 
+holon-coherence is developed and tested on Python 3.13. The repository's `.python-version` pins `3.13`, so running
+`uv sync --group dev` from the worktree root creates a Python 3.13 virtualenv at `.venv`, downloading a 3.13 interpreter
+through uv if the host does not have one. `pyproject.toml` declares `requires-python = ">=3.13"`, so the container image
+installs the package on the mitmproxy base image's own interpreter.
+
 When developing or executing tasks on `holon-coherence` within the Holon agentic workspace, use Git worktrees branched
 off `origin/main` to maintain clean process and branch isolation:
 
@@ -571,6 +577,9 @@ git worktree add --no-track -b feat/<feature-name> ../feat-<feature-name> origin
 
 # Navigate to worktree
 cd ../feat-<feature-name>
+
+# Create the Python 3.13 development virtualenv
+uv sync --group dev
 
 # Run test suite
 uv run task test
