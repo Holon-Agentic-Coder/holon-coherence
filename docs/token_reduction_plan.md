@@ -154,9 +154,11 @@ OpenAI, Gemini, custom endpoints) and **arbitrary agent harnesses** (Antigravity
    - Verifies CA generation, trust injection, cleaner payload transformations, hybrid SQLite caching, RAG indexing, and
      ringer delegation with 100% test pass rate.
 2. **Tier 2: Offline Differential Replay** (not used for efficacy figures)
-   - Replays a captured wire log offline (`holon-coherence ab-test --trace-file ~/.holon/logs/transactions.jsonl`),
-     passing each recorded request through the context cleaner and printing a token and character reduction scorecard
-     against the raw requests, without making network calls or incurring API costs.
+   - Scores a captured wire log offline (`holon-coherence ab-test --trace-file ~/.holon/logs/transactions.jsonl`)
+     without making network calls or incurring API costs. A log holding turns from a single mode is replayed: each
+     recorded request is passed through the context cleaner and a token and character reduction scorecard is printed
+     against the raw requests. A log that already holds both passive (baseline) and optimised turns, for example after
+     a Tier 3 run, is instead scored by comparing its recorded baseline turns with its recorded optimised turns.
 3. **Tier 3: Live Network Socket Proxy A/B Test for Arbitrary LLM APIs**
    - Starts the `holon-coherence` proxy container (built on `mitmproxy/mitmproxy:12.2.3`, running `mitm_addon.py`) and
      routes a real client workload through it twice (`holon-coherence start --passive -d` for the baseline, then

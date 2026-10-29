@@ -70,9 +70,12 @@ uv run pytest
 
 #### Tier 2: Offline Differential Replay
 
-Replay a captured wire log offline (zero API cost): each recorded request is passed through the context cleaner,
-compared with its raw form, and a token and character reduction scorecard is printed. The replay confirms that the
-cleaner and the wire-log reader work on real captures; its figures are never reported as efficacy results:
+Score a captured wire log offline (zero API cost). When the log holds turns from a single mode, each recorded request
+is passed through the context cleaner, compared with its raw form, and a token and character reduction scorecard is
+printed. A log that already holds both passive (baseline) and optimised turns, for example after a Tier 3 run, is not
+replayed through the cleaner; its recorded baseline turns are compared with its recorded optimised turns instead. The
+single-mode replay confirms that the cleaner and the wire-log reader work on real captures; its figures are never
+reported as efficacy results:
 
 ```bash
 holon-coherence ab-test --trace-file ~/.holon/logs/transactions.jsonl
