@@ -7,7 +7,7 @@ name = "holon-coherence"
 version = "0.1.0"
 description = "Part of the Holon family of self-improving, fractal intent coding agents, used to optimize LLM usage."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = "==3.13.*"
 license = { text = "Apache-2.0" }
 authors = [
     { name = "Holon Team" }
@@ -50,7 +50,7 @@ packages = ["src/holon_coherence"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py311"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = [
