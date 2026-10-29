@@ -109,12 +109,19 @@ holon-coherence metrics --json
 
 Run a real coding agent (`agy`, `claude`, `codex`, `opencode`, `pi`) through the proxy with any model. `ab-test` runs
 the same workload twice (passive baseline, then optimised) and compares the captured turns. It does not start the proxy
-itself: it switches the mode of a proxy that must already be listening on port 8080 (for example one started with
-`holon-coherence start -d`):
+itself: it switches the mode of a proxy that must already be listening on port 8080 and hands it a host temp dir as its
+wire-log dir, then reads the turns back from that dir. The proxy must therefore write to the host filesystem, so run the
+addon host-side from a source checkout. The container proxy from `holon-coherence start -d` mounts only `~/.holon/logs/`
+and cannot write to the host temp dir; with it, run the Tier 3 passive and optimised passes and score the mode-tagged
+log with `--trace-file` instead:
 
 ```bash
-# Paired baseline/optimised agent run with a comparison scorecard
+# Host-side proxy, then a paired baseline/optimised agent run with a comparison scorecard
+uv run mitmdump -s src/holon_coherence/mitm_addon.py --listen-port 8080 --set confdir=~/.holon/proxy-ca
 holon-coherence ab-test --command "<agent workload command>"
+
+# Container proxy: score the baseline and optimised turns the Tier 3 passes logged
+holon-coherence ab-test --trace-file ~/.holon/logs/transactions.jsonl
 
 # Compare two previously captured wire-log directories
 holon-coherence ab-test --baseline <baseline wire-log dir> --optimized <optimised wire-log dir> --json
