@@ -343,6 +343,27 @@ def _percent(text: str) -> float:
     return float(text) / 100
 
 
+def _positive_int(text: str) -> int:
+    """A whole number of at least 1; zero or negative counts would empty the baseline or hide every offender."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a positive whole number, got {text!r}") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {value}")
+    return value
+
+
+def _pr_number(text: str) -> int | None:
+    """An empty or blank pull-request number means none, so no label lookup is made; anything else must be a number."""
+    if not text.strip():
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a pull-request number, got {text!r}") from None
+
+
 def _epoch(text: str) -> float | None:
     """An empty, non-numeric or non-finite start timestamp becomes None so the gate can skip with a notice."""
     try:
@@ -369,14 +390,14 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--ceiling", type=float, default=300, help="absolute limit in seconds (default 300)")
     compare = commands.choices["compare"]
     compare.add_argument("--artifact-name", help="default: ci-timing-<job>-<os>")
-    compare.add_argument("--baseline-count", type=int, default=5)
+    compare.add_argument("--baseline-count", type=_positive_int, default=5)
     compare.add_argument("--tolerance-percent", type=_percent, default=0.5, dest="tolerance")
     compare.add_argument("--min-delta", type=float, default=30)
     compare.add_argument("--accept-label", default=ACCEPT_LABEL)
-    compare.add_argument("--pr-number", type=int)
+    compare.add_argument("--pr-number", type=_pr_number, help="empty means no pull request")
     compare.add_argument("--test-tolerance-percent", type=_percent, default=0.5, dest="test_tolerance")
     compare.add_argument("--test-min-delta", type=float, default=5)
-    compare.add_argument("--test-limit", type=int, default=10)
+    compare.add_argument("--test-limit", type=_positive_int, default=10)
     return parser
 
 

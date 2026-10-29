@@ -7,8 +7,10 @@ logic only; the calibration replay at the end uses the real job durations measur
 from __future__ import annotations
 
 import http.client
+import io
 import json
 import pathlib
+import urllib.error
 
 import pytest
 
@@ -213,6 +215,60 @@ def test_download_record_skips_truncated_archive(monkeypatch, capsys):
     assert "artefact 3 could not be read" in capsys.readouterr().out
 
 
+def test_pr_labels_fall_back_to_event_on_forbidden(monkeypatch, tmp_path, capsys):
+    def forbidden(url, token):
+        raise urllib.error.HTTPError(url, 403, "Forbidden", {}, None)
+
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"pull_request": {"labels": [{"name": ACCEPT_LABEL}]}}))
+    monkeypatch.setattr(ci_timing_gate, "_get_json", forbidden)
+    assert github_fetchers("https://example.invalid", "o/r", "t", str(event)).pr_labels(7) == [ACCEPT_LABEL]
+    assert "live label lookup for #7 failed (HTTP Error 403: Forbidden)" in capsys.readouterr().out
+
+
+def _redirecting_opener(monkeypatch, code: int, headers: dict) -> list:
+    """Patch build_opener so the first request fails with `code`; returns the handlers it was built with."""
+    handlers = []
+
+    class Opener:
+        def open(self, request, timeout):
+            raise urllib.error.HTTPError(request.full_url, code, "redirect", headers, None)
+
+    def build_opener(*given):
+        handlers.extend(given)
+        return Opener()
+
+    monkeypatch.setattr(ci_timing_gate.urllib.request, "build_opener", build_opener)
+    return handlers
+
+
+def test_download_zip_follows_redirect_without_the_token(monkeypatch):
+    handlers = _redirecting_opener(monkeypatch, 302, {"Location": "https://blob.invalid/x"})
+    followed = []
+
+    def urlopen(target, timeout):
+        followed.append(target)
+        return io.BytesIO(b"archive")
+
+    monkeypatch.setattr(ci_timing_gate.urllib.request, "urlopen", urlopen)
+    assert ci_timing_gate._download_zip("https://example.invalid/zip", "t") == b"archive"
+    assert [type(handler) for handler in handlers] == [ci_timing_gate._NoRedirect]
+    assert followed == ["https://blob.invalid/x"]  # a bare URL carries no Authorization header
+
+
+@pytest.mark.parametrize(("code", "headers"), [(404, {}), (302, {})])
+def test_download_zip_reraises_non_redirect_errors(monkeypatch, code, headers):
+    _redirecting_opener(monkeypatch, code, headers)
+
+    def urlopen(target, timeout):
+        raise AssertionError("no follow-up request expected")
+
+    monkeypatch.setattr(ci_timing_gate.urllib.request, "urlopen", urlopen)
+    with pytest.raises(urllib.error.HTTPError) as raised:
+        ci_timing_gate._download_zip("https://example.invalid/zip", "t")
+    assert raised.value.code == code
+
+
 def test_download_attempts_are_capped(tmp_path, capsys):
     attempts = []
     fetchers = fake_fetchers([make_record(60)] * 20)
@@ -265,6 +321,38 @@ def test_labels_not_read_without_pr_number(tmp_path):
     fetchers.pr_labels = unexpected
     argv = ["compare", "--workflow", "w", "--job", "unit", "--os", "Linux", "--started-at", "0"]
     assert main([*argv, "--out", str(tmp_path)], fetchers=fetchers, now=lambda: 60, env={}) == 0
+
+
+@pytest.mark.parametrize("pr_number", ["", "  "])
+def test_blank_pr_number_means_no_label(tmp_path, pr_number):
+    def unexpected(number):
+        raise AssertionError("labels must not be read")
+
+    fetchers = fake_fetchers([make_record(60)] * 5, labels=(ACCEPT_LABEL,))
+    fetchers.pr_labels = unexpected
+    assert run_compare(tmp_path, 100, fetchers, "--pr-number", pr_number) == 1
+
+
+def test_non_numeric_pr_number_is_rejected(tmp_path, capsys):
+    with pytest.raises(SystemExit) as raised:
+        run_compare(tmp_path, 60, fake_fetchers([]), "--pr-number", "seven")
+    assert raised.value.code == 2
+    assert "expected a pull-request number, got 'seven'" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("flag", ["--baseline-count", "--test-limit"])
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_counts_below_one_are_rejected(tmp_path, capsys, flag, value):
+    with pytest.raises(SystemExit) as raised:
+        run_compare(tmp_path, 60, fake_fetchers([]), flag, value)
+    assert raised.value.code == 2
+    assert f"must be at least 1, got {value}" in capsys.readouterr().err
+
+
+def test_non_integer_count_is_rejected(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        run_compare(tmp_path, 60, fake_fetchers([]), "--test-limit", "2.5")
+    assert "expected a positive whole number, got '2.5'" in capsys.readouterr().err
 
 
 # --- 7. Per-test report --------------------------------------------------------------------------------------------
