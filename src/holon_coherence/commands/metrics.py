@@ -22,6 +22,7 @@ from holon_coherence.commands.endpoints import (
 )
 from holon_coherence.commands.start import DEFAULT_PROXY_PORT
 from holon_coherence.metrics_math import (
+    DEFAULT_WIRE_LOG_DIR,
     average,
     compute_decode_tps,
     compute_prefill_tps,
@@ -29,8 +30,6 @@ from holon_coherence.metrics_math import (
     positive_rate,
     positive_seconds,
 )
-
-DEFAULT_WIRE_LOG_DIR = ".holon/mitm_wire_logs"
 
 
 def _milliseconds_to_seconds(value: Any) -> float | None:

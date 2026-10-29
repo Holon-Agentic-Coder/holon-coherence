@@ -31,6 +31,7 @@ from holon_coherence.host_local import (
 )
 from holon_coherence.hybrid_cache import HybridCacheStore
 from holon_coherence.metrics_math import (
+    DEFAULT_WIRE_LOG_DIR,
     UNMEASURED,
     average,
     compute_decode_tps,
@@ -77,7 +78,6 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_WIRE_LOG_DIR = ".holon/mitm_wire_logs"
 WIRE_LOG_DIR = os.getenv("WIRE_LOG_DIR", DEFAULT_WIRE_LOG_DIR)
 CACHE_DIR = os.getenv("CACHE_DIR", os.path.expanduser("~/.holon/cache"))
 DEFAULT_PROXY_LISTEN_PORT = 8080

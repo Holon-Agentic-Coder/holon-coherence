@@ -24,11 +24,11 @@ unrelated codebase noise.
 
 ## 🏛️ Codebase Architecture & Source Locations
 
-| Component                     | Repository Path                                                 | Core Function / Class                                          |
-| :---------------------------- | :-------------------------------------------------------------- | :------------------------------------------------------------- |
-| **AST & Keyword Indexer**     | `src/holon_coherence/rag_indexer.py`                            | `RAGCodebaseIndexer.build_index()`, `get_context_for_prompt()` |
-| **AST Symbol Parser**         | `src/holon_coherence/rag_indexer.py`                            | `_extract_ast_symbols()`                                       |
-| **Unified Benchmark Harness** | A/B measurement on captured wire logs (see [README](README.md)) | Turn 0 context size comparison                                 |
+| Component                     | Repository Path                                                 | Core Function / Class                                           |
+| :---------------------------- | :-------------------------------------------------------------- | :-------------------------------------------------------------- |
+| **AST & Keyword Indexer**     | `src/holon_coherence/rag_indexer.py`                            | `RAGCodebaseIndexer.build_index()`, `build_context_bootstrap()` |
+| **AST Symbol Parser**         | `src/holon_coherence/rag_indexer.py`                            | `_extract_ast_symbols()`                                        |
+| **Unified Benchmark Harness** | A/B measurement on captured wire logs (see [README](README.md)) | Turn 0 context size comparison                                  |
 
 ---
 
@@ -103,7 +103,7 @@ The optimized approach retrieves only matching symbols and structural definition
 ```python
 # Query the indexer with the user's intent keywords
 user_query = "hybrid cache prompt normalization"
-targeted_context = indexer.get_context_for_prompt(user_query, max_tokens=1000)
+targeted_context = indexer.build_context_bootstrap(user_query)
 
 optimized_prompt = f"Using the symbol references below, explain how the hybrid cache handles prompt normalization:\n\n{targeted_context}"
 optimized_tokens_approx = len(optimized_prompt) // 4

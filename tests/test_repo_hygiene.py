@@ -15,13 +15,13 @@ FORBIDDEN_DIRS = frozenset({"to" + "do", "." + "sub" + "agent", "." + "be" + "an
 # Dotted harness directories are never legitimate at any depth; the bare name is only rejected at the root.
 NESTED_FORBIDDEN_DIRS = frozenset({"." + "sub" + "agent", "." + "be" + "ans"})
 PROVENANCE_PREFIXES = ("holon-knowledge/ledger/", "plans/", "executions/", "intents/")
-ALLOWED_FILES = frozenset({"." + "agents/AGENTS.md"})
 CONTENT_PATTERNS = (
     re.compile(r"(?<![\w.-])" + "to" + r"do/"),
     # A quoted bare name only counts in a path context: any argument of a path join() (qualified or imported bare) or
-    # Path(), or next to a "/" operator; a plain str.join() (a join preceded by a dot) is not a path context.
+    # Path(), including after an argument that is itself a call (one level of nested parentheses), or next to a "/"
+    # operator; a plain str.join() (a join preceded by a dot) is not a path context.
     re.compile(
-        r"""(?:(?:(?<![\w.])join|path\.join|Path)\([^)]*|/\s*)["']"""
+        r"""(?:(?:(?<![\w.])join|path\.join|Path)\((?:[^()]|\([^()]*\))*|/\s*)["']"""
         + "to"
         + r"""do["']|["']"""
         + "to"
@@ -51,8 +51,8 @@ def forbidden_dir(path: str) -> bool:
 
 
 def is_exempt(path: str) -> bool:
-    """Provenance records and explicitly allowed files are not scanned."""
-    return path.startswith(PROVENANCE_PREFIXES) or path in ALLOWED_FILES
+    """Only provenance records are not scanned; every other tracked file, docs and configs included, is."""
+    return path.startswith(PROVENANCE_PREFIXES)
 
 
 def leaks_in(text: str) -> list[str]:
@@ -82,7 +82,15 @@ def test_no_tracked_file_contains_harness_leak() -> None:
 
 
 @pytest.mark.parametrize(
-    "path", [".beads/issues.jsonl", ".beads", "docs/beads.md", "docs/.beads/x.md", "src/" + "to" + "do/x.py"]
+    "path",
+    [
+        ".beads/issues.jsonl",
+        ".beads",
+        "docs/beads.md",
+        "docs/.beads/x.md",
+        "src/" + "to" + "do/x.py",
+        "." + "agents/AGENTS.md",
+    ],
 )
 def test_similar_paths_are_allowed(path: str) -> None:
     assert not forbidden_dir(path)
@@ -119,6 +127,8 @@ def test_forbidden_dirs_are_detected(path: str) -> None:
         'choices=["done", "' + "to" + 'do"]',
         "{'state': '" + "to" + "do'}",
         'Path("x").name == "' + "to" + 'do"',
+        'str(Path("x")) == "' + "to" + 'do"',
+        '", ".join([str(x), "' + "to" + 'do"])',
         '", ".join(["done", "' + "to" + 'do"])',
         'help="one of: " + "|".join(("done", "' + "to" + 'do"))',
         'sep.join(["done", "' + "to" + 'do"])',
@@ -155,6 +165,10 @@ def test_benign_text_is_allowed(text: str) -> None:
         'PurePath(root, "' + "to" + 'do")',
         'Path("' + "to" + 'do", "x")',
         'Path("x", "' + "to" + 'do")',
+        "os.path.join(get_root(), '" + "to" + "do')",
+        'Path(str(root), "' + "to" + 'do")',
+        'os.path.join(a, f(b, c), "' + "to" + 'do", "x")',
+        'join(Path.home(), "' + "to" + 'do")',
         'root / "' + "to" + 'do"',
         '"' + "to" + 'do" / "cache"',
         "TestFoo" + "Be" + "an0097",
@@ -172,10 +186,9 @@ def test_each_leak_pattern_is_detected(text: str) -> None:
         "plans/P-1.md",
         "executions/E-1.md",
         "intents/I-1.json",
-        "." + "agents/AGENTS.md",
     ],
 )
-def test_provenance_and_allowed_files_are_exempt(path: str) -> None:
+def test_provenance_files_are_exempt(path: str) -> None:
     assert is_exempt(path)
 
 
@@ -188,6 +201,7 @@ def test_provenance_and_allowed_files_are_exempt(path: str) -> None:
         "holon-knowledge/notes.md",
         "docs/holon-knowledge/ledger/x.jsonl",
         "." + "agents/other.md",
+        "." + "agents/AGENTS.md",
     ],
 )
 def test_exemption_is_root_anchored_and_exact(path: str) -> None:

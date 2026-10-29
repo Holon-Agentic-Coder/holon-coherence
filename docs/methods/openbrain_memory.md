@@ -141,7 +141,8 @@ Task: Execute the dashboard test suite in .holon/artifacts/generate_website.
 EOF
 ```
 
-3. **Turn 1 Outcome**: The agent immediately issues the correct one-line command on Turn 1:
+3. **Turn 1 Outcome**: The agent immediately ran the dashboard test suite with the correct one-line command on Turn
+   1, setting `DASHBOARD_DIR` to the artifact directory. To reproduce the check:
    ```bash
    DASHBOARD_DIR=.holon/artifacts/generate_website uv run pytest .holon/artifacts/generate_website/test_dashboard.py
    ```
