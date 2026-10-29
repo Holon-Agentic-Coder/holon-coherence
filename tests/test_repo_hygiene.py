@@ -15,13 +15,35 @@ FORBIDDEN_DIRS = frozenset({"to" + "do", "." + "sub" + "agent", "." + "be" + "an
 # Dotted harness directories are never legitimate at any depth; the bare name is only rejected at the root.
 NESTED_FORBIDDEN_DIRS = frozenset({"." + "sub" + "agent", "." + "be" + "ans"})
 PROVENANCE_PREFIXES = ("holon-knowledge/ledger/", "plans/", "executions/", "intents/")
+# Calls nest up to five levels inside a path-call argument, the repository's own deepest idiom
+# (dirname(dirname(dirname(dirname(abspath(f)))))).
+CALL_NESTING = 5
+
+
+def call_arguments(depth: int) -> str:
+    """Regex for call-argument text whose parenthesised sub-calls nest at most ``depth`` levels."""
+    inner = r"[^()]*"
+    for _ in range(depth):
+        inner = r"(?:[^()]|\(" + inner + r"\))*"
+    return inner
+
+
+# Calls that build a path from their arguments: a join() (qualified or imported bare), os.sep.join() or a
+# separator-literal join ("/".join, "\\".join), joinpath() and Path(); a plain str.join() (any other join preceded
+# by a dot, os.pathsep.join included) is not one.
+PATH_CALL = r"""(?:(?<![\w.])join|path\.join|(?:os|path)\.sep\.join|["'](?:/|\\{1,2})["']\.join|joinpath|Path)\("""
+# Prefixes an unquoted path starts from: a parent, current or home directory, or a shell variable or substitution.
+PATH_ORIGIN = r"""(?:(?<![\w.])\.{1,2}|~|\$\w+|\$\{\w+\}|\$\([^()\n]*\))(?:/|\\{1,2})"""
 CONTENT_PATTERNS = (
     re.compile(r"(?<![\w.-])" + "to" + r"do/"),
-    # A quoted bare name only counts in a path context: any argument of a path join() (qualified or imported bare),
-    # joinpath() or Path(), including after an argument that is itself a call nesting up to two levels of parentheses
-    # (dirname(abspath(f))), or next to a "/" operator; a plain str.join() (a join preceded by a dot) is not one.
+    # A quoted bare name only counts in a path context: any argument of a PATH_CALL, including after arguments that
+    # are themselves calls (up to CALL_NESTING levels) and inside a tuple or list (join(("x", s)), join(*["x", s])), or
+    # either side of a "/" operator, string prefixes (f"", r"", rb"") included.
     re.compile(
-        r"""(?:(?:(?<![\w.])join|path\.join|joinpath|Path)\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*|/\s*)["']"""
+        "(?:"
+        + PATH_CALL
+        + call_arguments(CALL_NESTING)
+        + r"""(?:\*?\s*\([^()]*)?|/\s*)[rRbBuUfF]{0,2}["']"""
         + "to"
         + r"""do["']|["']"""
         + "to"
@@ -29,6 +51,9 @@ CONTENT_PATTERNS = (
     ),
     # A quoted path whose last segment is the bare name ("../x", f"{root}/x", "~/x").
     re.compile(r"""["'`][^"'`\s]*/""" + "to" + r"""do["'`]"""),
+    # An unquoted path ending in the bare name (Makefile, shell, YAML, Windows separators): "../x", "~/x", "$(R)/x".
+    # A longer name ("xs", "x-list") or a file ("x.md") is not the directory; trailing punctuation still counts.
+    re.compile(PATH_ORIGIN + "to" + r"do(?![\w-]|\.\w)"),
     re.compile(r"(?<![\w-])\." + "sub" + r"agent/"),
     re.compile(r"(?<![\w-])\." + "be" + r"ans/"),
     re.compile(r"/(?:Users|home)/[^/\s]+/git/"),
@@ -134,10 +159,16 @@ def test_forbidden_dirs_are_detected(path: str) -> None:
         '", ".join(["done", "' + "to" + 'do"])',
         'help="one of: " + "|".join(("done", "' + "to" + 'do"))',
         'sep.join(["done", "' + "to" + 'do"])',
-        '"/".join(("done", "' + "to" + 'do"))',
         '"/api/' + "to" + 'dos"',
         '"/' + "to" + 'do-list"',
         "'x.joinpath'",
+        'os.pathsep.join([root, "' + "to" + 'do"])',
+        "DIR := ../" + "to" + "dos",
+        "cd ../" + "to" + "do-list && ls",
+        "see ../" + "to" + "do.md",
+        "https://example.com/" + "to" + "do",
+        "a/" + "to" + "do b",
+        "Path(x).name in ('done', '" + "to" + "do')",
     ],
 )
 def test_benign_text_is_allowed(text: str) -> None:
@@ -185,6 +216,28 @@ def test_benign_text_is_allowed(text: str) -> None:
         'f"{root}/' + "to" + 'do"',
         '"~/' + "to" + 'do"',
         "`../" + "to" + "do`",
+        'root / f"' + "to" + 'do"',
+        'root / r"' + "to" + 'do"',
+        'Path.home() / rb"' + "to" + 'do"',
+        'root / sub / "' + "to" + 'do"',
+        'os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "' + "to" + 'do")',
+        "os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), '"
+        + "to"
+        + "do')",
+        'os.sep.join([root, "' + "to" + 'do"])',
+        '"/".join([root, "' + "to" + 'do"])',
+        "'/'.join((root, '" + "to" + "do'))",
+        '"/".join(("done", "' + "to" + 'do"))',
+        'os.path.join(*["x", "' + "to" + 'do"])',
+        'Path(*("x", "' + "to" + 'do"))',
+        "DIR := ../" + "to" + "do",
+        "cd ../../" + "to" + "do && ls",
+        "cd ~/" + "to" + "do",
+        "see ../" + "to" + "do.",
+        "$(REPO_ROOT)/" + "to" + "do",
+        "${ROOT}/" + "to" + "do",
+        "$(git rev-parse --show-toplevel)/" + "to" + "do",
+        "..\\" + "to" + "do\\x.md",
         "TestFoo" + "Be" + "an0097",
         "fix_" + "be" + "an_0097",
     ],
