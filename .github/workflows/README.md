@@ -49,8 +49,8 @@ With fewer than 5 main records (cold start: the first five main pushes after thi
 a main push) the relative check is skipped with a notice and only the ceiling applies. An unreachable API or an
 unreadable artefact also degrades to a smaller baseline or a cold start, never to a failed job; at most twice the
 baseline count of downloads is attempted. A missing start timestamp skips the gate with a notice and records nothing
-(the upload then only warns). The gate only runs when
-every earlier step succeeded, so it never masks a real failure. All thresholds are flags in the workflow files.
+(the upload then only warns). The gate only runs when every earlier step succeeded, so it never masks a real failure.
+All thresholds are flags in the workflow files.
 
 ### Why these defaults
 
