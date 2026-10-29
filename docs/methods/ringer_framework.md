@@ -161,7 +161,7 @@ Instead of passing the raw 50-line terminal test output back to the Architect, `
 log:
 
 ```python
-from sandbox_executor.token_reduction.ringer_orchestrator import SubtaskResult
+from holon_coherence.ringer_orchestrator import SubtaskResult
 
 raw_test_output = """
 test_01_html_structure (test_dashboard.TestDashboard) ... ok

@@ -123,12 +123,12 @@ TIER1_MODEL=$(agy models | grep -E "gemini-3.8-flash-high|claude-sonnet-4-6" | h
 # Execute optimized prompt with targeted AST context
 agy exec --model "${TIER1_MODEL}" << 'EOF'
 Targeted Symbol Map:
-- Class HybridCacheStore in sandbox_executor/token_reduction/hybrid_cache.py:15
+- Class HybridCacheStore in src/holon_coherence/hybrid_cache.py:17
   Functions:
-  - normalize_payload(payload, provider) at line 68
-  - generate_prefix_key(payload, provider) at line 63
-  - get(payload, provider) at line 140
-  - put(payload, response_text, provider) at line 185
+  - normalize_payload(payload, provider) at line 195
+  - generate_prefix_key(payload, provider) at line 190
+  - get(payload, provider) at line 325
+  - put(payload, response, provider) at line 411
 
 Task: Explain the regex rules used in normalize_payload to strip transient variables.
 EOF

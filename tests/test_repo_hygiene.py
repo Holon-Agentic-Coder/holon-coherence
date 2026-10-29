@@ -18,10 +18,10 @@ PROVENANCE_PREFIXES = ("holon-knowledge/ledger/", "plans/", "executions/", "inte
 CONTENT_PATTERNS = (
     re.compile(r"(?<![\w.-])" + "to" + r"do/"),
     # A quoted bare name only counts in a path context: any argument of a path join() (qualified or imported bare),
-    # joinpath() or Path(), including after an argument that is itself a call (one level of nested parentheses), or
-    # next to a "/" operator; a plain str.join() (a join preceded by a dot) is not a path context.
+    # joinpath() or Path(), including after an argument that is itself a call nesting up to two levels of parentheses
+    # (dirname(abspath(f))), or next to a "/" operator; a plain str.join() (a join preceded by a dot) is not one.
     re.compile(
-        r"""(?:(?:(?<![\w.])join|path\.join|joinpath|Path)\((?:[^()]|\([^()]*\))*|/\s*)["']"""
+        r"""(?:(?:(?<![\w.])join|path\.join|joinpath|Path)\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*|/\s*)["']"""
         + "to"
         + r"""do["']|["']"""
         + "to"
@@ -174,6 +174,9 @@ def test_benign_text_is_allowed(text: str) -> None:
         'Path(str(root), "' + "to" + 'do")',
         'os.path.join(a, f(b, c), "' + "to" + 'do", "x")',
         'join(Path.home(), "' + "to" + 'do")',
+        'os.path.join(os.path.dirname(os.path.abspath(__file__)), "' + "to" + 'do")',
+        'os.path.join(str(get_root()), "' + "to" + 'do")',
+        'Path(str(Path.home()), "' + "to" + 'do")',
         'root / "' + "to" + 'do"',
         '"' + "to" + 'do" / "cache"',
         'Path.home().joinpath("' + "to" + 'do")',
