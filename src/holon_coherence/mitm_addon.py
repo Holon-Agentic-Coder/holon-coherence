@@ -488,7 +488,7 @@ def resolve_flow_timing(flow: Any, completed_at: float | None = None) -> FlowTim
 
 @dataclass
 class CumulativeMetrics:
-    """Thread-safe cumulative metrics tracking context optimization and cache performance."""
+    """Thread-safe cumulative metrics tracking context optimisation and cache performance."""
 
     total_turns: int = 0
     total_requests: int = 0

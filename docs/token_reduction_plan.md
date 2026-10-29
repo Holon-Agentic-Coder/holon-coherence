@@ -155,14 +155,14 @@ OpenAI, Gemini, custom endpoints) and **arbitrary agent harnesses** (Antigravity
      ringer delegation with 100% test pass rate.
 2. **Tier 2: Offline Parser Smoke Check** (not used for efficacy figures)
    - Replays a captured wire log through the comparison parser
-     (`holon-coherence ab-test --trace-file .holon/mitm_wire_logs/transactions.jsonl`) to confirm turns, usage and
+     (`holon-coherence ab-test --trace-file ~/.holon/logs/transactions.jsonl`) to confirm turns, usage and
      timings are read correctly, without making network calls or incurring API costs.
 3. **Tier 3: Live Network Socket Proxy A/B Test for Arbitrary LLM APIs**
-   - Starts the official Docker mitmproxy sidecar container (`mitmproxy/mitmproxy:12.2.3` running `mitm_addon.py`) and
+   - Starts the `holon-coherence` proxy container (built on `mitmproxy/mitmproxy:12.2.3`, running `mitm_addon.py`) and
      routes a real client workload through it twice (`holon-coherence start --passive` for the baseline, then
      `holon-coherence start`), launching the client with `holon-coherence run -- <client command>`. Real upstream
      response payloads and provider billing usage (`cache_read_input_tokens`, `prompt_tokens`) are recorded in
-     `.holon/mitm_wire_logs/`.
+     `~/.holon/logs/`, the host directory `holon-coherence start` mounts as the container's `WIRE_LOG_DIR`.
 4. **Tier 4: End-to-End Agent A/B Test for Arbitrary Agents**
    - Runs a real coding agent (`agy`, `claude`, `codex`, `opencode`, `pi`) on any model twice through the mitmproxy
      sidecar via `holon-coherence ab-test --command "<agent workload>"`, and compares the baseline and optimised turns

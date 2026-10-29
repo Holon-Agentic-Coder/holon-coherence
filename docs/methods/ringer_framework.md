@@ -27,7 +27,7 @@ cost, making them ideal for high-volume, structured execution tasks.
 | Component                     | Repository Path                                                 | Core Function / Class                                  |
 | :---------------------------- | :-------------------------------------------------------------- | :----------------------------------------------------- |
 | **Ringer Orchestrator**       | `src/holon_coherence/ringer_orchestrator.py`                    | `RingerOrchestrator.plan_subtask()`, `record_result()` |
-| **Subtask Result Summarizer** | `src/holon_coherence/ringer_orchestrator.py`                    | `SubtaskResult._summarize()`                           |
+| **Subtask Result Summariser** | `src/holon_coherence/ringer_orchestrator.py`                    | `SubtaskResult._summarize()`                           |
 | **Unified Benchmark Harness** | A/B measurement on captured wire logs (see [README](README.md)) | Multi-turn tiered execution suites                     |
 
 ---
@@ -215,7 +215,6 @@ From our live benchmark run across both workload suites (A/B measurement on capt
 2. **Functional Quality Guarantee**: All generated code must pass 100% of automated tests:
    ```bash
    DASHBOARD_DIR=.holon/artifacts/generate_website uv run pytest .holon/artifacts/generate_website/test_dashboard.py
-   # Output: 4 passed (100% pass)
    ```
 3. **Artifact Completeness**: Full-scale deliverables generated without truncations:
    - `dashboard_design.md` (94 KB)

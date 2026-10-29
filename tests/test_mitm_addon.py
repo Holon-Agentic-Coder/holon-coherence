@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -320,7 +323,7 @@ class TestIsLocalTarget:
 
 
 class TestAnthropicNormalizer:
-    """Unit tests for Anthropic protocol normalization for host-local engines."""
+    """Unit tests for Anthropic protocol normalisation for host-local engines."""
 
     def test_normalizer_strips_vendor_constructs(self) -> None:
         data = {
@@ -882,14 +885,25 @@ def test_scrub_string_redacts_mitmweb_inspector_token() -> None:
     assert "?token=[REDACTED]" in scrubbed
 
 
+def test_wire_log_module_default_resolves_without_env() -> None:
+    """A fresh import with ``WIRE_LOG_DIR`` unset resolves the module default to ``.holon/mitm_wire_logs``."""
+    env = {key: value for key, value in os.environ.items() if key != "WIRE_LOG_DIR"}
+    code = "import holon_coherence.mitm_addon as m; print(m.WIRE_LOG_DIR)"
+    result = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True)
+    assert result.stdout.strip().splitlines()[-1] == ".holon/mitm_wire_logs" == DEFAULT_WIRE_LOG_DIR
+
+
 def test_wire_log_default_directory_is_repository_local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Without ``WIRE_LOG_DIR`` the wire logger writes under ``.holon/mitm_wire_logs``, creating parents."""
+    """Without ``WIRE_LOG_DIR`` the wire logger writes under the module default, creating parents.
+
+    The module value is pinned to the default because it is read once at import, when the environment of the test
+    process may differ; the resolution itself is covered by the fresh-import test above.
+    """
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("WIRE_LOG_DIR", raising=False)
     monkeypatch.setenv("ENABLE_WIRE_LOGGING", "1")
     monkeypatch.setattr("holon_coherence.mitm_addon.WIRE_LOG_DIR", DEFAULT_WIRE_LOG_DIR)
     dump_wire_transaction({"turn_id": 1, "flow_id": "default"}).result(timeout=10)
-    assert DEFAULT_WIRE_LOG_DIR == ".holon/mitm_wire_logs"
     assert (tmp_path / ".holon" / "mitm_wire_logs" / "transactions.jsonl").is_file()
 
 

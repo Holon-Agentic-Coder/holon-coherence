@@ -96,7 +96,8 @@ Compute performance metrics and inject standardized response headers into `flow.
 ### Phase 5: A/B Benchmark Harness Integration
 
 Record prefill and output TPS for every A/B run from the `X-Holon-*` response headers and from the per-turn `timing`
-blocks in `.holon/mitm_wire_logs/transactions.jsonl`. Inspect the aggregated readings with
+blocks in the wire log (`~/.holon/logs/transactions.jsonl` for a proxy started with `holon-coherence start`, or
+`.holon/mitm_wire_logs/transactions.jsonl` for an addon run without `WIRE_LOG_DIR`). Inspect the aggregated readings with
 `holon-coherence metrics --json`, and compare baseline and optimised runs with `holon-coherence ab-test`.
 
 ---

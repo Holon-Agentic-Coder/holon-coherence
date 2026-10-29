@@ -22,11 +22,11 @@ proxy and execution harness. When an outgoing request matches an existing entry:
 
 ## 🏛️ Codebase Architecture & Source Locations
 
-| Component                  | Repository Path                       | Core Function / Class                              |
-| :------------------------- | :------------------------------------ | :------------------------------------------------- |
-| **Hybrid Cache Store**     | `src/holon_coherence/hybrid_cache.py` | `HybridCacheStore.get()`, `HybridCacheStore.put()` |
-| **MITM Interception Hook** | `src/holon_coherence/mitm_addon.py`   | `MitmproxyAddon.request()` short-circuiting        |
-| **Database Storage**       | `.holon/cache/llm_cache.db`           | Table `prompt_cache` (WAL mode enabled)            |
+| Component                  | Repository Path                                         | Core Function / Class                              |
+| :------------------------- | :------------------------------------------------------ | :------------------------------------------------- |
+| **Hybrid Cache Store**     | `src/holon_coherence/hybrid_cache.py`                   | `HybridCacheStore.get()`, `HybridCacheStore.put()` |
+| **MITM Interception Hook** | `src/holon_coherence/mitm_addon.py`                     | `MitmproxyAddon.request()` short-circuiting        |
+| **Database Storage**       | `~/.holon/cache/llm_cache.db` (the `CACHE_DIR` default) | Table `prompt_cache` (WAL mode enabled)            |
 
 ---
 
@@ -173,7 +173,8 @@ e8a4d70b31f298c1  gemini      1            2026-09-12 09:44:46    96240
 
 ### 2. Verify Proxy Wire Log Telemetry
 
-If running via the MITM proxy sidecar, verify the wire transaction record in `.holon/mitm_wire_logs/transactions.jsonl`:
+If running via the MITM proxy sidecar, verify the wire transaction record in `.holon/mitm_wire_logs/transactions.jsonl`
+(or `~/.holon/logs/transactions.jsonl` when the proxy was started with `holon-coherence start`):
 
 ```bash
 cat .holon/mitm_wire_logs/transactions.jsonl | jq 'select(.cache_hit == true) | {

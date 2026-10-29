@@ -31,7 +31,6 @@ from holon_coherence.metrics_math import (
 )
 
 DEFAULT_WIRE_LOG_DIR = ".holon/mitm_wire_logs"
-WIRE_LOG_DIR = os.getenv("WIRE_LOG_DIR", DEFAULT_WIRE_LOG_DIR)
 
 
 def _milliseconds_to_seconds(value: Any) -> float | None:
@@ -321,7 +320,10 @@ def handle_metrics(
             print(json.dumps({"error": "Proxy not reachable and no offline wire logs found", "port": target_port}))
         else:
             print(f"⚠️  Could not connect to proxy at {endpoint_url}", file=sys.stderr)
-            print("   No offline transaction logs found in WIRE_LOG_DIR or ~/.holon/logs.", file=sys.stderr)
+            print(
+                f"   No offline transaction logs found in WIRE_LOG_DIR, {DEFAULT_WIRE_LOG_DIR} or ~/.holon/logs.",
+                file=sys.stderr,
+            )
             print(
                 "   Start the proxy with 'holon-coherence start' or run an agent with 'holon-coherence claude'.",
                 file=sys.stderr,

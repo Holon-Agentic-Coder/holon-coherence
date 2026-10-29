@@ -2824,18 +2824,6 @@ class TestCLIMetricsCommand:
         assert data["source"] == "offline_wire_log"
         assert data["avg_prefill_throughput_tps"] == 500.0  # 100 / 0.2s
 
-    def test_wire_log_dir_default_and_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import importlib
-
-        import holon_coherence.commands.metrics as metrics_module
-
-        monkeypatch.delenv("WIRE_LOG_DIR", raising=False)
-        assert importlib.reload(metrics_module).WIRE_LOG_DIR == ".holon/mitm_wire_logs"
-        monkeypatch.setenv("WIRE_LOG_DIR", "/tmp/custom-wire-logs")
-        assert importlib.reload(metrics_module).WIRE_LOG_DIR == "/tmp/custom-wire-logs"
-        monkeypatch.undo()
-        importlib.reload(metrics_module)
-
     def test_handle_metrics_prefill_and_kv_cache_terminal_output(
         self,
         capsys: pytest.CaptureFixture[str],

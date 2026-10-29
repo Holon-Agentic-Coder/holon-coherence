@@ -12,30 +12,33 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Fragments are joined so that this file never matches its own patterns.
 FORBIDDEN_DIRS = frozenset({"to" + "do", "." + "sub" + "agent", "." + "be" + "ans"})
+# Dotted harness directories are never legitimate at any depth; the bare name is only rejected at the root.
+NESTED_FORBIDDEN_DIRS = frozenset({"." + "sub" + "agent", "." + "be" + "ans"})
 PROVENANCE_PREFIXES = ("holon-knowledge/ledger/", "plans/", "executions/", "intents/")
 ALLOWED_FILES = frozenset({"." + "agents/AGENTS.md"})
 CONTENT_PATTERNS = (
     re.compile(r"(?<![\w.-])" + "to" + r"do/"),
+    re.compile(r"""["']""" + "to" + r"""do["']"""),
     re.compile(r"(?<![\w-])\." + "sub" + r"agent/"),
     re.compile(r"(?<![\w-])\." + "be" + r"ans/"),
     re.compile(r"/(?:Users|home)/[^/\s]+/git/"),
     re.compile("holon-agentic-" + "coder-ref"),
-    re.compile("Be" + "an" + r"[ _-]?\d{4}\b"),
+    re.compile(r"\b" + "be" + r"ans?[ _:#-]*\d{4}\b", re.IGNORECASE),
 )
 
 
 def tracked_files() -> list[str]:
-    """List tracked paths relative to the repository root."""
-    try:
-        result = subprocess.run(["git", "ls-files", "-z"], cwd=REPO_ROOT, capture_output=True, check=True)
-    except (OSError, subprocess.CalledProcessError):
-        pytest.skip("git is not available for listing tracked files")
+    """List tracked paths relative to the repository root; skip only outside a git checkout."""
+    if not (REPO_ROOT / ".git").exists():
+        pytest.skip("not a git checkout, so there are no tracked files to list")
+    result = subprocess.run(["git", "ls-files", "-z"], cwd=REPO_ROOT, capture_output=True, check=True)
     return [path for path in result.stdout.decode("utf-8").split("\0") if path]
 
 
 def forbidden_dir(path: str) -> bool:
-    """True when the first path component is an exact harness directory name."""
-    return path.split("/", 1)[0] in FORBIDDEN_DIRS
+    """True when the root component, or any dotted component, is an exact harness directory name."""
+    parts = path.split("/")
+    return parts[0] in FORBIDDEN_DIRS or any(part in NESTED_FORBIDDEN_DIRS for part in parts)
 
 
 def is_exempt(path: str) -> bool:
@@ -69,12 +72,23 @@ def test_no_tracked_file_contains_harness_leak() -> None:
     assert offenders == []
 
 
-@pytest.mark.parametrize("path", [".beads/issues.jsonl", ".beads", "docs/beads.md", "src/" + "to" + "do/x.py"])
+@pytest.mark.parametrize(
+    "path", [".beads/issues.jsonl", ".beads", "docs/beads.md", "docs/.beads/x.md", "src/" + "to" + "do/x.py"]
+)
 def test_similar_paths_are_allowed(path: str) -> None:
     assert not forbidden_dir(path)
 
 
-@pytest.mark.parametrize("path", ["to" + "do/x.md", "." + "sub" + "agent/run.json", "." + "be" + "ans/0001.md"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "to" + "do/x.md",
+        "." + "sub" + "agent/run.json",
+        "." + "be" + "ans/0001.md",
+        "docs/." + "be" + "ans/x.md",
+        "apps/." + "sub" + "agent/state.json",
+    ],
+)
 def test_forbidden_dirs_are_detected(path: str) -> None:
     assert forbidden_dir(path)
 
@@ -85,6 +99,10 @@ def test_forbidden_dirs_are_detected(path: str) -> None:
         "see .beads/ for issues",
         "/home/mitmproxy/.mitmproxy",
         "Beans are fine",
+        "a bean counter",
+        "2048 beans in 1024 jars",
+        "the " + "to" + "do list",
+        "TO" + "DO: tidy",
         "auto" + "to" + "do/x",
         ".holon/mitm_wire_logs",
     ],
@@ -104,6 +122,14 @@ def test_benign_text_is_allowed(text: str) -> None:
         "Be" + "an 0045",
         "Be" + "an0097",
         "Be" + "an-0129",
+        "(Be" + "ans 0043 & 0051)",
+        "Be" + "ans 0167/0168",
+        "be" + "an 0045",
+        "BE" + "AN-0045",
+        "Be" + "an #0045",
+        "Be" + "an: 0045",
+        "os.path.join('" + "to" + "do', 'mitm_wire_logs')",
+        'Path("' + "to" + 'do") / "x"',
     ],
 )
 def test_each_leak_pattern_is_detected(text: str) -> None:
