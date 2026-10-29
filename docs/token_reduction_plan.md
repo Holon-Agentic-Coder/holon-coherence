@@ -168,4 +168,5 @@ OpenAI, Gemini, custom endpoints) and **arbitrary agent harnesses** (Antigravity
 4. **Tier 4: End-to-End Agent A/B Test for Arbitrary Agents**
    - Runs a real coding agent (`agy`, `claude`, `codex`, `opencode`, `pi`) on any model twice through the mitmproxy
      sidecar via `holon-coherence ab-test --command "<agent workload>"`, and compares the baseline and optimised turns
-     captured in the wire log.
+     captured in the wire log. `ab-test` switches the mode of a proxy that must already be listening on port 8080 (for
+     example one started with `holon-coherence start -d`); it does not start the proxy itself.

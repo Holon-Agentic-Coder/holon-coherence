@@ -18,8 +18,9 @@ PROVENANCE_PREFIXES = ("holon-knowledge/ledger/", "plans/", "executions/", "inte
 ALLOWED_FILES = frozenset({"." + "agents/AGENTS.md"})
 CONTENT_PATTERNS = (
     re.compile(r"(?<![\w.-])" + "to" + r"do/"),
-    # A quoted bare name only counts in a path context: any argument of join() or Path(), or next to a "/" operator.
-    re.compile(r"""(?:(?:join|Path)\([^)]*|/\s*)["']""" + "to" + r"""do["']|["']""" + "to" + r"""do["']\s*/"""),
+    # A quoted bare name only counts in a path context: any argument of a path join() or Path(), or next to a "/"
+    # operator; a plain str.join() is not a path context.
+    re.compile(r"""(?:(?:path\.join|Path)\([^)]*|/\s*)["']""" + "to" + r"""do["']|["']""" + "to" + r"""do["']\s*/"""),
     re.compile(r"(?<![\w-])\." + "sub" + r"agent/"),
     re.compile(r"(?<![\w-])\." + "be" + r"ans/"),
     re.compile(r"/(?:Users|home)/[^/\s]+/git/"),
@@ -112,6 +113,8 @@ def test_forbidden_dirs_are_detected(path: str) -> None:
         'choices=["done", "' + "to" + 'do"]',
         "{'state': '" + "to" + "do'}",
         'Path("x").name == "' + "to" + 'do"',
+        '", ".join(["done", "' + "to" + 'do"])',
+        'help="one of: " + "|".join(("done", "' + "to" + 'do"))',
     ],
 )
 def test_benign_text_is_allowed(text: str) -> None:
@@ -138,6 +141,8 @@ def test_benign_text_is_allowed(text: str) -> None:
         "os.path.join('" + "to" + "do', 'mitm_wire_logs')",
         'Path("' + "to" + 'do") / "x"',
         'os.path.join(root, "' + "to" + 'do")',
+        'posixpath.join(root, "' + "to" + 'do")',
+        'PurePath(root, "' + "to" + 'do")',
         'Path("' + "to" + 'do", "x")',
         'Path("x", "' + "to" + 'do")',
         'root / "' + "to" + 'do"',

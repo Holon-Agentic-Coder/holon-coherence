@@ -105,7 +105,9 @@ holon-coherence metrics --json
 #### Tier 4: End-to-End Agent A/B Test (Arbitrary Agents & Models)
 
 Run a real coding agent (`agy`, `claude`, `codex`, `opencode`, `pi`) through the proxy with any model. `ab-test` runs
-the same workload twice (passive baseline, then optimised) and compares the captured turns:
+the same workload twice (passive baseline, then optimised) and compares the captured turns. It does not start the proxy
+itself: it switches the mode of a proxy that must already be listening on port 8080 (for example one started with
+`holon-coherence start -d`):
 
 ```bash
 # Paired baseline/optimised agent run with a comparison scorecard
@@ -151,14 +153,12 @@ transformed in real-time.
 ### Standalone Proxy Startup
 
 To launch the proxy with live interception logging enabled using the Docker sidecar container (no host `mitmdump`
-installation required):
+installation required), run `holon-coherence start`. It runs the `holon-coherence` image (building or pulling it when
+missing), which installs the whole `holon_coherence` package that `mitm_addon.py` imports; mounting the addon file alone
+into a plain mitmproxy image is not enough:
 
 ```bash
-docker run --rm -it \
-  -p 127.0.0.1:8080:8080 \
-  -v $(pwd)/src/holon_coherence/mitm_addon.py:/tmp/mitm_addon.py:ro \
-  mitmproxy/mitmproxy:12.2.3 \
-  mitmdump -s /tmp/mitm_addon.py --listen-port 8080
+holon-coherence start
 ```
 
 ### Live Request Interception Log Trace

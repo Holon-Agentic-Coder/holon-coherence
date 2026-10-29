@@ -147,7 +147,9 @@ else:
 
 ### 1. Query the SQLite Cache Database
 
-Inspect the SQLite database directly to verify stored records, hit counters, and timestamps:
+Inspect the SQLite database directly to verify stored records, hit counters, and timestamps. The commands below use
+the `.holon/cache/llm_cache.db` store from the manual example above; for a cache written by the proxy, use the
+`CACHE_DIR` default `~/.holon/cache/llm_cache.db` instead:
 
 ```bash
 sqlite3 .holon/cache/llm_cache.db << 'EOF'
@@ -212,7 +214,8 @@ The output confirms:
   proxy must either simulate SSE data chunks (`data: {...}\n\n`) or configure the harness in non-streaming mode during
   cache evaluation.
 - **Cache Drift**: If prompt instructions are modified during active debugging, stale cache entries can return outdated
-  results. Flush the local cache between clean benchmark runs via:
+  results. Flush the local cache between clean benchmark runs via the command below (or
+  `rm -f ~/.holon/cache/llm_cache.db*` for the proxy's `CACHE_DIR` default):
   ```bash
   rm -f .holon/cache/llm_cache.db*
   ```

@@ -2824,6 +2824,26 @@ class TestCLIMetricsCommand:
         assert data["source"] == "offline_wire_log"
         assert data["avg_prefill_throughput_tps"] == 500.0  # 100 / 0.2s
 
+    def test_handle_metrics_no_offline_logs_hint_names_default_wire_log_dir(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        empty_logs = tmp_path / "empty"
+        empty_logs.mkdir()
+        monkeypatch.setenv("WIRE_LOG_DIR", str(empty_logs))
+
+        with (
+            patch("os.path.expanduser", side_effect=lambda p: str(tmp_path / "absent") if "~/.holon/logs" in p else p),
+            patch("urllib.request.urlopen", side_effect=OSError("connection refused")),
+        ):
+            ret = handle_metrics(port=8080)
+        assert ret == 1
+        err = capsys.readouterr().err
+        assert "No offline transaction logs found in WIRE_LOG_DIR, .holon/mitm_wire_logs or ~/.holon/logs." in err
+
     def test_handle_metrics_prefill_and_kv_cache_terminal_output(
         self,
         capsys: pytest.CaptureFixture[str],

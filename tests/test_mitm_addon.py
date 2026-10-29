@@ -893,7 +893,9 @@ def test_wire_log_module_default_resolves_without_env() -> None:
     assert result.stdout.strip().splitlines()[-1] == ".holon/mitm_wire_logs" == DEFAULT_WIRE_LOG_DIR
 
 
-def test_wire_log_default_directory_is_repository_local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_wire_log_default_directory_is_working_directory_relative(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Without ``WIRE_LOG_DIR`` the wire logger writes under the module default, creating parents.
 
     The module value is pinned to the default because it is read once at import, when the environment of the test

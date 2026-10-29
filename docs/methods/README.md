@@ -27,7 +27,8 @@ Each method is measured on an authentic multi-turn agent session routed through 
 and once with it disabled:
 
 ```bash
-# Run the same real workload twice through the proxy (baseline vs optimised) and compare the captured turns
+# With a proxy already listening on port 8080 (for example from `holon-coherence start -d`), run the same real
+# workload twice through it (baseline vs optimised) and compare the captured turns
 holon-coherence ab-test --command "<agent workload command>"
 
 # Or compare two previously captured wire-log directories
