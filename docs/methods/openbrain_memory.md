@@ -29,7 +29,7 @@ unnecessary tokens.
 | Component                     | Repository Path                                                 | Core Function / Class                                   |
 | :---------------------------- | :-------------------------------------------------------------- | :------------------------------------------------------ |
 | **Episodic Memory Registry**  | `src/holon_coherence/openbrain_memory.py`                       | `OpenBrainMemory.store_memory()`, `retrieve_memories()` |
-| **Database Storage**          | `.holon/openbrain/openbrain.db`                                 | Table `memories`                                        |
+| **Database Storage**          | `~/.holon/openbrain/openbrain.db` (the `db_dir` default)        | Table `memories`                                        |
 | **Unified Benchmark Harness** | A/B measurement on captured wire logs (see [README](README.md)) | Episodic memory turn reduction measurement              |
 
 ---

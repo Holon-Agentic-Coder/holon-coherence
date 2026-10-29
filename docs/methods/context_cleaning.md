@@ -310,7 +310,7 @@ Verify that the run satisfies the empirical benchmarks:
 2. **Bytes Pruned**: $\ge 100,000$ characters saved across high-volume turns (in our benchmark: **140,851 bytes
    saved**).
 3. **Task Success & Integrity**: The generated code must remain 100% syntactically valid and pass all test assertions
-   (e.g., `python3 -m unittest test_dashboard.py`).
+   (e.g., `uv run pytest test_dashboard.py`).
 
 ---
 

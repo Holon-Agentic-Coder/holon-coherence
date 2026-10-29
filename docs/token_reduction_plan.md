@@ -153,14 +153,14 @@ OpenAI, Gemini, custom endpoints) and **arbitrary agent harnesses** (Antigravity
 1. **Tier 1: Automated Unit Verification** (`uv run pytest`)
    - Verifies CA generation, trust injection, cleaner payload transformations, hybrid SQLite caching, RAG indexing, and
      ringer delegation with 100% test pass rate.
-2. **Tier 2: Offline Parser Smoke Check** (not used for efficacy figures)
-   - Replays a captured wire log through the comparison parser
-     (`holon-coherence ab-test --trace-file ~/.holon/logs/transactions.jsonl`) to confirm turns, usage and
-     timings are read correctly, without making network calls or incurring API costs.
+2. **Tier 2: Offline Differential Replay** (not used for efficacy figures)
+   - Replays a captured wire log offline (`holon-coherence ab-test --trace-file ~/.holon/logs/transactions.jsonl`),
+     passing each recorded request through the context cleaner and printing a token and character reduction scorecard
+     against the raw requests, without making network calls or incurring API costs.
 3. **Tier 3: Live Network Socket Proxy A/B Test for Arbitrary LLM APIs**
    - Starts the `holon-coherence` proxy container (built on `mitmproxy/mitmproxy:12.2.3`, running `mitm_addon.py`) and
-     routes a real client workload through it twice (`holon-coherence start --passive` for the baseline, then
-     `holon-coherence start`), launching the client with `holon-coherence run -- <client command>`. Real upstream
+     routes a real client workload through it twice (`holon-coherence start --passive -d` for the baseline, then
+     `holon-coherence start -d`), launching the client with `holon-coherence run -- <client command>`. Real upstream
      response payloads and provider billing usage (`cache_read_input_tokens`, `prompt_tokens`) are recorded in
      `~/.holon/logs/`, the host directory `holon-coherence start` mounts as the container's `WIRE_LOG_DIR`.
 4. **Tier 4: End-to-End Agent A/B Test for Arbitrary Agents**

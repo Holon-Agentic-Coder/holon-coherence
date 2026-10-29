@@ -18,12 +18,14 @@ PROVENANCE_PREFIXES = ("holon-knowledge/ledger/", "plans/", "executions/", "inte
 ALLOWED_FILES = frozenset({"." + "agents/AGENTS.md"})
 CONTENT_PATTERNS = (
     re.compile(r"(?<![\w.-])" + "to" + r"do/"),
-    re.compile(r"""["']""" + "to" + r"""do["']"""),
+    # A quoted bare name only counts in a path context: joined, wrapped in Path(), or next to a "/" operator.
+    re.compile(r"""(?:join\([^)]*|Path\(\s*|/\s*)["']""" + "to" + r"""do["']|["']""" + "to" + r"""do["']\s*/"""),
     re.compile(r"(?<![\w-])\." + "sub" + r"agent/"),
     re.compile(r"(?<![\w-])\." + "be" + r"ans/"),
     re.compile(r"/(?:Users|home)/[^/\s]+/git/"),
     re.compile("holon-agentic-" + "coder-ref"),
-    re.compile(r"\b" + "be" + r"ans?[ _:#-]*\d{4}\b", re.IGNORECASE),
+    # Any-case ids need a non-letter before them; a capitalised id may also be joined onto a name (TestFooId0001 style).
+    re.compile(r"(?:(?i:(?<![a-z])" + "be" + r"ans?)|" + "Be" + r"ans?)[ _:#-]*\d{4}(?!\d)"),
 )
 
 
@@ -105,6 +107,10 @@ def test_forbidden_dirs_are_detected(path: str) -> None:
         "TO" + "DO: tidy",
         "auto" + "to" + "do/x",
         ".holon/mitm_wire_logs",
+        "jelly" + "be" + "an 2048",
+        'status == "' + "to" + 'do"',
+        'choices=["done", "' + "to" + 'do"]',
+        "{'state': '" + "to" + "do'}",
     ],
 )
 def test_benign_text_is_allowed(text: str) -> None:
@@ -130,10 +136,44 @@ def test_benign_text_is_allowed(text: str) -> None:
         "Be" + "an: 0045",
         "os.path.join('" + "to" + "do', 'mitm_wire_logs')",
         'Path("' + "to" + 'do") / "x"',
+        'os.path.join(root, "' + "to" + 'do")',
+        'root / "' + "to" + 'do"',
+        '"' + "to" + 'do" / "cache"',
+        "TestFoo" + "Be" + "an0097",
+        "fix_" + "be" + "an_0097",
     ],
 )
 def test_each_leak_pattern_is_detected(text: str) -> None:
     assert leaks_in(text) != []
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "holon-knowledge/ledger/intents.jsonl",
+        "plans/P-1.md",
+        "executions/E-1.md",
+        "intents/I-1.json",
+        "." + "agents/AGENTS.md",
+    ],
+)
+def test_provenance_and_allowed_files_are_exempt(path: str) -> None:
+    assert is_exempt(path)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "docs/plans/x.md",
+        "src/executions/x.py",
+        "plansx/a.md",
+        "holon-knowledge/notes.md",
+        "docs/holon-knowledge/ledger/x.jsonl",
+        "." + "agents/other.md",
+    ],
+)
+def test_exemption_is_root_anchored_and_exact(path: str) -> None:
+    assert not is_exempt(path)
 
 
 def test_hygiene_file_does_not_match_itself() -> None:

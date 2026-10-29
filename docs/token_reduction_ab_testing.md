@@ -68,10 +68,11 @@ Run unit tests verifying core algorithms (CA generation, cleaner policies, SQLit
 uv run pytest
 ```
 
-#### Tier 2: Offline Parser Smoke Check
+#### Tier 2: Offline Differential Replay
 
-Replay a captured wire log through the comparison parser to confirm that turns, usage blocks and timings are read
-correctly (zero API cost). This check only validates parsing; it is never used to report efficacy figures:
+Replay a captured wire log offline (zero API cost): each recorded request is passed through the context cleaner,
+compared with its raw form, and a token and character reduction scorecard is printed. The replay confirms that the
+cleaner and the wire-log reader work on real captures; its figures are never reported as efficacy results:
 
 ```bash
 holon-coherence ab-test --trace-file ~/.holon/logs/transactions.jsonl
@@ -80,17 +81,18 @@ holon-coherence ab-test --trace-file ~/.holon/logs/transactions.jsonl
 #### Tier 3: Live Network Socket Proxy A/B Test (Arbitrary LLM Provider APIs)
 
 Route a real client workload through the proxy twice: once with the proxy in passive monitoring mode (baseline, logging
-only) and once with optimisation enabled. Credentials are standardised on `HOLON_AGENT_KEY` (or native host auth), and
+only) and once with optimisation enabled. Both `start` commands use `-d` so the proxy runs in the background while the workload
+runs. Credentials are standardised on `HOLON_AGENT_KEY` (or native host auth), and
 every turn is recorded in `~/.holon/logs` (`transactions.jsonl` plus per-turn `turn_*.json` files), the host directory
 `holon-coherence start` mounts as the container's `WIRE_LOG_DIR`:
 
 ```bash
 # Baseline: passive monitoring, no optimisation
-holon-coherence start --passive
+holon-coherence start --passive -d
 HOLON_AGENT_KEY="sk-..." holon-coherence run -- <client command against the target LLM URL>
 
 # Optimised: restart the proxy with optimisation enabled and repeat the same workload
-holon-coherence stop && holon-coherence start
+holon-coherence stop && holon-coherence start -d
 HOLON_AGENT_KEY="sk-..." holon-coherence run -- <client command against the target LLM URL>
 
 # Inspect live cumulative totals
