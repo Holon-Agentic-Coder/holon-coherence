@@ -30,11 +30,11 @@ However, upstream prompt caching fails completely if:
 
 ## 🏛️ Codebase Architecture & Source Locations
 
-| Component                     | Repository Path                          | Core Function / Class                                  |
-| :---------------------------- | :--------------------------------------- | :----------------------------------------------------- |
-| **Cache Control Injector**    | `src/holon_coherence/payload_cleaner.py` | `JSONContextCleaner._inject_anthropic_cache_control()` |
-| **MITM Telemetry Normalizer** | `src/holon_coherence/mitm_addon.py`      | Normalization of `cache_read_input_tokens`             |
-| **Unified Benchmark Harness** | `todo/ab_measure_all_methods.py`         | Multi-turn cache read measurement                      |
+| Component                     | Repository Path                                                 | Core Function / Class                                  |
+| :---------------------------- | :-------------------------------------------------------------- | :----------------------------------------------------- |
+| **Cache Control Injector**    | `src/holon_coherence/payload_cleaner.py`                        | `JSONContextCleaner._inject_anthropic_cache_control()` |
+| **MITM Telemetry Normaliser** | `src/holon_coherence/mitm_addon.py`                             | Normalisation of `cache_read_input_tokens`             |
+| **Unified Benchmark Harness** | A/B measurement on captured wire logs (see [README](README.md)) | Multi-turn cache read measurement                      |
 
 ---
 
@@ -183,11 +183,12 @@ agy exec --model "${TIER1_MODEL}" "Based on the previous codebase analysis, gene
 
 ### 1. Extract Provider Wire Telemetry
 
-Inspect `todo/mitm_wire_logs/transactions.jsonl` (or the transcript logs in
+Inspect `.holon/mitm_wire_logs/transactions.jsonl` (`~/.holon/logs/transactions.jsonl` when the proxy was started with
+`holon-coherence start`, or the transcript logs in
 `~/.gemini/antigravity-cli/brain/<conv_id>/.system_generated/logs/transcript.jsonl`):
 
 ```bash
-cat todo/mitm_wire_logs/transactions.jsonl | jq '{
+cat .holon/mitm_wire_logs/transactions.jsonl | jq '{
   turn: .turn_id,
   model: .request.model,
   input_tokens: .response.usage.input_tokens,
@@ -199,7 +200,7 @@ cat todo/mitm_wire_logs/transactions.jsonl | jq '{
 
 ### 2. Live Verification Scorecard from Empirical Run
 
-From our high-volume multi-turn benchmark run (`ab_measure_all_methods.py`):
+From our high-volume multi-turn benchmark run (A/B measurement on captured wire logs; see [README](README.md)):
 
 |   Turn #   | Model                   | Status  | Input Tokens | Cache Read Tokens | Output Tokens | Duration |
 | :--------: | :---------------------- | :-----: | :----------: | :---------------: | :-----------: | :------: |

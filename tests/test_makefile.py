@@ -854,7 +854,7 @@ def test_install_miniforge_checksum_dry_run():
 
 
 # ---------------------------------------------------------------------------
-# Dry-run detector (Bean 0079 review)
+# Dry-run detector
 #
 # The long recipes are guarded so `make -n` cannot execute a line that embeds $(MAKE).
 # That guard produced three different silent skips in three revisions and no test caught

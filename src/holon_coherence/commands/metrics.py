@@ -1,4 +1,4 @@
-"""Terminal metrics display and CLI dispatcher for holon-coherence (Bean 0043)."""
+"""Terminal metrics display and CLI dispatcher for holon-coherence."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ from holon_coherence.metrics_math import (
     positive_seconds,
 )
 
-WIRE_LOG_DIR = os.getenv("WIRE_LOG_DIR", "todo/mitm_wire_logs")
+DEFAULT_WIRE_LOG_DIR = ".holon/mitm_wire_logs"
 
 
 def _milliseconds_to_seconds(value: Any) -> float | None:
@@ -147,9 +147,9 @@ def _read_offline_metrics(wire_log_dir: str) -> dict[str, Any] | None:
                 if total_sec is not None:
                     latest_total_time_ms = total_sec * 1000.0
 
-                # Prefill is prompt tokens over the measured TTFT. Records written by Bean 0097 and
-                # later carry the computed rate explicitly, so live and offline readings agree even
-                # when the two disagree with a naive re-derivation from rounded millisecond values.
+                # Prefill is prompt tokens over the measured TTFT. Records that include measured timings
+                # carry the computed rate explicitly, so live and offline readings agree even when the
+                # two disagree with a naive re-derivation from rounded millisecond values.
                 prefill_tps = _stored_rate(timing.get("prefill_tps"), compute_prefill_tps(in_toks, ttft_sec))
                 if prefill_tps is not None:
                     sum_prefill_throughput_tps += prefill_tps
@@ -305,7 +305,7 @@ def handle_metrics(
         env_wire_log = os.getenv("WIRE_LOG_DIR")
         if env_wire_log:
             candidate_dirs.append(env_wire_log)
-        candidate_dirs.append("todo/mitm_wire_logs")
+        candidate_dirs.append(DEFAULT_WIRE_LOG_DIR)
         candidate_dirs.append(os.path.expanduser("~/.holon/logs"))
         candidate_dirs = list(dict.fromkeys(candidate_dirs))
 
@@ -320,7 +320,10 @@ def handle_metrics(
             print(json.dumps({"error": "Proxy not reachable and no offline wire logs found", "port": target_port}))
         else:
             print(f"⚠️  Could not connect to proxy at {endpoint_url}", file=sys.stderr)
-            print("   No offline transaction logs found in WIRE_LOG_DIR or ~/.holon/logs.", file=sys.stderr)
+            print(
+                f"   No offline transaction logs found in WIRE_LOG_DIR, {DEFAULT_WIRE_LOG_DIR} or ~/.holon/logs.",
+                file=sys.stderr,
+            )
             print(
                 "   Start the proxy with 'holon-coherence start' or run an agent with 'holon-coherence claude'.",
                 file=sys.stderr,

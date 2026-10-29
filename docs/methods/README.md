@@ -23,13 +23,22 @@ invariants), telemetry extraction commands, and verification criteria.
 
 ## 🚀 Unified Benchmark Runner
 
-All six methods can be evaluated concurrently in an authentic end-to-end multi-turn session using the unified benchmark
-script located in `todo/`:
+Each method is measured on an authentic multi-turn agent session routed through the proxy, once with the method enabled
+and once with it disabled:
 
 ```bash
-# Execute the high-volume benchmark across real LLMs
-python3 todo/ab_measure_all_methods.py
+# With a proxy already listening on port 8080 (for example from `holon-coherence start -d`), run the same real
+# workload twice through it (baseline vs optimised) and compare the captured turns
+holon-coherence ab-test --command "<agent workload command>"
+
+# Or compare two previously captured wire-log directories
+holon-coherence ab-test --baseline <baseline wire-log dir> --optimized <optimised wire-log dir>
 ```
 
-This harness executes real multi-turn coding tasks, produces full production application deliverables, extracts genuine
-wire telemetry, and generates the consolidated scorecard report at `todo/scorecard_report.md`.
+Individual sessions can also be run directly: `holon-coherence run -- <cmd>` routes a command through an already
+running proxy, while `holon-coherence start` and `holon-coherence <agent>` run the proxy container. That container
+records turn telemetry in `~/.holon/logs/transactions.jsonl` (the host directory mounted as
+the container's `WIRE_LOG_DIR`); an addon run directly without `WIRE_LOG_DIR` writes to
+`.holon/mitm_wire_logs/transactions.jsonl` instead. Live cumulative totals come from `holon-coherence metrics --json`.
+The comparison scorecard is printed to the terminal (or as JSON with `--json`); keep any saved copy under `.holon/`, for
+example `.holon/scorecard_report.md`.

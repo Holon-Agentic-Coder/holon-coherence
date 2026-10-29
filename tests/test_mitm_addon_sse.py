@@ -1,4 +1,4 @@
-"""Tests for SSE stream parsing in mitm_addon (Bean 0074).
+"""Tests for SSE stream parsing in mitm_addon.
 
 These cover the aggregation the token-reduction accounting is built on: content reassembled from
 stream fragments, for each supported provider, including the cases where a naive parser silently
@@ -171,7 +171,7 @@ class TestSSEContentRobustness:
         assert extract_sse_content(stream, "mistral") == ""
 
     def test_truncated_final_frame_loses_only_that_frame(self) -> None:
-        """The bean's zero-truncation requirement, at the frame boundary."""
+        """A cut-off final frame drops only its own content; nothing earlier is truncated."""
         full = _sse(
             {"choices": [{"delta": {"content": "alpha"}}]},
             {"choices": [{"delta": {"content": "beta"}}]},

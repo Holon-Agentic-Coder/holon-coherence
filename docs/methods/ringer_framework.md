@@ -24,11 +24,11 @@ cost, making them ideal for high-volume, structured execution tasks.
 
 ## 🏛️ Codebase Architecture & Source Locations
 
-| Component                     | Repository Path                              | Core Function / Class                                  |
-| :---------------------------- | :------------------------------------------- | :----------------------------------------------------- |
-| **Ringer Orchestrator**       | `src/holon_coherence/ringer_orchestrator.py` | `RingerOrchestrator.plan_subtask()`, `record_result()` |
-| **Subtask Result Summarizer** | `src/holon_coherence/ringer_orchestrator.py` | `SubtaskResult._summarize()`                           |
-| **Unified Benchmark Harness** | `todo/ab_measure_all_methods.py`             | Multi-turn tiered execution suites                     |
+| Component                     | Repository Path                                                 | Core Function / Class                                  |
+| :---------------------------- | :-------------------------------------------------------------- | :----------------------------------------------------- |
+| **Ringer Orchestrator**       | `src/holon_coherence/ringer_orchestrator.py`                    | `RingerOrchestrator.plan_subtask()`, `record_result()` |
+| **Subtask Result Summariser** | `src/holon_coherence/ringer_orchestrator.py`                    | `SubtaskResult._summarize()`                           |
+| **Unified Benchmark Harness** | A/B measurement on captured wire logs (see [README](README.md)) | Multi-turn tiered execution suites                     |
 
 ---
 
@@ -82,8 +82,8 @@ Ensure the output directories exist for tangible artifacts:
 
 ```bash
 REPO_ROOT=$(git rev-parse --show-toplevel)
-mkdir -p "${REPO_ROOT}/todo/artifacts/generate_website"
-mkdir -p "${REPO_ROOT}/todo/artifacts/ideate_holon"
+mkdir -p "${REPO_ROOT}/.holon/artifacts/generate_website"
+mkdir -p "${REPO_ROOT}/.holon/artifacts/ideate_holon"
 ```
 
 ---
@@ -116,8 +116,8 @@ HTML5 skeleton (`index.html`):
 ```bash
 agy exec --model "${tier1_model}" << 'EOF'
 Role: System Architect (Tier 1)
-Analyze the Holon token reduction proxy and draft the complete architectural specification in todo/artifacts/generate_website/dashboard_design.md with Mermaid diagrams.
-Next, produce the standalone HTML5 dashboard structure in todo/artifacts/generate_website/index.html.
+Analyse the Holon token reduction proxy and draft the complete architectural specification in .holon/artifacts/generate_website/dashboard_design.md with Mermaid diagrams.
+Next, produce the standalone HTML5 dashboard structure in .holon/artifacts/generate_website/index.html.
 EOF
 ```
 
@@ -130,8 +130,8 @@ The Architect delegates styling and client logic implementation to the low-cost 
 ```bash
 agy exec --model "${tier2_model}" << 'EOF'
 Role: High-Throughput Executor (Tier 2)
-Implement complete dark-mode responsive styling in todo/artifacts/generate_website/styles.css.
-Implement the real-time telemetry streaming simulation and SVG token savings graph in todo/artifacts/generate_website/app.js.
+Implement complete dark-mode responsive styling in .holon/artifacts/generate_website/styles.css.
+Implement the real-time telemetry streaming simulation and SVG token savings graph in .holon/artifacts/generate_website/app.js.
 Output full production code without placeholders.
 EOF
 ```
@@ -145,7 +145,7 @@ The Executor writes and runs an automated Python unit test suite:
 ```bash
 agy exec --model "${tier2_model}" << 'EOF'
 Role: High-Throughput Executor (Tier 2)
-Write an automated unit test suite in todo/artifacts/generate_website/test_dashboard.py asserting:
+Write an automated unit test suite in .holon/artifacts/generate_website/test_dashboard.py asserting:
 1. index.html contains <!DOCTYPE html>, links styles.css, and imports app.js.
 2. styles.css includes dark mode styling rules.
 3. app.js contains DOM event listeners and telemetry logic.
@@ -185,7 +185,8 @@ print("Compressed Output passed to Architect:\n", result.summary)
 
 ### 1. Empirical Workload Telemetry Log
 
-From our live benchmark run across both workload suites (`ab_measure_all_methods.py`):
+From our live benchmark run across both workload suites (A/B measurement on captured wire logs; see
+[README](README.md)):
 
 |   Turn #   | Model                   |      Role      | Input Tokens | Output Tokens | Thinking Tokens | Cache Reads |
 | :--------: | :---------------------- | :------------: | :----------: | :-----------: | :-------------: | :---------: |
@@ -213,8 +214,7 @@ From our live benchmark run across both workload suites (`ab_measure_all_methods
    (achieved **34.8%**).
 2. **Functional Quality Guarantee**: All generated code must pass 100% of automated tests:
    ```bash
-   DASHBOARD_DIR=todo/artifacts/generate_website python3 -m unittest todo/artifacts/generate_website/test_dashboard.py
-   # Output: Ran 4 tests in 0.001s ... OK (100% pass)
+   DASHBOARD_DIR=.holon/artifacts/generate_website uv run pytest .holon/artifacts/generate_website/test_dashboard.py
    ```
 3. **Artifact Completeness**: Full-scale deliverables generated without truncations:
    - `dashboard_design.md` (94 KB)

@@ -1,7 +1,7 @@
 # AI Agent Token Reduction Architecture & Action Plan
 
-This document outlines the architecture, design decisions, and implementation plan for reducing token usage in the
-`holon-agentic-coder-ref` execution harness.
+This document outlines the architecture, design decisions, and implementation plan for reducing token usage in agent
+sessions routed through the `holon-coherence` proxy.
 
 ---
 
@@ -150,19 +150,23 @@ The core objective of A/B testing is to measure, compare, and empirically verify
 bandwidth savings, prompt caching efficiency, and local cache hit rates across **arbitrary LLM APIs** (Anthropic,
 OpenAI, Gemini, custom endpoints) and **arbitrary agent harnesses** (Antigravity, Claude, Pi, Codex, Gemini).
 
-1. **Tier 1: Automated Unit Verification** (`apps/sandbox-executor/tests/test_token_reduction.py`)
+1. **Tier 1: Automated Unit Verification** (`uv run pytest`)
    - Verifies CA generation, trust injection, cleaner payload transformations, hybrid SQLite caching, RAG indexing, and
      ringer delegation with 100% test pass rate.
-2. **Tier 2: Offline Deterministic Mocked Payload Benchmark** (`todo/ab_benchmark_mock_api.py`)
-   - Evaluates multi-turn payload cleaning, tool output deduplication, and local cache matching in memory without making
-     network calls or incurring API costs.
-3. **Tier 3: Live Network Socket Proxy A/B Test for Arbitrary LLM APIs** (`todo/ab_benchmark_real_api.py`)
-   - Spawns the official Docker mitmproxy sidecar container (`mitmproxy/mitmproxy:12.2.3` running `mitm_addon.py`),
-     routes real HTTP client socket POST traffic through the container to **arbitrary target LLM URLs** via a strictly
-     required `--url` parameter (zero hardcoded default URLs), and records real upstream response payloads and provider
-     billing headers (`cache_read_input_tokens`, `prompt_tokens`).
-4. **Tier 4: End-to-End Sandbox A/B Test for Arbitrary Agents** (`todo/ab_benchmark_holon_agent.py` &
-   `sandbox_executor.cli`)
-   - Executes containerized agent workloads in Docker sandbox across **arbitrary agents**
-     (`--agent antigravity|claude|pi|codex|gemini`) and **arbitrary models** with mitmproxy sidecar (`--token-reduce`),
-     Root CA trust injection, and live container socket proxying comparing baseline vs. token-reduced runs.
+2. **Tier 2: Offline Differential Replay** (not used for efficacy figures)
+   - Scores a captured wire log offline (`holon-coherence ab-test --trace-file ~/.holon/logs/transactions.jsonl`)
+     without making network calls or incurring API costs. A log holding turns from a single mode is replayed: each
+     recorded request is passed through the context cleaner and a token and character reduction scorecard is printed
+     against the raw requests. A log that already holds both passive (baseline) and optimised turns, for example after
+     a Tier 3 run, is instead scored by comparing its recorded baseline turns with its recorded optimised turns.
+3. **Tier 3: Live Network Socket Proxy A/B Test for Arbitrary LLM APIs**
+   - Starts the `holon-coherence` proxy container (built on `mitmproxy/mitmproxy:12.2.3`, running `mitm_addon.py`) and
+     routes a real client workload through it twice (`holon-coherence start --passive -d` for the baseline, then
+     `holon-coherence start -d`), launching the client with `holon-coherence run -- <client command>`. Real upstream
+     response payloads and provider billing usage (`cache_read_input_tokens`, `prompt_tokens`) are recorded in
+     `~/.holon/logs/`, the host directory `holon-coherence start` mounts as the container's `WIRE_LOG_DIR`.
+4. **Tier 4: End-to-End Agent A/B Test for Arbitrary Agents**
+   - Runs a real coding agent (`agy`, `claude`, `codex`, `opencode`, `pi`) on any model twice through the mitmproxy
+     sidecar via `holon-coherence ab-test --command "<agent workload>"`, and compares the baseline and optimised turns
+     captured in the wire log. `ab-test` switches the mode of a proxy that must already be listening on port 8080 (for
+     example one started with `holon-coherence start -d`); it does not start the proxy itself.

@@ -1,4 +1,4 @@
-"""Tests for HybridCacheStore shingle storage, migration and concurrency (Bean 0072)."""
+"""Tests for HybridCacheStore shingle storage, migration and concurrency."""
 
 import json
 import sqlite3

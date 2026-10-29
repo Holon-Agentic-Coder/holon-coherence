@@ -77,7 +77,8 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-WIRE_LOG_DIR = os.getenv("WIRE_LOG_DIR", "todo/mitm_wire_logs")
+DEFAULT_WIRE_LOG_DIR = ".holon/mitm_wire_logs"
+WIRE_LOG_DIR = os.getenv("WIRE_LOG_DIR", DEFAULT_WIRE_LOG_DIR)
 CACHE_DIR = os.getenv("CACHE_DIR", os.path.expanduser("~/.holon/cache"))
 DEFAULT_PROXY_LISTEN_PORT = 8080
 
@@ -380,7 +381,7 @@ def derive_turn_id(
 
 @dataclass(frozen=True)
 class FlowTiming:
-    """Per-transaction timings in seconds, where ``None`` means *not measured* (Bean 0097).
+    """Per-transaction timings in seconds, where ``None`` means *not measured*.
 
     Attributes:
         ttft_sec: Request sent -> first token (first SSE chunk, or first payload for a buffered
@@ -487,7 +488,7 @@ def resolve_flow_timing(flow: Any, completed_at: float | None = None) -> FlowTim
 
 @dataclass
 class CumulativeMetrics:
-    """Thread-safe cumulative metrics tracking context optimization and cache performance (Bean 0043)."""
+    """Thread-safe cumulative metrics tracking context optimisation and cache performance."""
 
     total_turns: int = 0
     total_requests: int = 0
@@ -555,7 +556,7 @@ class CumulativeMetrics:
     ) -> None:
         """Records completed response metrics including token counts and timing.
 
-        Throughput arguments use ``None`` for *not measured* (Bean 0097): a non-streaming reply or
+        Throughput arguments use ``None`` for *not measured*: a non-streaming reply or
         a sub-floor streaming window must be omitted from the averages rather than entered as a
         fabricated rate.
         """
@@ -1116,7 +1117,7 @@ def translate_openai_sse_chunk_to_gemini(
 
 
 def render_dashboard_html() -> str:
-    """Renders the self-contained HTML/CSS/JS dashboard for /holon/ (Bean 0043)."""
+    """Renders the self-contained HTML/CSS/JS dashboard for /holon/."""
     return """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2002,7 +2003,7 @@ class MitmproxyAddon:
             self.metrics.record_request()
             is_local = is_local_target(flow)
 
-            # Bean 0051: Gemini v1beta bridge to OpenAI /v1/chat/completions for host-local engines
+            # Gemini v1beta bridge to OpenAI /v1/chat/completions for host-local engines
             if provider == "gemini" and is_local and data is not None:
                 flow.is_gemini_bridged = True
                 target_model = os.getenv("AGY_MODEL") or os.getenv("HOLON_LOCAL_MODEL")
@@ -2017,7 +2018,7 @@ class MitmproxyAddon:
                     data["stream"] = True
                 flow.request.set_text(json.dumps(data))
 
-            # Bean 0051: Strict Anthropic normalizer for host-local engines
+            # Strict Anthropic normaliser for host-local engines
             if provider == "anthropic" and is_local and data is not None:
                 data, _ = normalize_anthropic_request(flow, data, is_local=True)
                 flow.request.set_text(json.dumps(data))
@@ -2208,7 +2209,7 @@ class MitmproxyAddon:
 
                     # Compute timing from one clock domain; a missing stamp means "not measured"
                     # and must never be replaced by `now`, which is what yielded ttft == 0.0 and the
-                    # 0.00 tokens/sec prefill readings (Bean 0097).
+                    # 0.00 tokens/sec prefill readings.
                     now = time.perf_counter()
                     timing = resolve_flow_timing(flow, completed_at=now)
                     ttft = timing.ttft_sec

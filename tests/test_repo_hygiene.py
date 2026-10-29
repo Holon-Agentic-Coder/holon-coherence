@@ -1,0 +1,198 @@
+"""Repository hygiene: tracked files must not depend on an external harness."""
+
+from __future__ import annotations
+
+import re
+import subprocess
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Fragments are joined so that this file never matches its own patterns.
+FORBIDDEN_DIRS = frozenset({"to" + "do", "." + "sub" + "agent", "." + "be" + "ans"})
+# Dotted harness directories are never legitimate at any depth; the bare name is only rejected at the root.
+NESTED_FORBIDDEN_DIRS = frozenset({"." + "sub" + "agent", "." + "be" + "ans"})
+PROVENANCE_PREFIXES = ("holon-knowledge/ledger/", "plans/", "executions/", "intents/")
+ALLOWED_FILES = frozenset({"." + "agents/AGENTS.md"})
+CONTENT_PATTERNS = (
+    re.compile(r"(?<![\w.-])" + "to" + r"do/"),
+    # A quoted bare name only counts in a path context: any argument of a path join() (qualified or imported bare) or
+    # Path(), or next to a "/" operator; a plain str.join() (a join preceded by a dot) is not a path context.
+    re.compile(
+        r"""(?:(?:(?<![\w.])join|path\.join|Path)\([^)]*|/\s*)["']"""
+        + "to"
+        + r"""do["']|["']"""
+        + "to"
+        + r"""do["']\s*/"""
+    ),
+    re.compile(r"(?<![\w-])\." + "sub" + r"agent/"),
+    re.compile(r"(?<![\w-])\." + "be" + r"ans/"),
+    re.compile(r"/(?:Users|home)/[^/\s]+/git/"),
+    re.compile("holon-agentic-" + "coder-ref"),
+    # Any-case ids need a non-letter before them; a capitalised id may also be joined onto a name (TestFooId0001 style).
+    re.compile(r"(?:(?i:(?<![a-z])" + "be" + r"ans?)|" + "Be" + r"ans?)[ _:#-]*\d{4}(?!\d)"),
+)
+
+
+def tracked_files() -> list[str]:
+    """List tracked paths relative to the repository root; skip only outside a git checkout."""
+    if not (REPO_ROOT / ".git").exists():
+        pytest.skip("not a git checkout, so there are no tracked files to list")
+    result = subprocess.run(["git", "ls-files", "-z"], cwd=REPO_ROOT, capture_output=True, check=True)
+    return [path for path in result.stdout.decode("utf-8").split("\0") if path]
+
+
+def forbidden_dir(path: str) -> bool:
+    """True when the root component, or any dotted component, is an exact harness directory name."""
+    parts = path.split("/")
+    return parts[0] in FORBIDDEN_DIRS or any(part in NESTED_FORBIDDEN_DIRS for part in parts)
+
+
+def is_exempt(path: str) -> bool:
+    """Provenance records and explicitly allowed files are not scanned."""
+    return path.startswith(PROVENANCE_PREFIXES) or path in ALLOWED_FILES
+
+
+def leaks_in(text: str) -> list[str]:
+    """Return the pattern of every leak pattern found in ``text``."""
+    return [pattern.pattern for pattern in CONTENT_PATTERNS if pattern.search(text)]
+
+
+def read_text(path: str) -> str | None:
+    """Read a tracked file as text, returning ``None`` for binary or missing files."""
+    file_path = REPO_ROOT / path
+    if not file_path.is_file():
+        return None
+    data = file_path.read_bytes()
+    return None if b"\0" in data else data.decode("utf-8", errors="ignore")
+
+
+def test_no_tracked_file_under_forbidden_dir() -> None:
+    assert [path for path in tracked_files() if forbidden_dir(path)] == []
+
+
+def test_no_tracked_file_contains_harness_leak() -> None:
+    offenders = []
+    for path in tracked_files():
+        text = None if is_exempt(path) else read_text(path)
+        offenders.extend(f"{path}:{pattern}" for pattern in leaks_in(text or ""))
+    assert offenders == []
+
+
+@pytest.mark.parametrize(
+    "path", [".beads/issues.jsonl", ".beads", "docs/beads.md", "docs/.beads/x.md", "src/" + "to" + "do/x.py"]
+)
+def test_similar_paths_are_allowed(path: str) -> None:
+    assert not forbidden_dir(path)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "to" + "do/x.md",
+        "." + "sub" + "agent/run.json",
+        "." + "be" + "ans/0001.md",
+        "docs/." + "be" + "ans/x.md",
+        "apps/." + "sub" + "agent/state.json",
+    ],
+)
+def test_forbidden_dirs_are_detected(path: str) -> None:
+    assert forbidden_dir(path)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "see .beads/ for issues",
+        "/home/mitmproxy/.mitmproxy",
+        "Beans are fine",
+        "a bean counter",
+        "2048 beans in 1024 jars",
+        "the " + "to" + "do list",
+        "TO" + "DO: tidy",
+        "auto" + "to" + "do/x",
+        ".holon/mitm_wire_logs",
+        "jelly" + "be" + "an 2048",
+        'status == "' + "to" + 'do"',
+        'choices=["done", "' + "to" + 'do"]',
+        "{'state': '" + "to" + "do'}",
+        'Path("x").name == "' + "to" + 'do"',
+        '", ".join(["done", "' + "to" + 'do"])',
+        'help="one of: " + "|".join(("done", "' + "to" + 'do"))',
+        'sep.join(["done", "' + "to" + 'do"])',
+        '"/".join(("done", "' + "to" + 'do"))',
+    ],
+)
+def test_benign_text_is_allowed(text: str) -> None:
+    assert leaks_in(text) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "logs in " + "to" + "do/mitm_wire_logs",
+        "run ." + "sub" + "agent/state.json",
+        "tracked in ." + "be" + "ans/0001.md",
+        "file:///Us" + "ers/someone/git/project/file.py",
+        "the " + "holon-agentic-" + "coder-ref" + " checkout",
+        "Be" + "an 0045",
+        "Be" + "an0097",
+        "Be" + "an-0129",
+        "(Be" + "ans 0043 & 0051)",
+        "Be" + "ans 0167/0168",
+        "be" + "an 0045",
+        "BE" + "AN-0045",
+        "Be" + "an #0045",
+        "Be" + "an: 0045",
+        "os.path.join('" + "to" + "do', 'mitm_wire_logs')",
+        'Path("' + "to" + 'do") / "x"',
+        'os.path.join(root, "' + "to" + 'do")',
+        'join(root, "' + "to" + 'do")',
+        'from os.path import join; join("' + "to" + 'do", "x")',
+        'posixpath.join(root, "' + "to" + 'do")',
+        'PurePath(root, "' + "to" + 'do")',
+        'Path("' + "to" + 'do", "x")',
+        'Path("x", "' + "to" + 'do")',
+        'root / "' + "to" + 'do"',
+        '"' + "to" + 'do" / "cache"',
+        "TestFoo" + "Be" + "an0097",
+        "fix_" + "be" + "an_0097",
+    ],
+)
+def test_each_leak_pattern_is_detected(text: str) -> None:
+    assert leaks_in(text) != []
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "holon-knowledge/ledger/intents.jsonl",
+        "plans/P-1.md",
+        "executions/E-1.md",
+        "intents/I-1.json",
+        "." + "agents/AGENTS.md",
+    ],
+)
+def test_provenance_and_allowed_files_are_exempt(path: str) -> None:
+    assert is_exempt(path)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "docs/plans/x.md",
+        "src/executions/x.py",
+        "plansx/a.md",
+        "holon-knowledge/notes.md",
+        "docs/holon-knowledge/ledger/x.jsonl",
+        "." + "agents/other.md",
+    ],
+)
+def test_exemption_is_root_anchored_and_exact(path: str) -> None:
+    assert not is_exempt(path)
+
+
+def test_hygiene_file_does_not_match_itself() -> None:
+    assert leaks_in(Path(__file__).read_text(encoding="utf-8")) == []

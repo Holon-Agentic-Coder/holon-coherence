@@ -1,14 +1,8 @@
 # Token Reduction & Optimization Efficacy Measurement Plan
 
 This document outlines the architecture, instrumentation strategy, and step-by-step methodology for inspecting
-wire-level LLM traffic and measuring the empirical effectiveness of all six token reduction techniques across the
-`holon-agentic-coder-ref` ecosystem.
-
-> [!NOTE] **Repository Topology & Relative Links**: Relative file paths targeting `../../holon-agentic-coder-ref/...`
-> navigate from this document's directory (`docs/optimisation/`) to the repository root where `holon-agentic-coder-ref`
-> resides as a submodule or nested folder. In standalone GitHub web views, cross-repository relative links do not
-> resolve across separate repository boundaries; refer directly to the upstream
-> [`holon-agentic-coder-ref`](https://github.com/Holon-Agentic-Coder/holon-agentic-coder-ref) repository.
+wire-level LLM traffic and measuring the empirical effectiveness of all six token reduction techniques implemented by
+the `holon-coherence` proxy.
 
 ---
 
@@ -20,7 +14,7 @@ During live runs, token counters increment, but developers cannot see the actual
 This occurs because:
 
 1. **Summarized Console Logging**:
-   [`mitm_addon.py`](../../holon-agentic-coder-ref/develop/apps/sandbox-executor/src/sandbox_executor/token_reduction/mitm_addon.py)
+   [`mitm_addon.py`](../src/holon_coherence/mitm_addon.py)
    outputs only single-line `📊 [TELEMETRY]` summaries to standard output.
 2. **Streaming (SSE) Buffering Without Inspection Sinks**: When agents stream responses via Server-Sent Events (SSE),
    chunks are assembled in-memory solely to parse usage metadata and count tokens, without emitting the full
@@ -82,10 +76,10 @@ graph TD
 
 To inspect the raw traffic going out and coming back in real time:
 
-### 1. Structured Wire Logger (`todo/mitm_wire_logs/`)
+### 1. Structured Wire Logger (`.holon/mitm_wire_logs/`)
 
 Add a structured file logger to
-[`mitm_addon.py`](../../holon-agentic-coder-ref/develop/apps/sandbox-executor/src/sandbox_executor/token_reduction/mitm_addon.py)
+[`mitm_addon.py`](../src/holon_coherence/mitm_addon.py)
 that appends full transaction details to `${WIRE_LOG_DIR}/turn_{turn_id}_{flow_id}.json` and
 `${WIRE_LOG_DIR}/transactions.jsonl`.
 
@@ -93,13 +87,17 @@ that appends full transaction details to `${WIRE_LOG_DIR}/turn_{turn_id}_{flow_i
   environment variable:
 
   ```python
-  WIRE_LOG_DIR = os.getenv("WIRE_LOG_DIR", "todo/mitm_wire_logs")
+  DEFAULT_WIRE_LOG_DIR = ".holon/mitm_wire_logs"
+  WIRE_LOG_DIR = os.getenv("WIRE_LOG_DIR", DEFAULT_WIRE_LOG_DIR)
   ```
 
-  In local development, transactions default to `todo/mitm_wire_logs/`. When running inside Docker containers, pass
-  `-e WIRE_LOG_DIR=/tmp/wire_logs` so output writes directly to the mounted `/tmp/wire_logs` host volume. Ensure
-  `${WIRE_LOG_DIR}` (e.g. `todo/mitm_wire_logs/`) is explicitly included in `.gitignore` to prevent committing raw
-  conversation transcripts, tool outputs, and LLM payloads to source control.
+  In local development, transactions default to `.holon/mitm_wire_logs/` (relative to the working directory). When
+  running inside Docker containers, pass `-e WIRE_LOG_DIR=/tmp/wire_logs` so output writes directly to the mounted
+  `/tmp/wire_logs` host volume. The default directory is ignored through the `.holon/` entry in `.gitignore`, which
+  prevents committing raw conversation transcripts, tool outputs, and LLM payloads to source control.
+
+  _Migration_: Earlier releases wrote wire logs to a different default directory. Move those files into
+  `.holon/mitm_wire_logs`, or set `WIRE_LOG_DIR` to their location to keep reading them.
 
   _Log Retention & Disk Quota Policy_: In long-running benchmark suites ($N \ge 3$ across 50+ turns), full raw
   transaction dumps (`turn_{turn_id}_{flow_id}.json`) can accumulate hundreds of megabytes of disk storage. For
@@ -236,11 +234,11 @@ is the equivalent without the CLI:
 REPO_ROOT=$(git rev-parse --show-toplevel)
 
 # Ensure log, cache, and proxy CA directories exist on host prior to container startup
-mkdir -p "${REPO_ROOT}/todo/mitm_wire_logs" "${REPO_ROOT}/todo/cache" ~/.holon/proxy-ca
+mkdir -p "${REPO_ROOT}/.holon/mitm_wire_logs" "${REPO_ROOT}/.holon/cache" ~/.holon/proxy-ca
 
 # Tip (Linux hosts): If UID/GID permissions prevent container writes (mitmproxy runs as UID 1000),
-# ensure ownership or write permissions via 'chown -R 1000:1000 todo/mitm_wire_logs todo/cache ~/.holon/proxy-ca'
-# (or 'chmod -R 775 todo/mitm_wire_logs todo/cache ~/.holon/proxy-ca'). Alternatively, add '--user $(id -u):$(id -g)'
+# ensure ownership or write permissions via 'chown -R 1000:1000 .holon/mitm_wire_logs .holon/cache ~/.holon/proxy-ca'
+# (or 'chmod -R 775 .holon/mitm_wire_logs .holon/cache ~/.holon/proxy-ca'). Alternatively, add '--user $(id -u):$(id -g)'
 # along with '-e HOME=/tmp' and mount '-v ~/.holon/proxy-ca:/tmp/.mitmproxy' (or pass '--set confdir=/tmp/.mitmproxy')
 # since mitmproxy resolves its default configuration under '$HOME/.mitmproxy'.
 
@@ -250,10 +248,10 @@ docker run --rm -it \
   -e WIRE_LOG_DIR=/tmp/wire_logs \
   -e CACHE_DIR=/tmp/cache \
   -e PYTHONPATH=/tmp/src \
-  -v "${REPO_ROOT}/holon-agentic-coder-ref/develop/apps/sandbox-executor/src":/tmp/src:ro \
-  -v "${REPO_ROOT}/holon-agentic-coder-ref/develop/apps/sandbox-executor/src/sandbox_executor/token_reduction/mitm_addon.py":/tmp/mitm_addon.py:ro \
-  -v "${REPO_ROOT}/todo/mitm_wire_logs":/tmp/wire_logs \
-  -v "${REPO_ROOT}/todo/cache":/tmp/cache \
+  -v "${REPO_ROOT}/src":/tmp/src:ro \
+  -v "${REPO_ROOT}/src/holon_coherence/mitm_addon.py":/tmp/mitm_addon.py:ro \
+  -v "${REPO_ROOT}/.holon/mitm_wire_logs":/tmp/wire_logs \
+  -v "${REPO_ROOT}/.holon/cache":/tmp/cache \
   -v ~/.holon/proxy-ca:/home/mitmproxy/.mitmproxy \
   mitmproxy/mitmproxy:12.2.3 \
   mitmweb -s /tmp/mitm_addon.py --web-host 0.0.0.0 --web-port 8081 --listen-port 8080 \
@@ -284,8 +282,8 @@ long-lived web UIs can block pipeline execution. Launch `mitmdump` in detached m
 ```bash
 # Headless detached container execution for CI/CD runner environments
 REPO_ROOT=$(git rev-parse --show-toplevel)
-mkdir -p "${REPO_ROOT}/todo/mitm_wire_logs" "${REPO_ROOT}/todo/cache" ~/.holon/proxy-ca
-chmod -R 777 "${REPO_ROOT}/todo/mitm_wire_logs" "${REPO_ROOT}/todo/cache" ~/.holon/proxy-ca 2>/dev/null || true
+mkdir -p "${REPO_ROOT}/.holon/mitm_wire_logs" "${REPO_ROOT}/.holon/cache" ~/.holon/proxy-ca
+chmod -R 777 "${REPO_ROOT}/.holon/mitm_wire_logs" "${REPO_ROOT}/.holon/cache" ~/.holon/proxy-ca 2>/dev/null || true
 docker rm -f mitmproxy-wire-logger 2>/dev/null || true
 trap 'docker rm -f mitmproxy-wire-logger >/dev/null 2>&1 || true' EXIT INT TERM
 
@@ -294,10 +292,10 @@ docker run -d --name mitmproxy-wire-logger \
   -e WIRE_LOG_DIR=/tmp/wire_logs \
   -e CACHE_DIR=/tmp/cache \
   -e PYTHONPATH=/tmp/src \
-  -v "${REPO_ROOT}/holon-agentic-coder-ref/develop/apps/sandbox-executor/src":/tmp/src:ro \
-  -v "${REPO_ROOT}/holon-agentic-coder-ref/develop/apps/sandbox-executor/src/sandbox_executor/token_reduction/mitm_addon.py":/tmp/mitm_addon.py:ro \
-  -v "${REPO_ROOT}/todo/mitm_wire_logs":/tmp/wire_logs \
-  -v "${REPO_ROOT}/todo/cache":/tmp/cache \
+  -v "${REPO_ROOT}/src":/tmp/src:ro \
+  -v "${REPO_ROOT}/src/holon_coherence/mitm_addon.py":/tmp/mitm_addon.py:ro \
+  -v "${REPO_ROOT}/.holon/mitm_wire_logs":/tmp/wire_logs \
+  -v "${REPO_ROOT}/.holon/cache":/tmp/cache \
   -v ~/.holon/proxy-ca:/home/mitmproxy/.mitmproxy \
   mitmproxy/mitmproxy:12.2.3 \
   mitmdump -s /tmp/mitm_addon.py --listen-port 8080 \
@@ -396,7 +394,7 @@ _(with denominator guard: defaults to $0.0\%$ if $\text{Tokens}_{\text{raw}} = 0
 #### Instrumentation:
 
 - In
-  [`mitm_addon.py`](../../holon-agentic-coder-ref/develop/apps/sandbox-executor/src/sandbox_executor/token_reduction/mitm_addon.py):`request()`,
+  [`mitm_addon.py`](../src/holon_coherence/mitm_addon.py):`request()`,
   calculate hash and length of `data` (incoming) vs `cleaned_data` (outgoing) to compute character-level deltas.
 - Obtain structured reduction statistics by extending the `JSONContextCleaner` API contract to return a
   `CleaningResult(payload=..., stats=...)` dataclass (or invoke `process_payload_with_stats()`), or alternatively
@@ -415,7 +413,7 @@ _(with denominator guard: defaults to $0.0\%$ if $\text{Tokens}_{\text{raw}} = 0
 > step-by-step real LLM execution, SQLite query inspection, and short-circuit verification.
 
 > [!NOTE] **Streaming Request Bypass & Cache Evaluation Constraint**: In the current implementation of
-> [`mitm_addon.py`](../../holon-agentic-coder-ref/develop/apps/sandbox-executor/src/sandbox_executor/token_reduction/mitm_addon.py),
+> [`mitm_addon.py`](../src/holon_coherence/mitm_addon.py),
 > streaming requests (`stream: true` or SSE endpoints) bypass local cache storage and retrieval (`put()` and `get()`)
 > because returning cached completions requires token-by-token stream replay. Therefore, when evaluating Method 2
 > (_Local Hybrid & Semantic Caching_) in benchmarks, agent harnesses must be configured in non-streaming mode to observe
@@ -444,7 +442,7 @@ $$\text{Tokens Avoided} = \sum_{\text{cache hits}} (\text{Prompt Tokens} + \text
 #### Instrumentation:
 
 - In
-  [`hybrid_cache.py`](../../holon-agentic-coder-ref/develop/apps/sandbox-executor/src/sandbox_executor/token_reduction/hybrid_cache.py):`get()`,
+  [`hybrid_cache.py`](../src/holon_coherence/hybrid_cache.py):`get()`,
   log cache query results with `key`, `hit_type` (`EXACT`, `SEMANTIC`, `MISS`), `similarity_score`, and `hit_count`.
 
 ---
@@ -498,7 +496,7 @@ read discounts._
 #### Instrumentation:
 
 - In
-  [`mitm_addon.py`](../../holon-agentic-coder-ref/develop/apps/sandbox-executor/src/sandbox_executor/token_reduction/mitm_addon.py):`extract_token_counts()`,
+  [`mitm_addon.py`](../src/holon_coherence/mitm_addon.py):`extract_token_counts()`,
   parse the exact usage dictionary from JSON or SSE chunks.
 - Validate that `cache_control` breakpoints were injected and honored by the upstream provider.
 
@@ -535,7 +533,7 @@ lifecycle.
 #### Instrumentation:
 
 - In
-  [`rag_indexer.py`](../../holon-agentic-coder-ref/develop/apps/sandbox-executor/src/sandbox_executor/token_reduction/rag_indexer.py),
+  [`rag_indexer.py`](../src/holon_coherence/rag_indexer.py),
   log the token count of generated context blocks.
 - Track agent tool invocations (`grep`, `find`, `semantic_search`) during the execution phase.
 
@@ -578,7 +576,7 @@ directly captures this distinction without relying on imprecise per-turn average
 #### Instrumentation:
 
 - In
-  [`openbrain_memory.py`](../../holon-agentic-coder-ref/develop/apps/sandbox-executor/src/sandbox_executor/token_reduction/openbrain_memory.py),
+  [`openbrain_memory.py`](../src/holon_coherence/openbrain_memory.py),
   log retrieved memory IDs, similarity scores, and injected token counts.
 - Compare task success speed on regression benchmark suites.
 
@@ -615,7 +613,7 @@ and internal reasoning/thinking tokens (e.g. provider `thinking` blocks or
 #### Instrumentation:
 
 - In
-  [`ringer_orchestrator.py`](../../holon-agentic-coder-ref/develop/apps/sandbox-executor/src/sandbox_executor/token_reduction/ringer_orchestrator.py),
+  [`ringer_orchestrator.py`](../src/holon_coherence/ringer_orchestrator.py),
   record separate token ledgers for the architect and each subagent child conversation.
 - Measure compression ratio: $\frac{\text{Tokens}_{\text{summary}}}{\text{Tokens}_{\text{raw\_subagent\_history}}}$
   _(with denominator guard: defaults to $0.0$ if $\text{Tokens}_{\text{raw_subagent_history}} = 0$)\_.
@@ -762,7 +760,7 @@ text-only loops (prompt $\to$ completion). Instead, they MUST enforce:
     **12,066 output tokens**.
   - **Turn 3 (Executor - Tier 2)**: Authors and executes automated test verification script (`test_dashboard.py`, 3.7
     KB) asserting artifact presence, semantic structure, dark mode rules, and event listeners.
-- **Artifacts Produced in `todo/artifacts/generate_website/`**:
+- **Artifacts Produced in `.holon/artifacts/generate_website/`**:
   - `dashboard_design.md` (94 KB): Architectural specification and UI component diagram.
   - `index.html` (61 KB): Semantic HTML5 telemetry dashboard interface.
   - `styles.css` (12 KB): Dark-mode responsive CSS grid layout.
@@ -785,7 +783,7 @@ text-only loops (prompt $\to$ completion). Instead, they MUST enforce:
   - **Turn 2 (Executor - Tier 2)**: Generates an empirical performance profile and benchmark matrix
     (`performance_profile.md`, 2.4 KB) detailing memory, CPU, and token scaling trade-offs. Billed at **49,156 input
     tokens** and **4,900 output tokens**.
-- **Artifacts Produced in `todo/artifacts/ideate_holon/`**:
+- **Artifacts Produced in `.holon/artifacts/ideate_holon/`**:
   - `holon_architecture_rfc.md` (105 KB): Formal Architectural RFC with complete refactored subsystems and Mermaid
     diagrams.
   - `performance_profile.md` (2.4 KB): Empirical performance profile and optimization comparison matrix.
@@ -848,7 +846,7 @@ Mock Workloads) **Workload Scale:** High-Volume Multi-Turn Trajectory (>= 10,000
 ### Suite 1: Full-Stack Web Application Generation (`generate-website`)
 
 - **Status:** ✅ PASSED (100% Verification)
-- **Artifacts Produced in `todo/artifacts/generate_website/`:**
+- **Artifacts Produced in `.holon/artifacts/generate_website/`:**
   - `dashboard_design.md` (94 KB) - Architectural specification and UI component diagram
   - `index.html` (61 KB) - Responsive semantic HTML5 telemetry interface
   - `styles.css` (12 KB) - Modern dark-mode responsive grid layout
@@ -858,7 +856,7 @@ Mock Workloads) **Workload Scale:** High-Volume Multi-Turn Trajectory (>= 10,000
 ### Suite 2: Holon System Architectural Ideation (`ideate-holon-system`)
 
 - **Status:** ✅ PASSED (100% Verification)
-- **Artifacts Produced in `todo/artifacts/ideate_holon/`:**
+- **Artifacts Produced in `.holon/artifacts/ideate_holon/`:**
   - `holon_architecture_rfc.md` (105 KB) - Formal Architectural RFC with Mermaid sequence diagrams
   - `performance_profile.md` (2.4 KB) - Empirical latency, memory, and optimization matrix
 
@@ -923,7 +921,7 @@ gantt
     OpenBrain trajectory turn comparison suite            :         des7, after des6, 2d
     Ringer multi-agent cost & token ledger                :         des8, after des7, 2d
     section Final Report
-    Unified A/B automated comparison script in todo/      :         des9, after des8, 2d
+    A/B measurement on captured wire logs                 :         des9, after des8, 2d
 ```
 
 > [!NOTE] **Roadmap Milestone Timelines**: Schedule dates depicted in the Gantt chart represent illustrative reference
@@ -932,15 +930,15 @@ gantt
 ### Action Items:
 
 1. **Update
-   [`payload_cleaner.py`](../../holon-agentic-coder-ref/develop/apps/sandbox-executor/src/sandbox_executor/token_reduction/payload_cleaner.py)**:
+   [`payload_cleaner.py`](../src/holon_coherence/payload_cleaner.py)**:
    - Extend `JSONContextCleaner` to track and return execution stats (`tool_outputs_omitted`, `turns_summarized`,
      `cache_control_injected`) via a `CleaningResult(payload=..., stats=...)` dataclass (or provide
      `process_payload_with_stats()`) to avoid redundant post-hoc AST diffing or tree traversals.
 2. **Update
-   [`mitm_addon.py`](../../holon-agentic-coder-ref/develop/apps/sandbox-executor/src/sandbox_executor/token_reduction/mitm_addon.py)**:
-   - Parameterize log directory using `WIRE_LOG_DIR` environment variable (default: `todo/mitm_wire_logs/`) and cache
+   [`mitm_addon.py`](../src/holon_coherence/mitm_addon.py)**:
+   - Parameterise log directory using `WIRE_LOG_DIR` environment variable (default: `.holon/mitm_wire_logs/`) and cache
      directory using `CACHE_DIR` environment variable (default: `~/.holon/cache/`) so SQLite cache persistence can be
-     mapped to host directories (`-e CACHE_DIR=/tmp/cache -v "${REPO_ROOT}/todo/cache":/tmp/cache`).
+     mapped to host directories (`-e CACHE_DIR=/tmp/cache -v "${REPO_ROOT}/.holon/cache":/tmp/cache`).
    - Implement `dump_wire_transaction()` to write full raw request, cleaned request, and response payloads to
      `${WIRE_LOG_DIR}/turn_{turn_id}_{flow_id}.json` and atomic line appends to `${WIRE_LOG_DIR}/transactions.jsonl`,
      offloaded via an asynchronous logging queue or thread pool (`asyncio.to_thread` / background worker) to prevent
@@ -965,7 +963,7 @@ gantt
 3. **Update Runner CLI**:
    - Add flag `--mitm-web` to launch `mitmweb` instead of `mitmdump` with web port `8081` bound to localhost, logging
      `🌐 mitmweb dashboard active at http://localhost:8081` upon startup.
-4. **Implement A/B Benchmark Script (`todo/ab_measure_all_methods.py`)**:
+4. **Implement A/B measurement over captured wire logs**:
    - **Dynamic LLM Discovery (`agy models`)**: Mandate executing `agy models` to discover and validate the active model
      catalog before running benchmarks. Reject all hardcoded model names. Dynamically assign discovered Tier 1 models to
      the Architect role and Tier 2 models to the Executor role.

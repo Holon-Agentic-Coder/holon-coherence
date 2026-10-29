@@ -3,7 +3,7 @@
 This document outlines the architectural design and execution plan for adding real-time streaming performance metrics
 (**Time-To-First-Token / TTFT**, **Prefill TPS**, **Output TPS**, and **Decode Time**) directly into the MITM proxy
 sidecar
-([`mitm_addon.py`](file:///Users/thomashan/git/holon-agentic-coder-ref-metadata/holon-agentic-coder-ref/develop/apps/sandbox-executor/src/sandbox_executor/token_reduction/mitm_addon.py)).
+([`src/holon_coherence/mitm_addon.py`](../src/holon_coherence/mitm_addon.py)).
 
 ---
 
@@ -75,7 +75,7 @@ Compute performance metrics and inject standardized response headers into `flow.
 - `X-Holon-Total-Time-Ms`: Total end-to-end request duration in milliseconds.
 - `X-Holon-Streaming`: `true` when the upstream reply was an SSE stream, `false` when it was buffered.
 
-> [!IMPORTANT] **Bean 0097** Each timing/throughput header above carries the literal string `unmeasured` when the proxy
+> [!IMPORTANT] Each timing/throughput header above carries the literal string `unmeasured` when the proxy
 > could not measure that value -- a missing timestamp or a buffered reply is **not measured**, never a `0` reading.
 > Consumers must therefore treat these headers as strings and parse a value only when it is numeric.
 
@@ -95,17 +95,15 @@ Compute performance metrics and inject standardized response headers into `flow.
 
 ### Phase 5: A/B Benchmark Harness Integration
 
-Update
-[`todo/ab_benchmark_real_api.py`](file:///Users/thomashan/git/holon-agentic-coder-ref-metadata/todo/ab_benchmark_real_api.py)
-and
-[`todo/ab_benchmark_holon_agent.py`](file:///Users/thomashan/git/holon-agentic-coder-ref-metadata/todo/ab_benchmark_holon_agent.py)
-to read `X-Holon-*` headers and log output/prefill TPS in `todo/ab_real_api_results.json` and
-`todo/ab_real_api_results.md`.
+Record prefill and output TPS for every A/B run from the `X-Holon-*` response headers and from the per-turn `timing`
+blocks in the wire log (`~/.holon/logs/transactions.jsonl` for a proxy started with `holon-coherence start`, or
+`.holon/mitm_wire_logs/transactions.jsonl` for an addon run without `WIRE_LOG_DIR`). Inspect the aggregated readings with
+`holon-coherence metrics --json`, and compare baseline and optimised runs with `holon-coherence ab-test`.
 
 ---
 
 ## 📈 Expected Outcomes
 
-1. Automated recording of Prefill TPS and Output TPS for all live network tests in `todo/`.
+1. Automated recording of Prefill TPS and Output TPS for all live network tests.
 2. Standardized response headers returned to all sandbox agent containers.
 3. Empirically verified latency and throughput benchmarks across arbitrary LLM APIs and arbitrary agents.

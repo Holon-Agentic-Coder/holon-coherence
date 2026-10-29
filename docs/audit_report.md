@@ -1,7 +1,7 @@
 # Technical Audit Report: holon-coherence Architecture, Security & Reliability
 
 - **Audit ID:** AUDIT-HOLON-COHERENCE-2026-10-07
-- **Parent Bean:** Bean 0045 (Comprehensive Architecture, Security, and Quality Audit)
+- **Scope:** Comprehensive Architecture, Security, and Quality Audit
 - **Target Repository:** `holon-coherence`
 - **Audit Date:** 2026-10-07
 - **Auditor:** antigravity-agent / Gemini 3.8 Flash
@@ -140,8 +140,8 @@ The inspection covered all source files, documentation, test suites, container d
   `apps/sandbox-executor/src/sandbox_executor/token_reduction/payload_cleaner.py` from sandbox_executor.token_reduction
   import JSONContextCleaner
   ```
-  Furthermore, [`docs/mitm_telemetry_metrics_plan.md`](mitm_telemetry_metrics_plan.md#L6) contains an absolute local
-  user path: `file:///Users/thomashan/git/holon-agentic-coder-ref-metadata/...`
+  Furthermore, [`docs/mitm_telemetry_metrics_plan.md`](mitm_telemetry_metrics_plan.md#L6) contained an absolute
+  local user-home file URL into an external checkout (resolved: links are now repository-relative).
 - **Architectural Impact:** Breaks automated documentation verification, confuses developers and agents attempting to
   follow the guides, and introduces dead file links.
 - **Recommendation:** Perform a repository-wide documentation refactoring updating all paths to `src/holon_coherence/`
@@ -472,21 +472,21 @@ The inspection covered all source files, documentation, test suites, container d
 
 ---
 
-## 6. Actionable Remediation Roadmap & Candidate Bean Proposals
+## 6. Actionable Remediation Roadmap & Candidate Follow-up Proposals
 
-To resolve these findings systematically within the Holon fractal governance framework, five dedicated follow-up beans
-are proposed:
+To resolve these findings systematically within the Holon fractal governance framework, five dedicated follow-up
+remediations are proposed:
 
 ```mermaid
 graph TD
-    Audit["Bean 0045: Audit Report"] --> B46["Bean 0046: Security & File Permission Hardening"]
-    Audit --> B47["Bean 0047: Cache Concurrency, TTL & Semantic Guardrails"]
-    Audit --> B48["Bean 0048: Context Cleaner Invariants & Model Parity"]
-    Audit --> B49["Bean 0049: Test Suite Expansion & Mock-Free Telemetry Coverage"]
-    Audit --> B50["Bean 0050: Architecture Decoupling & Documentation Modernization"]
+    Audit["Audit Report"] --> F1["Security & File Permission Hardening"]
+    Audit --> F2["Cache Concurrency, TTL & Semantic Guardrails"]
+    Audit --> F3["Context Cleaner Invariants & Model Parity"]
+    Audit --> F4["Test Suite Expansion & Mock-Free Telemetry Coverage"]
+    Audit --> F5["Architecture Decoupling & Documentation Modernisation"]
 ```
 
-### Candidate Bean 0046: Security & File Permission Hardening
+### Candidate Follow-up: Security & File Permission Hardening
 
 - **Objective:** Secure wire logs, database files, and build scripts against unauthorized access and privilege
   escalation.
@@ -498,7 +498,7 @@ graph TD
   - Upgrade Root CA generation to ECDSA (P-256) or RSA-4096.
   - Propagate `OSError` in CA PEM synchronization instead of silent suppression.
 
-### Candidate Bean 0047: Cache Concurrency, TTL & Semantic Guardrails
+### Candidate Follow-up: Cache Concurrency, TTL & Semantic Guardrails
 
 - **Objective:** Fix multi-threading race conditions and prevent cache corruption in `HybridCacheStore` and
   `MitmproxyAddon`.
@@ -509,7 +509,7 @@ graph TD
     replacements.
   - Replace full-candidate JSON deserialization in `get()` with SQL-level indexed filtering.
 
-### Candidate Bean 0048: Context Cleaner Invariant Preservation & Model Parity
+### Candidate Follow-up: Context Cleaner Invariant Preservation & Model Parity
 
 - **Objective:** Ensure prompt transformations maintain strict semantic and structural validity across Anthropic,
   Gemini, and OpenAI APIs.
@@ -519,7 +519,7 @@ graph TD
   - Replace recursive `copy.deepcopy()` in cleaning passes with efficient shallow copying for unaffected messages.
   - Add streaming buffer safeguards with prominent alerts if an SSE stream exceeds buffer thresholds.
 
-### Candidate Bean 0049: Test Suite Expansion & Mock-Free Telemetry Coverage
+### Candidate Follow-up: Test Suite Expansion & Mock-Free Telemetry Coverage
 
 - **Objective:** Close severe test coverage gaps across proxy interception, indexer AST extraction, and multi-provider
   payload cleaning.
@@ -530,7 +530,7 @@ graph TD
   - Author `tests/test_payload_cleaner.py` covering Gemini/OpenAI payload processing and prompt cache control injection.
   - Add end-to-end integration tests validating proxy short-circuiting on cache hits.
 
-### Candidate Bean 0050: Architecture Decoupling & Documentation Modernisation
+### Candidate Follow-up: Architecture Decoupling & Documentation Modernisation
 
 - **Objective:** Resolve technical debt, modularise bloated files, and eliminate legacy monorepo path references.
 - **Scope:**
@@ -544,11 +544,11 @@ graph TD
 
 ## 7. Ongoing Audit Remediations & Holon Quality Status
 
-### 7.1 Status of Addressed Beans
+### 7.1 Status of Addressed Remediations
 
-| Bean          | Target Domain                            | Implementation Status | Key Achievements                                                                                                                                                                                                                                              |
-| :------------ | :--------------------------------------- | :-------------------: | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Bean 0116** | Makefile Alignment & Quality Hygiene     |     **COMPLETED**     | Added `build-images` alias, OS toolbelt inspection (`make tools` checking git, jq, shellcheck, uv, gh, npx, openssl), Prettier lint targets (`lint-json`, `lint-yaml`, `lint-shell`, `lint-md`, `lint`, `check`), and unit tests in `tests/test_makefile.py`. |
-| **Bean 0110** | Pre-Commit Security & Leak Prevention    |     **COMPLETED**     | Implemented `scripts/pre_commit_check.py` and `tests/test_pre_commit_check.py` scanning staged files for Google AI, GitHub PAT, Anthropic, and OpenAI API credentials and blocking ephemeral scratch paths (`tmp/*`, `*.tmp`, `*.log`, `.index/*`).           |
-| **Bean 0105** | Australian English (`en-AU`) Orthography |     **COMPLETED**     | Standardised all documentation, guides, and templates to Australian English conventions (`optimise`, `standardise`, `initialise`, `behaviour`, `colour`) while preserving programmatic API contracts.                                                         |
-| **Bean 0106** | Codebase Technical Audit Maintenance     |     **COMPLETED**     | Updated architectural and security audit report with latest remediation progress, verification metrics, and test coverage evidence.                                                                                                                           |
+| Target Domain                            | Implementation Status | Key Achievements                                                                                                                                                                                                                                              |
+| :--------------------------------------- | :-------------------: | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Makefile Alignment & Quality Hygiene     |     **COMPLETED**     | Added `build-images` alias, OS toolbelt inspection (`make tools` checking git, jq, shellcheck, uv, gh, npx, openssl), Prettier lint targets (`lint-json`, `lint-yaml`, `lint-shell`, `lint-md`, `lint`, `check`), and unit tests in `tests/test_makefile.py`. |
+| Pre-Commit Security & Leak Prevention    |     **COMPLETED**     | Implemented `scripts/pre_commit_check.py` and `tests/test_pre_commit_check.py` scanning staged files for Google AI, GitHub PAT, Anthropic, and OpenAI API credentials and blocking ephemeral scratch paths (`tmp/*`, `*.tmp`, `*.log`, `.index/*`).           |
+| Australian English (`en-AU`) Orthography |     **COMPLETED**     | Standardised all documentation, guides, and templates to Australian English conventions (`optimise`, `standardise`, `initialise`, `behaviour`, `colour`) while preserving programmatic API contracts.                                                         |
+| Codebase Technical Audit Maintenance     |     **COMPLETED**     | Updated architectural and security audit report with latest remediation progress, verification metrics, and test coverage evidence.                                                                                                                           |
