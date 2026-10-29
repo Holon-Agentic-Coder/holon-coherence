@@ -163,7 +163,10 @@ OpenAI, Gemini, custom endpoints) and **arbitrary agent harnesses** (Antigravity
    - Starts the `holon-coherence` proxy container (built on `mitmproxy/mitmproxy:12.2.3`, running `mitm_addon.py`) and
      routes a real client workload through it twice (`holon-coherence start --passive -d` for the baseline, then
      `holon-coherence stop && holon-coherence start -d`), launching the client with
-     `holon-coherence run -- <client command>`. Real upstream response payloads and provider billing usage
+     `holon-coherence run -- <client command>`. Start from a stopped proxy and an empty log so the scorecard pairs
+     only these two passes (the old log is kept): before the baseline pass, run `holon-coherence stop` and
+     `mv ~/.holon/logs/transactions.jsonl ~/.holon/logs/transactions.$(date +%s).jsonl 2>/dev/null || true`. Real
+     upstream response payloads and provider billing usage
      (`cache_read_input_tokens`, `prompt_tokens`) are recorded in `~/.holon/logs/`, the host directory
      `holon-coherence start` mounts as the container's `WIRE_LOG_DIR`.
 4. **Tier 4: End-to-End Agent A/B Test for Arbitrary Agents**

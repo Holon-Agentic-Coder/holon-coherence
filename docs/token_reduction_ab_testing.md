@@ -93,6 +93,10 @@ commands (`holon-coherence run-agent <agent>` and the `holon-coherence <agent>` 
 `holon-coherence start` mounts as the container's `WIRE_LOG_DIR`:
 
 ```bash
+# Start from a stopped proxy and an empty log so the scorecard pairs only these two passes (the old log is kept)
+holon-coherence stop
+mv ~/.holon/logs/transactions.jsonl ~/.holon/logs/transactions.$(date +%s).jsonl 2>/dev/null || true
+
 # Baseline: passive monitoring, no optimisation
 holon-coherence start --passive -d
 OPENAI_API_KEY="sk-..." holon-coherence run -- <client command against the target LLM URL>

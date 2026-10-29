@@ -33,9 +33,15 @@ and once with it disabled:
 uv run mitmdump -s src/holon_coherence/mitm_addon.py --listen-port 8080 --set confdir=~/.holon/proxy-ca
 holon-coherence ab-test --command "<agent workload command>"
 
-# The container proxy (`holon-coherence start -d`) can only write to `~/.holon/logs/`: run the workload with
-# `holon-coherence run -- <client command>` once under `holon-coherence start --passive -d` and once more after
-# `holon-coherence stop && holon-coherence start -d`, then score the mode-tagged log
+# The container proxy (`holon-coherence start -d`) can only write to `~/.holon/logs/`: run the same workload once
+# under the passive proxy and once under the optimised one, then score the mode-tagged log
+# Start from a stopped proxy and an empty log so the scorecard pairs only these two passes (the old log is kept)
+holon-coherence stop
+mv ~/.holon/logs/transactions.jsonl ~/.holon/logs/transactions.$(date +%s).jsonl 2>/dev/null || true
+holon-coherence start --passive -d
+holon-coherence run -- <client command>
+holon-coherence stop && holon-coherence start -d
+holon-coherence run -- <client command>
 holon-coherence ab-test --trace-file ~/.holon/logs/transactions.jsonl
 
 # Or compare two previously captured wire-log directories
