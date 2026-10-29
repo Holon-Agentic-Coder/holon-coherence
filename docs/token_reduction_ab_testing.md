@@ -84,19 +84,22 @@ holon-coherence ab-test --trace-file ~/.holon/logs/transactions.jsonl
 #### Tier 3: Live Network Socket Proxy A/B Test (Arbitrary LLM Provider APIs)
 
 Route a real client workload through the proxy twice: once with the proxy in passive monitoring mode (baseline, logging
-only) and once with optimisation enabled. Both `start` commands use `-d` so the proxy runs in the background while the workload
-runs. Credentials are standardised on `HOLON_AGENT_KEY` (or native host auth), and
-every turn is recorded in `~/.holon/logs` (`transactions.jsonl` plus per-turn `turn_*.json` files), the host directory
+only) and once with optimisation enabled. Both `start` commands use `-d` so the proxy runs in the background while the
+workload runs. `holon-coherence run` adds only the proxy routing, `NO_PROXY`, CA-bundle and proxy-mode variables and
+passes the rest of the host environment through unchanged, so the client authenticates with its own vendor credentials
+(for example `OPENAI_API_KEY`) or native host auth; `HOLON_AGENT_KEY` is mapped to vendor keys only by the agent
+commands (`holon-coherence run-agent <agent>` and the `holon-coherence <agent>` aliases). Every turn is recorded in
+`~/.holon/logs` (`transactions.jsonl` plus per-turn `turn_*.json` files), the host directory
 `holon-coherence start` mounts as the container's `WIRE_LOG_DIR`:
 
 ```bash
 # Baseline: passive monitoring, no optimisation
 holon-coherence start --passive -d
-HOLON_AGENT_KEY="sk-..." holon-coherence run -- <client command against the target LLM URL>
+OPENAI_API_KEY="sk-..." holon-coherence run -- <client command against the target LLM URL>
 
 # Optimised: restart the proxy with optimisation enabled and repeat the same workload
 holon-coherence stop && holon-coherence start -d
-HOLON_AGENT_KEY="sk-..." holon-coherence run -- <client command against the target LLM URL>
+OPENAI_API_KEY="sk-..." holon-coherence run -- <client command against the target LLM URL>
 
 # Inspect live cumulative totals
 holon-coherence metrics --json

@@ -33,8 +33,9 @@ def call_arguments(depth: int) -> str:
 # by a dot, os.pathsep.join included) is not one.
 PATH_CALL = r"""(?:(?<![\w.])join|path\.join|(?:os|path)\.sep\.join|["'](?:/|\\{1,2})["']\.join|joinpath|Path)\("""
 # Prefixes an unquoted path starts from: a parent, current or home directory, a shell variable or parameter expansion
-# (${R}, ${R:-..}, ${R%/}), or a command substitution ($(cmd) or `cmd`).
-PATH_ORIGIN = r"""(?:(?<![\w.])\.{1,2}|~|\$\w+|\$\{[^{}\n]*\}|\$\([^()\n]*\)|`[^`\n]*`)(?:/|\\{1,2})"""
+# (${R}, ${R:-..}, ${R%/}), or a command substitution ($(cmd) or `cmd`), optionally quoted before the separator
+# ("${R}"/x, "$R"/x, '$(cmd)'/x).
+PATH_ORIGIN = r"""(?:(?<![\w.])\.{1,2}|~|\$\w+|\$\{[^{}\n]*\}|\$\([^()\n]*\)|`[^`\n]*`)["']?(?:/|\\{1,2})"""
 CONTENT_PATTERNS = (
     re.compile(r"(?<![\w.-])" + "to" + r"do/"),
     # A quoted bare name only counts in a path context: any argument of a PATH_CALL, including after arguments that
@@ -175,6 +176,10 @@ def test_forbidden_dirs_are_detected(path: str) -> None:
         'Path(out, MAP.get("' + "to" + 'do", "x"))',
         'Path(root, labels.index("' + "to" + 'do"))',
         'os.path.join(d, fmt("' + "to" + 'do"))',
+        '"${REPO_ROOT}"/' + "to" + "dos",
+        '"$HOME"/' + "to" + "do.md",
+        "'$(pwd)'/" + "to" + "do-list",
+        '"${REPO_ROOT}/docs"/' + "to" + "do-notes",
     ],
 )
 def test_benign_text_is_allowed(text: str) -> None:
@@ -250,6 +255,10 @@ def test_benign_text_is_allowed(text: str) -> None:
         "cd `git rev-parse --show-toplevel`/" + "to" + "do",
         "$(git rev-parse --show-toplevel)/" + "to" + "do",
         "..\\" + "to" + "do\\x.md",
+        '"${REPO_ROOT}"/' + "to" + "do",
+        '"$HOME"/' + "to" + "do",
+        "'$(pwd)'/" + "to" + "do",
+        'cd "`pwd`"/' + "to" + "do",
         "TestFoo" + "Be" + "an0097",
         "fix_" + "be" + "an_0097",
     ],
