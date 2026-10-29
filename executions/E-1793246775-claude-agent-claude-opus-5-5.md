@@ -83,3 +83,16 @@ lint and Prettier all pass. There were no source changes and no dependency versi
 | `uv run task test`                             | 704 passed, 4 skipped, 8 deselected           |
 | `uv run task lint`                             | All checks passed; 92 files already formatted |
 | `npx prettier --check README.md <this record>` | pass                                          |
+
+## Post-review amendments
+
+The sections above record the state at the end of execution and are left unchanged. Pull request review then amended
+that state, so the merged result differs from the record above in the following ways:
+
+- `requires-python` is `">=3.13"`, not `"==3.13.*"`. The container image installs the package with `pip install .` on
+  the `mitmproxy/mitmproxy:12.2.3` base image, whose interpreter is Python 3.14, so the exact pin failed the image build.
+  That is the `Dockerfile` risk listed under "Reported items". Ruff `target-version = "py313"` and `.python-version`
+  (`3.13`) are unchanged, so development and CI still run on Python 3.13.
+- `uv.lock` was regenerated with `revision = 3` and keeps its 3.14 `resolution-markers`. `typing-extensions` remains
+  removed, and no package version changed.
+- The README says holon-coherence is developed and tested on Python 3.13, rather than that it supports Python 3.13 only.
