@@ -98,7 +98,8 @@ print(f"Baseline Turn 0 Context: {len(baseline_context):,} chars (~{baseline_tok
 
 #### Optimized (AST Targeted Context)
 
-The optimized approach retrieves only matching symbols and structural definitions:
+The optimized approach sends a compact symbol map (the first 20 indexed symbols, in alphabetical order) plus the
+snippets from the three files that best match the query:
 
 ```python
 # Query the indexer with the user's intent keywords
