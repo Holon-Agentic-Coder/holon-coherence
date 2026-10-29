@@ -32,18 +32,20 @@ def call_arguments(depth: int) -> str:
 # separator-literal join ("/".join, "\\".join), joinpath() and Path(); a plain str.join() (any other join preceded
 # by a dot, os.pathsep.join included) is not one.
 PATH_CALL = r"""(?:(?<![\w.])join|path\.join|(?:os|path)\.sep\.join|["'](?:/|\\{1,2})["']\.join|joinpath|Path)\("""
-# Prefixes an unquoted path starts from: a parent, current or home directory, or a shell variable or substitution.
-PATH_ORIGIN = r"""(?:(?<![\w.])\.{1,2}|~|\$\w+|\$\{\w+\}|\$\([^()\n]*\))(?:/|\\{1,2})"""
+# Prefixes an unquoted path starts from: a parent, current or home directory, a shell variable or parameter expansion
+# (${R}, ${R:-..}, ${R%/}), or a command substitution ($(cmd) or `cmd`).
+PATH_ORIGIN = r"""(?:(?<![\w.])\.{1,2}|~|\$\w+|\$\{[^{}\n]*\}|\$\([^()\n]*\)|`[^`\n]*`)(?:/|\\{1,2})"""
 CONTENT_PATTERNS = (
     re.compile(r"(?<![\w.-])" + "to" + r"do/"),
     # A quoted bare name only counts in a path context: any argument of a PATH_CALL, including after arguments that
     # are themselves calls (up to CALL_NESTING levels) and inside a tuple or list (join(("x", s)), join(*["x", s])), or
-    # either side of a "/" operator, string prefixes (f"", r"", rb"") included.
+    # either side of a "/" operator, string prefixes (f"", r"", rb"") included. A tuple opener must not follow a name or
+    # closing bracket, so a literal passed to a call inside the arguments (join(root, d.get(s))) is not a path segment.
     re.compile(
         "(?:"
         + PATH_CALL
         + call_arguments(CALL_NESTING)
-        + r"""(?:\*?\s*\([^()]*)?|/\s*)[rRbBuUfF]{0,2}["']"""
+        + r"""(?:\*?\s*(?<![\w)\]])\([^()]*)?|/\s*)[rRbBuUfF]{0,2}["']"""
         + "to"
         + r"""do["']|["']"""
         + "to"
@@ -169,6 +171,10 @@ def test_forbidden_dirs_are_detected(path: str) -> None:
         "https://example.com/" + "to" + "do",
         "a/" + "to" + "do b",
         "Path(x).name in ('done', '" + "to" + "do')",
+        'os.path.join(root, names.get("' + "to" + 'do"))',
+        'Path(out, MAP.get("' + "to" + 'do", "x"))',
+        'Path(root, labels.index("' + "to" + 'do"))',
+        'os.path.join(d, fmt("' + "to" + 'do"))',
     ],
 )
 def test_benign_text_is_allowed(text: str) -> None:
@@ -230,12 +236,18 @@ def test_benign_text_is_allowed(text: str) -> None:
         '"/".join(("done", "' + "to" + 'do"))',
         'os.path.join(*["x", "' + "to" + 'do"])',
         'Path(*("x", "' + "to" + 'do"))',
+        'join(("x", "' + "to" + 'do"))',
+        'os.path.join(a,\n  ("' + "to" + 'do")',
         "DIR := ../" + "to" + "do",
         "cd ../../" + "to" + "do && ls",
         "cd ~/" + "to" + "do",
         "see ../" + "to" + "do.",
         "$(REPO_ROOT)/" + "to" + "do",
         "${ROOT}/" + "to" + "do",
+        "${ROOT:-..}/" + "to" + "do",
+        "${ROOT%/}/" + "to" + "do",
+        "`pwd`/" + "to" + "do",
+        "cd `git rev-parse --show-toplevel`/" + "to" + "do",
         "$(git rev-parse --show-toplevel)/" + "to" + "do",
         "..\\" + "to" + "do\\x.md",
         "TestFoo" + "Be" + "an0097",
