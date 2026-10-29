@@ -162,15 +162,16 @@ OpenAI, Gemini, custom endpoints) and **arbitrary agent harnesses** (Antigravity
 3. **Tier 3: Live Network Socket Proxy A/B Test for Arbitrary LLM APIs**
    - Starts the `holon-coherence` proxy container (built on `mitmproxy/mitmproxy:12.2.3`, running `mitm_addon.py`) and
      routes a real client workload through it twice (`holon-coherence start --passive -d` for the baseline, then
-     `holon-coherence start -d`), launching the client with `holon-coherence run -- <client command>`. Real upstream
-     response payloads and provider billing usage (`cache_read_input_tokens`, `prompt_tokens`) are recorded in
-     `~/.holon/logs/`, the host directory `holon-coherence start` mounts as the container's `WIRE_LOG_DIR`.
+     `holon-coherence stop && holon-coherence start -d`), launching the client with
+     `holon-coherence run -- <client command>`. Real upstream response payloads and provider billing usage
+     (`cache_read_input_tokens`, `prompt_tokens`) are recorded in `~/.holon/logs/`, the host directory
+     `holon-coherence start` mounts as the container's `WIRE_LOG_DIR`.
 4. **Tier 4: End-to-End Agent A/B Test for Arbitrary Agents**
    - Runs a real coding agent (`agy`, `claude`, `codex`, `opencode`, `pi`) on any model twice through the mitmproxy
      sidecar via `holon-coherence ab-test --command "<agent workload>"`, and compares the baseline and optimised turns
      captured in the wire log. `ab-test` does not start the proxy itself: it switches the mode of a proxy that must
      already be listening on port 8080 and hands it a host temp dir as its wire-log dir, so the proxy must write to the
      host filesystem (for example the addon run host-side with
-     `uv run mitmdump -s src/holon_coherence/mitm_addon.py --listen-port 8080`). The container proxy from
-     `holon-coherence start -d` writes only to `~/.holon/logs/`; with it, score the Tier 3 passes with
-     `holon-coherence ab-test --trace-file ~/.holon/logs/transactions.jsonl`.
+     `uv run mitmdump -s src/holon_coherence/mitm_addon.py --listen-port 8080 --set confdir=~/.holon/proxy-ca`). The
+     container proxy from `holon-coherence start -d` writes only to `~/.holon/logs/`; with it, score the Tier 3 passes
+     with `holon-coherence ab-test --trace-file ~/.holon/logs/transactions.jsonl`.
