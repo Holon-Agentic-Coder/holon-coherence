@@ -24,11 +24,11 @@ unrelated codebase noise.
 
 ## 🏛️ Codebase Architecture & Source Locations
 
-| Component                     | Repository Path                                                 | Core Function / Class                                          |
-| :---------------------------- | :-------------------------------------------------------------- | :------------------------------------------------------------- |
-| **AST & Keyword Indexer**     | `src/holon_coherence/rag_indexer.py`                            | `RAGCodebaseIndexer.build_index()`, `get_context_for_prompt()` |
-| **AST Symbol Parser**         | `src/holon_coherence/rag_indexer.py`                            | `_extract_ast_symbols()`                                       |
-| **Unified Benchmark Harness** | A/B measurement on captured wire logs (see [README](README.md)) | Turn 0 context size comparison                                 |
+| Component                     | Repository Path                                                 | Core Function / Class                                           |
+| :---------------------------- | :-------------------------------------------------------------- | :-------------------------------------------------------------- |
+| **AST & Keyword Indexer**     | `src/holon_coherence/rag_indexer.py`                            | `RAGCodebaseIndexer.build_index()`, `build_context_bootstrap()` |
+| **AST Symbol Parser**         | `src/holon_coherence/rag_indexer.py`                            | `_extract_ast_symbols()`                                        |
+| **Unified Benchmark Harness** | A/B measurement on captured wire logs (see [README](README.md)) | Turn 0 context size comparison                                  |
 
 ---
 
@@ -98,12 +98,13 @@ print(f"Baseline Turn 0 Context: {len(baseline_context):,} chars (~{baseline_tok
 
 #### Optimized (AST Targeted Context)
 
-The optimized approach retrieves only matching symbols and structural definitions:
+The optimized approach sends a compact symbol map (the first 20 indexed symbols, in alphabetical order) plus the
+snippets from the three files that best match the query:
 
 ```python
 # Query the indexer with the user's intent keywords
 user_query = "hybrid cache prompt normalization"
-targeted_context = indexer.get_context_for_prompt(user_query, max_tokens=1000)
+targeted_context = indexer.build_context_bootstrap(user_query)
 
 optimized_prompt = f"Using the symbol references below, explain how the hybrid cache handles prompt normalization:\n\n{targeted_context}"
 optimized_tokens_approx = len(optimized_prompt) // 4
@@ -123,12 +124,12 @@ TIER1_MODEL=$(agy models | grep -E "gemini-3.8-flash-high|claude-sonnet-4-6" | h
 # Execute optimized prompt with targeted AST context
 agy exec --model "${TIER1_MODEL}" << 'EOF'
 Targeted Symbol Map:
-- Class HybridCacheStore in sandbox_executor/token_reduction/hybrid_cache.py:15
+- Class HybridCacheStore in src/holon_coherence/hybrid_cache.py:17
   Functions:
-  - normalize_payload(payload, provider) at line 68
-  - generate_prefix_key(payload, provider) at line 63
-  - get(payload, provider) at line 140
-  - put(payload, response_text, provider) at line 185
+  - normalize_payload(payload, provider) at line 195
+  - generate_prefix_key(payload, provider) at line 190
+  - get(payload, provider) at line 325
+  - put(payload, response, provider) at line 411
 
 Task: Explain the regex rules used in normalize_payload to strip transient variables.
 EOF

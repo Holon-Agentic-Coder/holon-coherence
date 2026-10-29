@@ -24,11 +24,11 @@ cost, making them ideal for high-volume, structured execution tasks.
 
 ## 🏛️ Codebase Architecture & Source Locations
 
-| Component                     | Repository Path                                                 | Core Function / Class                                  |
-| :---------------------------- | :-------------------------------------------------------------- | :----------------------------------------------------- |
-| **Ringer Orchestrator**       | `src/holon_coherence/ringer_orchestrator.py`                    | `RingerOrchestrator.plan_subtask()`, `record_result()` |
-| **Subtask Result Summariser** | `src/holon_coherence/ringer_orchestrator.py`                    | `SubtaskResult._summarize()`                           |
-| **Unified Benchmark Harness** | A/B measurement on captured wire logs (see [README](README.md)) | Multi-turn tiered execution suites                     |
+| Component                     | Repository Path                                                 | Core Function / Class                                             |
+| :---------------------------- | :-------------------------------------------------------------- | :---------------------------------------------------------------- |
+| **Ringer Orchestrator**       | `src/holon_coherence/ringer_orchestrator.py`                    | `RingerOrchestrator.plan_subtask()`, `record_execution_outcome()` |
+| **Subtask Result Summariser** | `src/holon_coherence/ringer_orchestrator.py`                    | `SubtaskResult._summarize()`                                      |
+| **Unified Benchmark Harness** | A/B measurement on captured wire logs (see [README](README.md)) | Multi-turn tiered execution suites                                |
 
 ---
 
@@ -161,7 +161,7 @@ Instead of passing the raw 50-line terminal test output back to the Architect, `
 log:
 
 ```python
-from sandbox_executor.token_reduction.ringer_orchestrator import SubtaskResult
+from holon_coherence.ringer_orchestrator import SubtaskResult
 
 raw_test_output = """
 test_01_html_structure (test_dashboard.TestDashboard) ... ok
@@ -212,7 +212,8 @@ From our live benchmark run across both workload suites (A/B measurement on capt
 
 1. **Tier 2 Delegation Ratio**: $\ge 30\%$ of total execution tokens successfully offloaded to low-cost Executor models
    (achieved **34.8%**).
-2. **Functional Quality Guarantee**: All generated code must pass 100% of automated tests:
+2. **Functional Quality Guarantee**: All generated code must pass 100% of automated tests. In the recorded run the
+   agent ran the dashboard test suite and all 4 tests passed in 0.001s (100% pass). To reproduce the check:
    ```bash
    DASHBOARD_DIR=.holon/artifacts/generate_website uv run pytest .holon/artifacts/generate_website/test_dashboard.py
    ```

@@ -27,9 +27,22 @@ Each method is measured on an authentic multi-turn agent session routed through 
 and once with it disabled:
 
 ```bash
-# With a proxy already listening on port 8080 (for example from `holon-coherence start -d`), run the same real
-# workload twice through it (baseline vs optimised) and compare the captured turns
+# `--command` hands the proxy on port 8080 a host temp dir as its wire-log dir, so it needs a proxy that writes to the
+# host filesystem: from a source checkout, start the addon host-side, then run the same real workload twice through it
+# (baseline vs optimised) and compare the captured turns
+uv run mitmdump -s src/holon_coherence/mitm_addon.py --listen-port 8080 --set confdir=~/.holon/proxy-ca
 holon-coherence ab-test --command "<agent workload command>"
+
+# The container proxy (`holon-coherence start -d`) can only write to `~/.holon/logs/`: run the same workload once
+# under the passive proxy and once under the optimised one, then score the mode-tagged log
+# Start from a stopped proxy and an empty log so the scorecard pairs only these two passes (the old log is kept)
+holon-coherence stop
+mv ~/.holon/logs/transactions.jsonl ~/.holon/logs/transactions.$(date +%s).jsonl 2>/dev/null || true
+holon-coherence start --passive -d
+holon-coherence run -- <client command>
+holon-coherence stop && holon-coherence start -d
+holon-coherence run -- <client command>
+holon-coherence ab-test --trace-file ~/.holon/logs/transactions.jsonl
 
 # Or compare two previously captured wire-log directories
 holon-coherence ab-test --baseline <baseline wire-log dir> --optimized <optimised wire-log dir>

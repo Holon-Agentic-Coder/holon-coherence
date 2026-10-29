@@ -84,10 +84,12 @@ that appends full transaction details to `${WIRE_LOG_DIR}/turn_{turn_id}_{flow_i
 `${WIRE_LOG_DIR}/transactions.jsonl`.
 
 - **Log Directory Parameterization & Git Ignore**: Configure the destination directory via the `WIRE_LOG_DIR`
-  environment variable:
+  environment variable. The default lives in `metrics_math.py`, shared with the `holon-coherence metrics` reader, and
+  `mitm_addon.py` imports it:
 
   ```python
-  DEFAULT_WIRE_LOG_DIR = ".holon/mitm_wire_logs"
+  from holon_coherence.metrics_math import DEFAULT_WIRE_LOG_DIR  # ".holon/mitm_wire_logs"
+
   WIRE_LOG_DIR = os.getenv("WIRE_LOG_DIR", DEFAULT_WIRE_LOG_DIR)
   ```
 

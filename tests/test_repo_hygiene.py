@@ -15,18 +15,48 @@ FORBIDDEN_DIRS = frozenset({"to" + "do", "." + "sub" + "agent", "." + "be" + "an
 # Dotted harness directories are never legitimate at any depth; the bare name is only rejected at the root.
 NESTED_FORBIDDEN_DIRS = frozenset({"." + "sub" + "agent", "." + "be" + "ans"})
 PROVENANCE_PREFIXES = ("holon-knowledge/ledger/", "plans/", "executions/", "intents/")
-ALLOWED_FILES = frozenset({"." + "agents/AGENTS.md"})
+# Calls nest up to five levels inside a path-call argument, the repository's own deepest idiom
+# (dirname(dirname(dirname(dirname(abspath(f)))))).
+CALL_NESTING = 5
+
+
+def call_arguments(depth: int) -> str:
+    """Regex for call-argument text whose parenthesised sub-calls nest at most ``depth`` levels."""
+    inner = r"[^()]*"
+    for _ in range(depth):
+        inner = r"(?:[^()]|\(" + inner + r"\))*"
+    return inner
+
+
+# Calls that build a path from their arguments: a join() (qualified or imported bare), os.sep.join() or a
+# separator-literal join ("/".join, "\\".join), joinpath() and Path(); a plain str.join() (any other join preceded
+# by a dot, os.pathsep.join included) is not one.
+PATH_CALL = r"""(?:(?<![\w.])join|path\.join|(?:os|path)\.sep\.join|["'](?:/|\\{1,2})["']\.join|joinpath|Path)\("""
+# Prefixes an unquoted path starts from: a parent, current or home directory, a shell variable or parameter expansion
+# (${R}, ${R:-..}, ${R%/}), or a command substitution ($(cmd) or `cmd`), optionally quoted before the separator
+# ("${R}"/x, "$R"/x, '$(cmd)'/x).
+PATH_ORIGIN = r"""(?:(?<![\w.])\.{1,2}|~|\$\w+|\$\{[^{}\n]*\}|\$\([^()\n]*\)|`[^`\n]*`)["']?(?:/|\\{1,2})"""
 CONTENT_PATTERNS = (
     re.compile(r"(?<![\w.-])" + "to" + r"do/"),
-    # A quoted bare name only counts in a path context: any argument of a path join() (qualified or imported bare) or
-    # Path(), or next to a "/" operator; a plain str.join() (a join preceded by a dot) is not a path context.
+    # A quoted bare name only counts in a path context: any argument of a PATH_CALL, including after arguments that
+    # are themselves calls (up to CALL_NESTING levels) and inside a tuple or list (join(("x", s)), join(*["x", s])), or
+    # either side of a "/" operator, string prefixes (f"", r"", rb"") included. A tuple opener must not follow a name or
+    # closing bracket, so a literal passed to a call inside the arguments (join(root, d.get(s))) is not a path segment.
     re.compile(
-        r"""(?:(?:(?<![\w.])join|path\.join|Path)\([^)]*|/\s*)["']"""
+        "(?:"
+        + PATH_CALL
+        + call_arguments(CALL_NESTING)
+        + r"""(?:\*?\s*(?<![\w)\]])\([^()]*)?|/\s*)[rRbBuUfF]{0,2}["']"""
         + "to"
         + r"""do["']|["']"""
         + "to"
         + r"""do["']\s*/"""
     ),
+    # A quoted path whose last segment is the bare name ("../x", f"{root}/x", "~/x").
+    re.compile(r"""["'`][^"'`\s]*/""" + "to" + r"""do["'`]"""),
+    # An unquoted path ending in the bare name (Makefile, shell, YAML, Windows separators): "../x", "~/x", "$(R)/x".
+    # A longer name ("xs", "x-list") or a file ("x.md") is not the directory; trailing punctuation still counts.
+    re.compile(PATH_ORIGIN + "to" + r"do(?![\w-]|\.\w)"),
     re.compile(r"(?<![\w-])\." + "sub" + r"agent/"),
     re.compile(r"(?<![\w-])\." + "be" + r"ans/"),
     re.compile(r"/(?:Users|home)/[^/\s]+/git/"),
@@ -51,8 +81,8 @@ def forbidden_dir(path: str) -> bool:
 
 
 def is_exempt(path: str) -> bool:
-    """Provenance records and explicitly allowed files are not scanned."""
-    return path.startswith(PROVENANCE_PREFIXES) or path in ALLOWED_FILES
+    """Only provenance records are not scanned; every other tracked file, docs and configs included, is."""
+    return path.startswith(PROVENANCE_PREFIXES)
 
 
 def leaks_in(text: str) -> list[str]:
@@ -82,7 +112,15 @@ def test_no_tracked_file_contains_harness_leak() -> None:
 
 
 @pytest.mark.parametrize(
-    "path", [".beads/issues.jsonl", ".beads", "docs/beads.md", "docs/.beads/x.md", "src/" + "to" + "do/x.py"]
+    "path",
+    [
+        ".beads/issues.jsonl",
+        ".beads",
+        "docs/beads.md",
+        "docs/.beads/x.md",
+        "src/" + "to" + "do/x.py",
+        "." + "agents/AGENTS.md",
+    ],
 )
 def test_similar_paths_are_allowed(path: str) -> None:
     assert not forbidden_dir(path)
@@ -119,10 +157,29 @@ def test_forbidden_dirs_are_detected(path: str) -> None:
         'choices=["done", "' + "to" + 'do"]',
         "{'state': '" + "to" + "do'}",
         'Path("x").name == "' + "to" + 'do"',
+        'str(Path("x")) == "' + "to" + 'do"',
+        '", ".join([str(x), "' + "to" + 'do"])',
         '", ".join(["done", "' + "to" + 'do"])',
         'help="one of: " + "|".join(("done", "' + "to" + 'do"))',
         'sep.join(["done", "' + "to" + 'do"])',
-        '"/".join(("done", "' + "to" + 'do"))',
+        '"/api/' + "to" + 'dos"',
+        '"/' + "to" + 'do-list"',
+        "'x.joinpath'",
+        'os.pathsep.join([root, "' + "to" + 'do"])',
+        "DIR := ../" + "to" + "dos",
+        "cd ../" + "to" + "do-list && ls",
+        "see ../" + "to" + "do.md",
+        "https://example.com/" + "to" + "do",
+        "a/" + "to" + "do b",
+        "Path(x).name in ('done', '" + "to" + "do')",
+        'os.path.join(root, names.get("' + "to" + 'do"))',
+        'Path(out, MAP.get("' + "to" + 'do", "x"))',
+        'Path(root, labels.index("' + "to" + 'do"))',
+        'os.path.join(d, fmt("' + "to" + 'do"))',
+        '"${REPO_ROOT}"/' + "to" + "dos",
+        '"$HOME"/' + "to" + "do.md",
+        "'$(pwd)'/" + "to" + "do-list",
+        '"${REPO_ROOT}/docs"/' + "to" + "do-notes",
     ],
 )
 def test_benign_text_is_allowed(text: str) -> None:
@@ -155,8 +212,53 @@ def test_benign_text_is_allowed(text: str) -> None:
         'PurePath(root, "' + "to" + 'do")',
         'Path("' + "to" + 'do", "x")',
         'Path("x", "' + "to" + 'do")',
+        "os.path.join(get_root(), '" + "to" + "do')",
+        'Path(str(root), "' + "to" + 'do")',
+        'os.path.join(a, f(b, c), "' + "to" + 'do", "x")',
+        'join(Path.home(), "' + "to" + 'do")',
+        'os.path.join(os.path.dirname(os.path.abspath(__file__)), "' + "to" + 'do")',
+        'os.path.join(str(get_root()), "' + "to" + 'do")',
+        'Path(str(Path.home()), "' + "to" + 'do")',
         'root / "' + "to" + 'do"',
         '"' + "to" + 'do" / "cache"',
+        'Path.home().joinpath("' + "to" + 'do")',
+        "root.joinpath('" + "to" + "do', 'x')",
+        'os.getenv("D", "../' + "to" + 'do")',
+        'f"{root}/' + "to" + 'do"',
+        '"~/' + "to" + 'do"',
+        "`../" + "to" + "do`",
+        'root / f"' + "to" + 'do"',
+        'root / r"' + "to" + 'do"',
+        'Path.home() / rb"' + "to" + 'do"',
+        'root / sub / "' + "to" + 'do"',
+        'os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "' + "to" + 'do")',
+        "os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), '"
+        + "to"
+        + "do')",
+        'os.sep.join([root, "' + "to" + 'do"])',
+        '"/".join([root, "' + "to" + 'do"])',
+        "'/'.join((root, '" + "to" + "do'))",
+        '"/".join(("done", "' + "to" + 'do"))',
+        'os.path.join(*["x", "' + "to" + 'do"])',
+        'Path(*("x", "' + "to" + 'do"))',
+        'join(("x", "' + "to" + 'do"))',
+        'os.path.join(a,\n  ("' + "to" + 'do")',
+        "DIR := ../" + "to" + "do",
+        "cd ../../" + "to" + "do && ls",
+        "cd ~/" + "to" + "do",
+        "see ../" + "to" + "do.",
+        "$(REPO_ROOT)/" + "to" + "do",
+        "${ROOT}/" + "to" + "do",
+        "${ROOT:-..}/" + "to" + "do",
+        "${ROOT%/}/" + "to" + "do",
+        "`pwd`/" + "to" + "do",
+        "cd `git rev-parse --show-toplevel`/" + "to" + "do",
+        "$(git rev-parse --show-toplevel)/" + "to" + "do",
+        "..\\" + "to" + "do\\x.md",
+        '"${REPO_ROOT}"/' + "to" + "do",
+        '"$HOME"/' + "to" + "do",
+        "'$(pwd)'/" + "to" + "do",
+        'cd "`pwd`"/' + "to" + "do",
         "TestFoo" + "Be" + "an0097",
         "fix_" + "be" + "an_0097",
     ],
@@ -172,10 +274,9 @@ def test_each_leak_pattern_is_detected(text: str) -> None:
         "plans/P-1.md",
         "executions/E-1.md",
         "intents/I-1.json",
-        "." + "agents/AGENTS.md",
     ],
 )
-def test_provenance_and_allowed_files_are_exempt(path: str) -> None:
+def test_provenance_files_are_exempt(path: str) -> None:
     assert is_exempt(path)
 
 
@@ -188,6 +289,7 @@ def test_provenance_and_allowed_files_are_exempt(path: str) -> None:
         "holon-knowledge/notes.md",
         "docs/holon-knowledge/ledger/x.jsonl",
         "." + "agents/other.md",
+        "." + "agents/AGENTS.md",
     ],
 )
 def test_exemption_is_root_anchored_and_exact(path: str) -> None:

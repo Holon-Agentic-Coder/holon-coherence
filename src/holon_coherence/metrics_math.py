@@ -31,6 +31,9 @@ MIN_STREAMING_WINDOW_SEC = 0.05
 # Rendered in telemetry headers for rates that were not measurable for this transaction.
 UNMEASURED = "unmeasured"
 
+# Wire-log directory shared by the proxy that writes transactions and the offline metrics reader.
+DEFAULT_WIRE_LOG_DIR = ".holon/mitm_wire_logs"
+
 
 def positive_seconds(value: Any) -> float | None:
     """Coerce a timing value to a strictly positive float number of seconds, else ``None``.

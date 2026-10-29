@@ -1034,7 +1034,7 @@ def test_check_prerequisites_runs_when_a_command_line_assignment_spells_n(tmp_pa
 
 
 # ---------------------------------------------------------------------------
-# Review iteration 1 (run 2): base consent from an inherited name, explicit name under
+# Base consent from an inherited name, explicit name under
 # dash, unvalidated names, uv probe target. Each runs the emitted recipe against a stub
 # conda confined to tmp_path; nothing reaches a real conda.
 # ---------------------------------------------------------------------------

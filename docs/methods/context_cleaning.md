@@ -79,7 +79,7 @@ never hashed or deduplicated, avoiding unnecessary tombstone clutter for trivial
 | :---------------------------- | :-------------------------------------------------------------- | :------------------------------------------------ |
 | **Payload Cleaner Engine**    | `src/holon_coherence/payload_cleaner.py`                        | `JSONContextCleaner.process_payload_with_stats()` |
 | **MITM Proxy Interceptor**    | `src/holon_coherence/mitm_addon.py`                             | `MitmproxyAddon.request(flow)`                    |
-| **Unified Benchmark Harness** | A/B measurement on captured wire logs (see [README](README.md)) | `clean_context_payload()`, Turn telemetry         |
+| **Unified Benchmark Harness** | A/B measurement on captured wire logs (see [README](README.md)) | `holon-coherence ab-test`, Turn telemetry         |
 
 ---
 
