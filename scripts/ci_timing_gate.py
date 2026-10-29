@@ -18,6 +18,7 @@ compatible with Python 3.11 so the runner's system `python3` can run it outside 
 from __future__ import annotations
 
 import argparse
+import http.client
 import io
 import json
 import os
@@ -38,6 +39,8 @@ RECORD_FILE = "timing.json"
 ACCEPT_LABEL = "timing-regression-accepted"
 HTTP_TIMEOUT_S = 20
 REDIRECT_CODES = (301, 302, 303, 307, 308)
+# Everything a flaky API, blob store or malformed artefact can raise; each degrades to a notice, never a failed job.
+FETCH_ERRORS = (OSError, http.client.HTTPException, KeyError, TypeError, ValueError, AttributeError, zipfile.BadZipFile)
 
 
 def notice(message: str) -> None:
@@ -73,6 +76,9 @@ class TimingRecord:
     @classmethod
     def from_json(cls, text: str) -> TimingRecord | None:
         data = json.loads(text)
+        if not isinstance(data, dict):
+            notice("ignoring timing record that is not a JSON object")
+            return None
         if data.get("schema") != SCHEMA:
             notice(f"ignoring timing record with unknown schema {data.get('schema')!r}")
             return None
@@ -298,7 +304,7 @@ def github_fetchers(api_url: str, repo: str, token: str, event_path: str = "") -
         try:
             with zipfile.ZipFile(io.BytesIO(_download_zip(artifact["archive_download_url"], token))) as archive:
                 return TimingRecord.from_json(archive.read(RECORD_FILE).decode("utf-8"))
-        except (OSError, KeyError, TypeError, ValueError, zipfile.BadZipFile) as exc:
+        except FETCH_ERRORS as exc:
             notice(f"artefact {artifact.get('id')} could not be read ({exc}); skipped")
             return None
 
@@ -306,7 +312,7 @@ def github_fetchers(api_url: str, repo: str, token: str, event_path: str = "") -
         # Read live so that re-running a job after adding the label honours it; the event payload of a re-run is stale.
         try:
             return [label["name"] for label in _get_json(f"{base}/issues/{number}/labels", token)]
-        except (OSError, KeyError, TypeError, ValueError):
+        except FETCH_ERRORS:
             return _event_labels(event_path)
 
     return Fetchers(list_artifacts, download_record, pr_labels)
@@ -317,6 +323,14 @@ def github_fetchers(api_url: str, repo: str, token: str, event_path: str = "") -
 
 def _percent(text: str) -> float:
     return float(text) / 100
+
+
+def _epoch(text: str) -> float | None:
+    """An empty or non-numeric start timestamp becomes None so the gate can skip with a notice."""
+    try:
+        return float(text)
+    except ValueError:
+        return None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -330,7 +344,7 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--workflow", required=True)
         sub.add_argument("--job", required=True)
         sub.add_argument("--os", required=True, dest="os_name", metavar="OS")
-        sub.add_argument("--started-at", required=True, type=float, help="job start, epoch seconds")
+        sub.add_argument("--started-at", required=True, type=_epoch, help="job start, epoch seconds")
         sub.add_argument("--junit", type=Path, help="pytest JUnit XML report for per-test times")
         sub.add_argument("--out", required=True, type=Path, help="directory for timing.json")
         sub.add_argument("--ceiling", type=float, default=300, help="absolute limit in seconds (default 300)")
@@ -387,18 +401,23 @@ def run_record(args: argparse.Namespace, now: float, env: Mapping[str, str]) -> 
 
 
 def load_baseline(fetchers: Fetchers, name: str, count: int) -> list[TimingRecord]:
-    """The most recent `count` readable main records; a listing failure means a cold start, never a crash."""
+    """The most recent `count` readable main records; a listing failure means a cold start, never a crash.
+
+    At most `2 * count` downloads are attempted so an unreachable blob store cannot eat the runner's time.
+    """
     try:
         artifacts = select_main_artifacts(fetchers.list_artifacts(name))
-    except (OSError, KeyError, TypeError, ValueError) as exc:
+    except FETCH_ERRORS as exc:
         notice(f"artefact listing for {name} failed ({exc}); treating as 0 main records")
         return []
     records: list[TimingRecord] = []
-    for artifact in artifacts:
+    for artifact in artifacts[: 2 * count]:
         record = fetchers.download_record(artifact)
         records += [record] if record else []
         if len(records) >= count:
-            break
+            return records
+    if len(artifacts) > 2 * count:
+        notice(f"stopped after {2 * count} artefact downloads for {name}; {len(records)} readable")
     return records
 
 
@@ -454,6 +473,9 @@ def main(
     env: Mapping[str, str] = os.environ,
 ) -> int:
     args = build_parser().parse_args(argv)
+    if args.started_at is None:
+        notice("CI timing: no start timestamp; gate skipped")
+        return 0
     if args.command == "record":
         return run_record(args, now(), env)
     if fetchers is None:

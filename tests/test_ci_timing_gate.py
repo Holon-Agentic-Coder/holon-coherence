@@ -6,11 +6,13 @@ logic only; the calibration replay at the end uses the real job durations measur
 
 from __future__ import annotations
 
+import http.client
 import json
 import pathlib
 
 import pytest
 
+from scripts import ci_timing_gate
 from scripts.ci_timing_gate import (
     ACCEPT_LABEL,
     Fetchers,
@@ -24,6 +26,7 @@ from scripts.ci_timing_gate import (
     count_new_tests,
     decide,
     format_offenders,
+    github_fetchers,
     main,
     parse_junit,
     read_junit,
@@ -171,6 +174,52 @@ def test_listing_failure_degrades_to_cold_start(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "treating as 0 main records" in out
     assert "relative check skipped: only 0 of 5" in out
+
+
+def test_truncated_http_response_degrades_to_cold_start(tmp_path, capsys):
+    def truncated(name):
+        raise http.client.IncompleteRead(b"")
+
+    fetchers = Fetchers(truncated, lambda artifact: None, lambda number: [])
+    assert run_compare(tmp_path, 200, fetchers) == 0
+    assert "treating as 0 main records" in capsys.readouterr().out
+
+
+def test_pr_labels_fall_back_to_event_on_truncated_response(monkeypatch, tmp_path):
+    def truncated(url, token):
+        raise http.client.IncompleteRead(b"")
+
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"pull_request": {"labels": [{"name": ACCEPT_LABEL}]}}))
+    monkeypatch.setattr(ci_timing_gate, "_get_json", truncated)
+    assert github_fetchers("https://example.invalid", "o/r", "", str(event)).pr_labels(7) == [ACCEPT_LABEL]
+
+
+def test_download_record_skips_truncated_archive(monkeypatch, capsys):
+    def truncated(url, token):
+        raise http.client.IncompleteRead(b"")
+
+    monkeypatch.setattr(ci_timing_gate, "_download_zip", truncated)
+    fetchers = github_fetchers("https://example.invalid", "o/r", "")
+    assert fetchers.download_record({"id": 3, "archive_download_url": "https://example.invalid/zip"}) is None
+    assert "artefact 3 could not be read" in capsys.readouterr().out
+
+
+def test_download_attempts_are_capped(tmp_path, capsys):
+    attempts = []
+    fetchers = fake_fetchers([make_record(60)] * 20)
+    fetchers.download_record = lambda artifact: attempts.append(artifact["id"])
+    assert run_compare(tmp_path, 200, fetchers) == 0
+    assert len(attempts) == 10
+    assert "stopped after 10 artefact downloads" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("command", ["record", "compare"])
+def test_missing_start_timestamp_skips_the_gate(tmp_path, capsys, command):
+    argv = [command, "--workflow", "w", "--job", "unit", "--os", "Linux", "--started-at", "", "--out", str(tmp_path)]
+    assert main(argv, fetchers=fake_fetchers([]), now=lambda: 1000, env={}) == 0
+    assert "no start timestamp; gate skipped" in capsys.readouterr().out
+    assert not (tmp_path / "timing.json").exists()
 
 
 def test_unreadable_artefacts_shrink_the_baseline(tmp_path, capsys):
@@ -329,6 +378,8 @@ def test_record_round_trip_and_unknown_schema(capsys):
     assert TimingRecord.from_json(record.to_json()) == record
     assert TimingRecord.from_json(json.dumps({"schema": 2, "job": "unit"})) is None
     assert "unknown schema 2" in capsys.readouterr().out
+    assert TimingRecord.from_json("[]") is None
+    assert "not a JSON object" in capsys.readouterr().out
 
 
 def test_artefact_name():

@@ -18,8 +18,7 @@ This directory contains the CI/CD workflows for the `holon-coherence` project.
   timing report.
 - `test-integration.yml`: Runs on pushes to `main` and pull requests on `ubuntu-latest`. It builds the Docker image via
   `make build-image` and executes integration tests that require Docker services, writing a pytest JUnit report that
-  feeds the per-test timing report. For why Docker runs only on Ubuntu,
-  see [macos-docker.md](../macos-docker.md).
+  feeds the per-test timing report. For why Docker runs only on Ubuntu, see [macos-docker.md](../macos-docker.md).
 
 ## CI Timing Regression Gate
 
@@ -48,7 +47,9 @@ fails when:
 
 With fewer than 5 main records (cold start: the first five main pushes after this gate lands, or after 90 days without
 a main push) the relative check is skipped with a notice and only the ceiling applies. An unreachable API or an
-unreadable artefact also degrades to a smaller baseline or a cold start, never to a failed job. The gate only runs when
+unreadable artefact also degrades to a smaller baseline or a cold start, never to a failed job; at most twice the
+baseline count of downloads is attempted. A missing start timestamp skips the gate with a notice and records nothing
+(the upload then only warns). The gate only runs when
 every earlier step succeeded, so it never masks a real failure. All thresholds are flags in the workflow files.
 
 ### Why these defaults
