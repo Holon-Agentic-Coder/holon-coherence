@@ -11,6 +11,8 @@ on:
 
 permissions:
   contents: read
+  actions: read # CI timing gate lists main timing artefacts
+  pull-requests: read # CI timing gate reads the acceptance label
 
 jobs:
   unit:
@@ -21,6 +23,9 @@ jobs:
         os: [ubuntu-latest, macos-latest]
 
     steps:
+      - name: Record job start time
+        run: echo "CI_TIMING_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Checkout code
         uses: actions/checkout@v7
 
@@ -44,4 +49,38 @@ jobs:
 
       - name: Run unit tests
         shell: bash -el {0}
-        run: uv sync; uv run task test
+        run: uv sync; uv run task test --junitxml="$RUNNER_TEMP/ci-timing/junit.xml"
+
+      - name: CI timing gate (record)
+        if: success() && github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          python3 scripts/ci_timing_gate.py record \
+            --workflow "$GITHUB_WORKFLOW" --job "$GITHUB_JOB" --os "$RUNNER_OS" \
+            --started-at "$CI_TIMING_STARTED_AT" --out "$RUNNER_TEMP/ci-timing" \
+            --ceiling 300 \
+            --junit "$RUNNER_TEMP/ci-timing/junit.xml"
+
+      - name: CI timing gate (compare with main)
+        if: success() && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 scripts/ci_timing_gate.py compare \
+            --workflow "$GITHUB_WORKFLOW" --job "$GITHUB_JOB" --os "$RUNNER_OS" \
+            --started-at "$CI_TIMING_STARTED_AT" --out "$RUNNER_TEMP/ci-timing" \
+            --baseline-count 5 --tolerance-percent 50 --min-delta 30 --ceiling 300 \
+            --test-tolerance-percent 50 --test-min-delta 5 --test-limit 10 \
+            --accept-label timing-regression-accepted --pr-number "$PR_NUMBER" \
+            --junit "$RUNNER_TEMP/ci-timing/junit.xml"
+
+      - name: Upload CI timing record (main only)
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-timing-${{ github.job }}-${{ runner.os }}
+          path: ${{ runner.temp }}/ci-timing/timing.json
+          retention-days: 90
+          if-no-files-found: error
