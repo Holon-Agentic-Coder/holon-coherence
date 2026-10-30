@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 import shutil
 import sys
+from collections.abc import Callable
 from typing import NamedTuple
 
-from holon_coherence.commands._dispatch import get_cli
 from holon_coherence.commands.ca import CA_ENV_VARS
 from holon_coherence.commands.docker_ops import stop_proxy_container
 from holon_coherence.commands.runner import build_proxy_env, execute_interactive_process
@@ -209,17 +210,25 @@ def run_agent(  # noqa: C901, PLR0912, PLR0913, PLR0915
     port: int | None = None,
     local_llm_base: str | None = None,
     model: str | None = None,
+    *,
+    resolve_bin_fn: Callable[[str], str | None] = resolve_agent_binary,
+    plan_route_fn: Callable[[str], LocalLlmRoute | None] = plan_local_llm_route,
+    ensure_proxy_fn: Callable[..., bool] = ensure_proxy_running,
+    probe_host_fn: Callable[[int], tuple[bool, str]] = probe_host_local_reachable,
+    report_route_fn: Callable[..., tuple[str, ...]] = report_local_llm_route,
+    build_env_fn: Callable[..., dict[str, str]] = build_agent_env,
+    exec_proc_fn: Callable[[list[str], dict[str, str]], int] = execute_interactive_process,
+    stop_container_fn: Callable[..., None] = stop_proxy_container,
 ) -> int:
     """Launch the optimization proxy and execute the requested coding agent with full telemetry."""
-    cli = get_cli()
-    resolve_bin = getattr(cli, "resolve_agent_binary", resolve_agent_binary)
-    plan_route = getattr(cli, "plan_local_llm_route", plan_local_llm_route)
-    ensure_proxy = getattr(cli, "ensure_proxy_running", ensure_proxy_running)
-    probe_host = getattr(cli, "probe_host_local_reachable", probe_host_local_reachable)
-    report_route = getattr(cli, "report_local_llm_route", report_local_llm_route)
-    build_env = getattr(cli, "build_agent_env", build_agent_env)
-    exec_proc = getattr(cli, "execute_interactive_process", execute_interactive_process)
-    stop_container = getattr(cli, "stop_proxy_container", stop_proxy_container)
+    resolve_bin = resolve_bin_fn
+    plan_route = plan_route_fn
+    ensure_proxy = ensure_proxy_fn
+    probe_host = probe_host_fn
+    report_route = report_route_fn
+    build_env = build_env_fn
+    exec_proc = exec_proc_fn
+    stop_container = stop_container_fn
 
     if port is not None and not (1 <= port <= 65535):
         print(f"Error: Port must be between 1 and 65535, got {port}.", file=sys.stderr)
@@ -353,3 +362,88 @@ def _print_run_agent_help() -> None:
     print("  --local-llm-endpoint ENDPOINT Alias for --local-llm-base\n")
     print("note:")
     print("  Use '--' to pass flags directly to the underlying agent (e.g. '-- --help').")
+
+
+def handle(args: Any) -> int:
+    """Dispatch agent execution from parsed arguments."""
+    cmd = getattr(args, "command", None)
+    agent_name = getattr(args, "agent", None) if cmd == "run-agent" else cmd
+    if not agent_name:
+        return 1
+    local_llm_base = getattr(args, "local_llm_base", None) or getattr(args, "local_llm_endpoint", None)
+    return run_agent(
+        agent_name,
+        getattr(args, "agent_args", []),
+        ephemeral=getattr(args, "ephemeral", False),
+        port=getattr(args, "port", None),
+        local_llm_base=local_llm_base,
+        model=getattr(args, "model", None),
+    )
+
+
+def register(subparsers: Any) -> list[argparse.ArgumentParser]:
+    """Register run-agent and agent alias subparsers."""
+    run_agent_parser = subparsers.add_parser("run-agent", help="Run a coding agent with automated background proxy")
+    run_agent_parser.add_argument("agent", choices=sorted(set(SUPPORTED_AGENTS)), help="Target agent")
+    run_agent_parser.add_argument(
+        "--ephemeral", action="store_true", help="Stop proxy container after agent process exits"
+    )
+    run_agent_parser.add_argument(
+        "--port", type=int, default=None, help=f"Proxy port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)"
+    )
+    run_agent_parser.add_argument(
+        "--model",
+        default=None,
+        metavar="MODEL",
+        help="Model identifier to configure for the agent",
+    )
+    run_agent_parser.add_argument(
+        "--local-llm-base",
+        default=None,
+        metavar="BASE",
+        help="Host-local model server endpoint to intercept and reroute via the Docker host gateway",
+    )
+    run_agent_parser.add_argument(
+        "--local-llm-endpoint",
+        default=None,
+        metavar="ENDPOINT",
+        help="Alias for --local-llm-base",
+    )
+    run_agent_parser.add_argument("agent_args", nargs=argparse.REMAINDER, help="Arguments passed to the agent")
+    run_agent_parser.set_defaults(handler=handle)
+
+    parsers = [run_agent_parser]
+    for agent_alias in sorted(set(SUPPORTED_AGENTS)):
+        alias_parser = subparsers.add_parser(
+            agent_alias,
+            help=f"Run {agent_alias} agent with automated background proxy",
+        )
+        alias_parser.add_argument(
+            "--ephemeral", action="store_true", help="Stop proxy container after agent process exits"
+        )
+        alias_parser.add_argument(
+            "--port", type=int, default=None, help=f"Proxy port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)"
+        )
+        alias_parser.add_argument(
+            "--model",
+            default=None,
+            metavar="MODEL",
+            help="Model identifier to configure for the agent",
+        )
+        alias_parser.add_argument(
+            "--local-llm-base",
+            default=None,
+            metavar="BASE",
+            help="Host-local model server endpoint to intercept and reroute via the Docker host gateway",
+        )
+        alias_parser.add_argument(
+            "--local-llm-endpoint",
+            default=None,
+            metavar="ENDPOINT",
+            help="Alias for --local-llm-base",
+        )
+        alias_parser.add_argument("agent_args", nargs=argparse.REMAINDER, help="Arguments passed to the agent")
+        alias_parser.set_defaults(handler=handle)
+        parsers.append(alias_parser)
+
+    return parsers

@@ -897,3 +897,64 @@ def handle_ab_test(args: argparse.Namespace) -> int:  # noqa: C901, PLR0911, PLR
         return 1
 
     return 0
+
+
+def handle(args: Any) -> int:
+    """Handle ab-test command."""
+    return handle_ab_test(args)
+
+
+def register(subparsers: Any) -> argparse.ArgumentParser:
+    """Register ab-test subparser."""
+    ab_parser = subparsers.add_parser(
+        "ab-test",
+        help="Run real-traffic A/B benchmark comparing baseline vs optimized runs",
+    )
+    ab_parser.add_argument(
+        "--command",
+        "-c",
+        dest="workload_cmd",
+        default=None,
+        help="Command/agent workload to execute twice through proxy with real LLM traffic",
+    )
+    ab_parser.add_argument(
+        "--trace-file",
+        "-f",
+        default=None,
+        help="Path to authentic trace transactions (.jsonl or .json) file",
+    )
+    ab_parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Replay trace requests as live HTTP traffic through proxy against real upstream LLM endpoints",
+    )
+    ab_parser.add_argument(
+        "--baseline",
+        default=None,
+        help="Path to authentic baseline wire log file or directory (Variant A)",
+    )
+    ab_parser.add_argument(
+        "--optimized",
+        default=None,
+        help="Path to authentic optimized wire log file or directory (Variant B)",
+    )
+    ab_parser.add_argument(
+        "--rounds",
+        "-n",
+        type=int,
+        default=1,
+        help="Number of evaluation rounds to run (default: 1)",
+    )
+    ab_parser.add_argument(
+        "--fail-under-reduction",
+        type=float,
+        default=None,
+        help="Enforce minimum token reduction percentage gate (e.g. 15.0 for 15%%)",
+    )
+    ab_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output raw JSON comparison scorecard",
+    )
+    ab_parser.set_defaults(handler=handle)
+    return ab_parser

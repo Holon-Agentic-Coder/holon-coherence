@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import http.client
 import os
@@ -12,10 +13,10 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from typing import Any, NamedTuple
 
 from holon_coherence.ca_generator import generate_root_ca
-from holon_coherence.commands._dispatch import get_cli
 from holon_coherence.commands.docker_ops import (
     check_docker_daemon,
     ensure_docker_image,
@@ -308,23 +309,24 @@ def probe_host_local_reachable(port: int, timeout: float = 15.0, container_name:
     return False, "unreachable"
 
 
-def plan_local_llm_route(raw_base: str) -> LocalLlmRoute | None:
+def plan_local_llm_route(
+    raw_base: str,
+    *,
+    merge_no_proxy_fn: Callable[[dict[str, str] | None], str] = merge_no_proxy_values,
+    detect_addrs_fn: Callable[[], tuple[str, ...]] = detect_host_addresses,
+) -> LocalLlmRoute | None:
     """Turn a ``--local-llm-base`` value into the route a runner session applies."""
-    cli = get_cli()
-    merger = getattr(cli, "merge_no_proxy_values", merge_no_proxy_values)
-    get_addrs = getattr(cli, "detect_host_addresses", detect_host_addresses)
-
     target = parse_local_target(raw_base)
     if target is None:
         return None
-    host_addresses = get_addrs()
+    host_addresses = detect_addrs_fn()
     targets = expand_equivalence_class(target, host_addresses)
     return LocalLlmRoute(
         target=target,
         targets=targets,
         container_env_value=encode_targets(targets),
         host_addresses=host_addresses,
-        no_proxy_plan=plan_no_proxy_pruning(merger(), target, host_addresses),
+        no_proxy_plan=plan_no_proxy_pruning(merge_no_proxy_fn(None), target, host_addresses),
     )
 
 
@@ -401,33 +403,20 @@ def ensure_proxy_running(  # noqa: C901, PLR0912, PLR0915
     container_name: str | None = None,
 ) -> bool:
     """Ensure the holon-coherence optimization proxy is running in the background and healthy."""
-    cli = get_cli()
-    check_daemon = getattr(cli, "check_docker_daemon", check_docker_daemon)
-    in_use = getattr(cli, "is_port_in_use", is_port_in_use)
-    is_running = getattr(cli, "is_container_running", is_container_running)
-    is_bound = getattr(cli, "is_container_bound_to_port", is_container_bound_to_port)
-    get_spec = getattr(cli, "container_host_local_spec", container_host_local_spec)
-    is_covered = getattr(cli, "host_local_covered", host_local_covered)
-    stop_container = getattr(cli, "stop_proxy_container", stop_proxy_container)
-    ensure_image = getattr(cli, "ensure_docker_image", ensure_docker_image)
-    get_alias_args = getattr(cli, "docker_host_alias_args", docker_host_alias_args)
-    get_host_local_args = getattr(cli, "host_local_container_args", host_local_container_args)
-    wait_ready = getattr(cli, "wait_for_proxy_ready", wait_for_proxy_ready)
-
     name = container_name or get_container_name()
 
-    ok, err_msg = check_daemon()
+    ok, err_msg = check_docker_daemon()
     if not ok:
         print(err_msg, file=sys.stderr)
         sys.exit(1)
 
     was_running = False
-    if in_use(port):
-        if is_running(name) and is_bound(port, name):
+    if is_port_in_use(port):
+        if is_container_running(name) and is_container_bound_to_port(port, name):
             if not host_local_spec:
                 return False
-            existing_spec = get_spec(name) if container_name else get_spec()
-            if is_covered(host_local_spec, existing_spec):
+            existing_spec = container_host_local_spec(name) if container_name else container_host_local_spec()
+            if host_local_covered(host_local_spec, existing_spec):
                 return False
             was_running = True
             merged_targets = (*decode_targets(existing_spec), *decode_targets(host_local_spec))
@@ -436,11 +425,11 @@ def ensure_proxy_running(  # noqa: C901, PLR0912, PLR0915
                 f"♻️  Running proxy container does not intercept {host_local_spec}; recreating it. "
                 "Other sessions sharing this proxy will briefly lose interception."
             )
-            stop_container(name) if container_name else stop_container()
+            stop_proxy_container(name) if container_name else stop_proxy_container()
             deadline = time.monotonic() + 10.0
-            while in_use(port) and time.monotonic() < deadline:
+            while is_port_in_use(port) and time.monotonic() < deadline:
                 time.sleep(PROXY_POLL_INTERVAL_SECONDS)
-            if in_use(port):
+            if is_port_in_use(port):
                 print(
                     f"Error: Port {port} could not be freed after stopping container.\n"
                     "Another process may have bound to this port.",
@@ -454,9 +443,9 @@ def ensure_proxy_running(  # noqa: C901, PLR0912, PLR0915
                 file=sys.stderr,
             )
             sys.exit(1)
-    elif is_running(name):
-        if is_bound(port, name):
-            ready = wait_ready(port, container_name=name) if container_name else wait_ready(port)
+    elif is_container_running(name):
+        if is_container_bound_to_port(port, name):
+            ready = wait_for_proxy_ready(port, container_name=name) if container_name else wait_for_proxy_ready(port)
             if ready:
                 return False
             if container_name:
@@ -503,7 +492,7 @@ def ensure_proxy_running(  # noqa: C901, PLR0912, PLR0915
 
     _chmod_proxy_dirs(ca_dir, cache_dir, logs_dir, ca_files=True)
 
-    ensure_image(image, rebuild=False)
+    ensure_docker_image(image, rebuild=False)
 
     with contextlib.suppress(subprocess.TimeoutExpired, OSError):
         subprocess.run(
@@ -520,7 +509,7 @@ def ensure_proxy_running(  # noqa: C901, PLR0912, PLR0915
         "--init",
         "--name",
         name,
-        *get_alias_args(),
+        *docker_host_alias_args(),
         "-p",
         f"127.0.0.1:{port}:8080",
         "-v",
@@ -539,7 +528,7 @@ def ensure_proxy_running(  # noqa: C901, PLR0912, PLR0915
         f"COHERENCE_TOKEN_REDUCTION={'0' if is_start_passive() else '1'}",
         "-e",
         f"HOLON_PASSIVE_MONITORING={'1' if is_start_passive() else '0'}",
-        *get_host_local_args(host_local_spec),
+        *host_local_container_args(host_local_spec),
         image,
         # No --web: the in-container start is headless mitmdump, so `run` / `run-agent` proxies
         # publish no inspector port and generate no token (see is_web_inspector_enabled).
@@ -554,14 +543,14 @@ def ensure_proxy_running(  # noqa: C901, PLR0912, PLR0915
         print(f"Error starting proxy container: {run_res.stderr.strip()}", file=sys.stderr)
         sys.exit(run_res.returncode)
 
-    ready = wait_ready(port, container_name=name) if container_name else wait_ready(port)
+    ready = wait_for_proxy_ready(port, container_name=name) if container_name else wait_for_proxy_ready(port)
     if not ready:
         print(f"Error: Proxy container did not become ready within {PROXY_READY_TIMEOUT_SECONDS}s.", file=sys.stderr)
         logs_res = subprocess.run(["docker", "logs", name], capture_output=True, text=True)
         combined_logs = f"{logs_res.stdout or ''}{logs_res.stderr or ''}".strip()
         if combined_logs:
             print(f"Container logs:\n{combined_logs}", file=sys.stderr)
-        stop_container(name) if container_name else stop_container()
+        stop_proxy_container(name) if container_name else stop_proxy_container()
         sys.exit(1)
 
     return not was_running
@@ -569,20 +558,10 @@ def ensure_proxy_running(  # noqa: C901, PLR0912, PLR0915
 
 def handle_start(args: Any) -> None:  # noqa: C901, PLR0912, PLR0915
     """Execute proxy start command in container or on host."""
-    cli = get_cli()
-    in_container = getattr(cli, "is_in_container", is_in_container)
-    check_daemon = getattr(cli, "check_docker_daemon", check_docker_daemon)
-    plan_route = getattr(cli, "plan_local_llm_route", plan_local_llm_route)
-    ensure_image = getattr(cli, "ensure_docker_image", ensure_docker_image)
-    get_alias_args = getattr(cli, "docker_host_alias_args", docker_host_alias_args)
-    get_host_local_args = getattr(cli, "host_local_container_args", host_local_container_args)
-    resolve_pwd = getattr(cli, "resolve_web_password", resolve_web_password)
-    save_tok = getattr(cli, "save_web_token", save_web_token)
-
     start_host_local_spec = os.environ.get(HOST_LOCAL_ENV_VAR, "").strip()
     start_route: LocalLlmRoute | None = None
     if getattr(args, "local_llm_base", None):
-        start_route = plan_route(args.local_llm_base)
+        start_route = plan_local_llm_route(args.local_llm_base)
         if start_route is None:
             print(
                 f"Error: --local-llm-base '{args.local_llm_base}' is not a usable endpoint.\n"
@@ -602,7 +581,7 @@ def handle_start(args: Any) -> None:  # noqa: C901, PLR0912, PLR0915
         start_host_local_spec = encode_targets(merged)
 
     # In-container execution
-    if in_container():
+    if is_in_container():
         os.environ[HOST_LOCAL_ENV_VAR] = start_host_local_spec
         pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         addon_path = os.path.join(pkg_dir, "mitm_addon.py")
@@ -613,8 +592,8 @@ def handle_start(args: Any) -> None:  # noqa: C901, PLR0912, PLR0915
 
         cmd = [tool_path, "-s", addon_path, "--listen-port", str(args.port)]
         if web_enabled:
-            web_password = resolve_pwd(getattr(args, "web_password", None))
-            save_tok(web_password)
+            web_password = resolve_web_password(getattr(args, "web_password", None))
+            save_web_token(web_password)
             cmd.extend(
                 [
                     "--web-host",
@@ -643,18 +622,15 @@ def handle_start(args: Any) -> None:  # noqa: C901, PLR0912, PLR0915
         return
 
     # On host: check docker daemon
-    ok, err = check_daemon()
+    ok, err = check_docker_daemon()
     if not ok:
         print(err, file=sys.stderr)
         sys.exit(1)
 
-    in_use = getattr(cli, "is_port_in_use", is_port_in_use)
-    find_port = getattr(cli, "find_available_port", find_available_port)
-
     # Check proxy port conflict and fallback
     actual_proxy_port = args.port
-    if in_use(actual_proxy_port):
-        actual_proxy_port = find_port(actual_proxy_port + 1)
+    if is_port_in_use(actual_proxy_port):
+        actual_proxy_port = find_available_port(actual_proxy_port + 1)
         print(f"⚠️  Port {args.port} is already in use on host. Mapping proxy to host port {actual_proxy_port} instead.")
 
     ca_dir = os.path.expanduser("~/.holon/proxy-ca")
@@ -670,7 +646,7 @@ def handle_start(args: Any) -> None:  # noqa: C901, PLR0912, PLR0915
         with contextlib.suppress(Exception):
             generate_root_ca(output_dir=ca_dir)
 
-    ensure_image(args.image, rebuild=args.build)
+    ensure_docker_image(args.image, rebuild=args.build)
 
     target_container = getattr(args, "name", None) or get_container_name()
     subprocess.run(["docker", "rm", "-f", target_container], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -681,7 +657,7 @@ def handle_start(args: Any) -> None:  # noqa: C901, PLR0912, PLR0915
         "--init",
         "--name",
         target_container,
-        *get_alias_args(),
+        *docker_host_alias_args(),
         "-p",
         f"127.0.0.1:{actual_proxy_port}:8080",
         "-v",
@@ -700,7 +676,7 @@ def handle_start(args: Any) -> None:  # noqa: C901, PLR0912, PLR0915
         f"COHERENCE_TOKEN_REDUCTION={'0' if is_start_passive(getattr(args, 'passive', False)) else '1'}",
         "-e",
         f"HOLON_PASSIVE_MONITORING={'1' if is_start_passive(getattr(args, 'passive', False)) else '0'}",
-        *get_host_local_args(start_host_local_spec),
+        *host_local_container_args(start_host_local_spec),
     ]
 
     # mitmweb inspector (opt-in via --web or HOLON_COHERENCE_WEB; the default start is headless)
@@ -709,17 +685,17 @@ def handle_start(args: Any) -> None:  # noqa: C901, PLR0912, PLR0915
     requested_web_port = getattr(args, "web_port", DEFAULT_WEB_PORT)
     actual_web_port: int | None = None
     if web_enabled:
-        web_password = resolve_pwd(getattr(args, "web_password", None))
-        save_tok(web_password)
+        web_password = resolve_web_password(getattr(args, "web_password", None))
+        save_web_token(web_password)
         # Never hand the inspector a port the proxy or a host-local model server already owns.
         reserved_ports = {actual_proxy_port}
         if start_route is not None and start_route.target.port is not None:
             reserved_ports.add(start_route.target.port)
         actual_web_port = requested_web_port
-        if actual_web_port in reserved_ports or in_use(actual_web_port):
-            actual_web_port = find_port(actual_web_port + 1)
-            while actual_web_port in reserved_ports or in_use(actual_web_port):
-                actual_web_port = find_port(actual_web_port + 1)
+        if actual_web_port in reserved_ports or is_port_in_use(actual_web_port):
+            actual_web_port = find_available_port(actual_web_port + 1)
+            while actual_web_port in reserved_ports or is_port_in_use(actual_web_port):
+                actual_web_port = find_available_port(actual_web_port + 1)
             print(
                 f"⚠️  Port {requested_web_port} is unavailable on host (in use, or taken by the proxy or the "
                 f"local LLM endpoint). Mapping mitmweb inspector to host port {actual_web_port} instead."
@@ -770,3 +746,70 @@ def handle_start(args: Any) -> None:  # noqa: C901, PLR0912, PLR0915
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+
+
+def handle(args: Any) -> int:
+    """Handle start command."""
+    handle_start(args)
+    return 0
+
+
+def register(subparsers: Any) -> argparse.ArgumentParser:
+    """Register start subparser."""
+    start_parser = subparsers.add_parser("start", help="Start the optimization proxy sidecar (via Docker by default)")
+    default_start_port = DEFAULT_PROXY_PORT
+    env_proxy_port = os.getenv("HOLON_PROXY_PORT")
+    if env_proxy_port:
+        try:
+            parsed_port = int(env_proxy_port)
+            if 1 <= parsed_port <= 65535:
+                default_start_port = parsed_port
+        except ValueError:
+            pass
+    start_parser.add_argument(
+        "--port",
+        type=int,
+        default=default_start_port,
+        help=f"Proxy listen port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)",
+    )
+    start_parser.add_argument(
+        "--local-llm-base",
+        default=os.getenv("HOLON_LOCAL_LLM_BASE"),
+        help=f"Host-local model server (e.g. localhost:8081) to intercept and route via {GATEWAY_HOSTNAME}",
+    )
+    start_parser.add_argument(
+        "--web",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Launch the mitmweb raw request/response inspector (default: off, or on when HOLON_COHERENCE_WEB=1; "
+        "mitmweb keeps every flow in memory, so leave it off for long-running proxies)",
+    )
+    start_parser.add_argument(
+        "--web-port",
+        type=int,
+        default=DEFAULT_WEB_PORT,
+        help=f"mitmweb inspector host port (default: {DEFAULT_WEB_PORT}; falls back to the next free port if occupied)",
+    )
+    start_parser.add_argument(
+        "--web-password",
+        default=None,
+        help="Token protecting the mitmweb inspector (defaults to HOLON_COHERENCE_WEB_PASSWORD or an "
+        "auto-generated token); implies --web unless --no-web is given",
+    )
+    start_parser.add_argument("-d", "--detach", action="store_true", help="Run Docker container in background")
+    start_parser.add_argument(
+        "--name",
+        default=None,
+        help="Container name (defaults to HOLON_CONTAINER_NAME or holon-coherence-proxy)",
+    )
+    start_parser.add_argument(
+        "--image", default="holon-coherence:latest", help="Docker image tag (default: holon-coherence:latest)"
+    )
+    start_parser.add_argument(
+        "--passive",
+        action="store_true",
+        help="Run proxy in passive monitoring mode (baseline/logging only, no active optimization)",
+    )
+    start_parser.add_argument("--build", action="store_true", help="Rebuild Docker image before starting")
+    start_parser.set_defaults(handler=handle)
+    return start_parser

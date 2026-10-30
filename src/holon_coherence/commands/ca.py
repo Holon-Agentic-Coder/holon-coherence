@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import os
 import ssl
+from collections.abc import Callable
 from typing import Any
 
 from holon_coherence.ca_generator import generate_root_ca
-from holon_coherence.commands._dispatch import get_cli
 
 CA_ENV_VARS = (
     "SSL_CERT_FILE",
@@ -62,7 +63,10 @@ def find_system_ca_bundle() -> str | None:
     return None
 
 
-def get_or_create_merged_ca_bundle(ca_cert_path: str) -> str:  # noqa: C901
+def get_or_create_merged_ca_bundle(
+    ca_cert_path: str,
+    find_bundle_fn: Callable[[], str | None] = find_system_ca_bundle,
+) -> str:  # noqa: C901
     """Create or return a merged CA certificate bundle combining system/certifi CA roots and the Holon CA.
 
     This ensures direct connections via NO_PROXY succeed without TLS failures while still trusting
@@ -75,9 +79,7 @@ def get_or_create_merged_ca_bundle(ca_cert_path: str) -> str:  # noqa: C901
     if not os.path.isfile(ca_cert_path):
         return ca_cert_path
 
-    cli = get_cli()
-    finder = getattr(cli, "find_system_ca_bundle", find_system_ca_bundle)
-    system_ca = finder()
+    system_ca = find_bundle_fn()
     if os.path.isfile(merged_path):
         try:
             merged_mtime = os.path.getmtime(merged_path)
@@ -130,3 +132,16 @@ def handle_init_ca(args: Any) -> int:
     ca_cert, ca_key = generate_root_ca(output_dir=args.output_dir)
     print(f"✅ Root CA generated successfully:\n  Certificate: {ca_cert}\n  Key: {ca_key}")
     return 0
+
+
+def handle(args: Any) -> int:
+    """Handle init-ca command."""
+    return handle_init_ca(args)
+
+
+def register(subparsers: Any) -> argparse.ArgumentParser:
+    """Register the init-ca subparser."""
+    ca_parser = subparsers.add_parser("init-ca", help="Bootstrap self-signed Root CA certificates")
+    ca_parser.add_argument("--output-dir", default=os.path.expanduser("~/.holon/proxy-ca"), help="Target CA directory")
+    ca_parser.set_defaults(handler=handle)
+    return ca_parser

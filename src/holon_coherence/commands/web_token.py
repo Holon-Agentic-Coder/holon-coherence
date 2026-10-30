@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import os
 import secrets
+from collections.abc import Callable
 from typing import Any
-
-from holon_coherence.commands._dispatch import get_cli
 from holon_coherence.commands.docker_ops import (
     get_container_mapped_port,
     get_container_name,
@@ -65,18 +65,21 @@ def get_active_web_token(token_path: str = WEB_TOKEN_PATH) -> str | None:
     return None
 
 
-def handle_web_token(args: Any = None, token_path: str = WEB_TOKEN_PATH) -> int:
+def handle_web_token(
+    args: Any = None,
+    token_path: str = WEB_TOKEN_PATH,
+    *,
+    tok_getter_fn: Callable[[str], str | None] = get_active_web_token,
+    container_tok_getter_fn: Callable[[str], str | None] = get_container_web_token,
+    is_running_fn: Callable[[str], bool] = is_container_running,
+    get_mapped_port_fn: Callable[[str, int], int | None] = get_container_mapped_port,
+) -> int:
     """Displays the active mitmweb inspector token and, when it is running, its resolved URL."""
-    cli = get_cli()
-    tok_getter = getattr(cli, "get_active_web_token", get_active_web_token)
-    container_tok_getter = getattr(cli, "get_container_web_token", get_container_web_token)
-    is_running = getattr(cli, "is_container_running", is_container_running)
-    get_mapped_port = getattr(cli, "get_container_mapped_port", get_container_mapped_port)
     name = getattr(args, "name", None) or get_container_name()
-    web_port = get_mapped_port(name, INSPECTOR_CONTAINER_PORT) if is_running(name) else None
+    web_port = get_mapped_port_fn(name, INSPECTOR_CONTAINER_PORT) if is_running_fn(name) else None
     if web_port is not None:
         # A running inspector accepts only its own container's token, not the last-written file.
-        container_token = container_tok_getter(name)
+        container_token = container_tok_getter_fn(name)
         if container_token:
             print(f"🔑 Active mitmweb inspector token: {container_token}")
             print(f"🌐 {INSPECTOR_LABEL}: {inspector_url(web_port, container_token)}")
@@ -84,7 +87,7 @@ def handle_web_token(args: Any = None, token_path: str = WEB_TOKEN_PATH) -> int:
         print(f"🌐 mitmweb inspector: running on 127.0.0.1:{web_port} (token unavailable for container '{name}')")
         print(f"   Recover the token the container saved with: {token_recovery_command(name)}")
         return 1
-    token = tok_getter(token_path)
+    token = tok_getter_fn(token_path)
     if token:
         print(f"🔑 Last saved mitmweb inspector token ({token_path}): {token}")
         print(
@@ -95,3 +98,26 @@ def handle_web_token(args: Any = None, token_path: str = WEB_TOKEN_PATH) -> int:
     print("No active mitmweb inspector token found.")
     print("Start the proxy with 'holon-coherence start --web' (or HOLON_COHERENCE_WEB=1) to generate one.")
     return 1
+
+
+def handle(args: Any) -> int:
+    """Handle web-token and web-key commands."""
+    return handle_web_token(args)
+
+
+def register(subparsers: Any) -> list[argparse.ArgumentParser]:
+    """Register web-token and web-key subparsers."""
+    parsers = []
+    for token_command, token_help in (
+        ("web-token", "Display the active mitmweb inspector token and URL"),
+        ("web-key", "Alias for web-token"),
+    ):
+        token_parser = subparsers.add_parser(token_command, help=token_help)
+        token_parser.add_argument(
+            "--name",
+            default=None,
+            help="Container name (defaults to HOLON_CONTAINER_NAME or holon-coherence-proxy)",
+        )
+        token_parser.set_defaults(handler=handle)
+        parsers.append(token_parser)
+    return parsers

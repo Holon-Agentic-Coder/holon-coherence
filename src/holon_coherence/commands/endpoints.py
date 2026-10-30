@@ -10,9 +10,9 @@ environment, so with several named containers each URL carries the token that co
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
-from holon_coherence.commands._dispatch import get_cli
 from holon_coherence.commands.docker_ops import (
     get_container_mapped_port,
     get_container_web_token,
@@ -57,7 +57,14 @@ def token_recovery_command(container_name: str) -> str:
     return f"docker exec {container_name} sh -c 'cat \"$HOME/.holon/web-token\"'"
 
 
-def resolve_container_endpoints(container_name: str, fallback_proxy_port: int | None = None) -> ExposedEndpoints:
+def resolve_container_endpoints(
+    container_name: str,
+    fallback_proxy_port: int | None = None,
+    *,
+    is_running_fn: Callable[[str], bool] = is_container_running,
+    get_mapped_port_fn: Callable[[str, int], int | None] = get_container_mapped_port,
+    get_token_fn: Callable[[str], str | None] = get_container_web_token,
+) -> ExposedEndpoints:
     """Resolve the endpoints a proxy container really exposes from its Docker port mappings.
 
     A container that is not running exposes nothing. A running container without an inspector port
@@ -65,17 +72,12 @@ def resolve_container_endpoints(container_name: str, fallback_proxy_port: int | 
     The token comes from the container itself, never from the shared ``~/.holon/web-token``, which
     every host ``start`` overwrites regardless of ``--name``.
     """
-    cli = get_cli()
-    is_running = getattr(cli, "is_container_running", is_container_running)
-    get_mapped_port = getattr(cli, "get_container_mapped_port", get_container_mapped_port)
-    get_token = getattr(cli, "get_container_web_token", get_container_web_token)
-
-    if not is_running(container_name):
+    if not is_running_fn(container_name):
         return ExposedEndpoints(proxy_port=None, web_port=None, web_token=None)
 
-    proxy_port = get_mapped_port(container_name, PROXY_CONTAINER_PORT) or fallback_proxy_port
-    web_port = get_mapped_port(container_name, INSPECTOR_CONTAINER_PORT)
-    web_token = get_token(container_name) if web_port is not None else None
+    proxy_port = get_mapped_port_fn(container_name, PROXY_CONTAINER_PORT) or fallback_proxy_port
+    web_port = get_mapped_port_fn(container_name, INSPECTOR_CONTAINER_PORT)
+    web_token = get_token_fn(container_name) if web_port is not None else None
     return ExposedEndpoints(proxy_port=proxy_port, web_port=web_port, web_token=web_token)
 
 
