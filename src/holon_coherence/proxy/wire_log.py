@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import sys
 import threading
 import uuid
 from typing import Any
@@ -177,9 +178,13 @@ atexit.register(shutdown_wire_logs)
 
 def log_telemetry(msg: str) -> None:
     """Logs telemetry message to mitmproxy console context if available, falling back to standard logger."""
-    if ctx and hasattr(ctx, "log") and hasattr(ctx.log, "info"):
+    active_ctx = ctx
+    mod = sys.modules.get("holon_coherence.mitm_addon")
+    if mod is not None and hasattr(mod, "ctx"):
+        active_ctx = mod.ctx
+    if active_ctx and hasattr(active_ctx, "log") and hasattr(active_ctx.log, "info"):
         try:
-            ctx.log.info(msg)
+            active_ctx.log.info(msg)
             return
         except Exception:
             # mitmproxy context is unavailable or inactive in this execution context

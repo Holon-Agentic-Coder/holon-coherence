@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 import uuid
 from datetime import UTC, datetime
@@ -68,9 +69,9 @@ from holon_coherence.proxy.wire_log import (
 
 __all__ = [
     "DEFAULT_PROXY_LISTEN_PORT",
+    "_MAX_SSE_BUFFER_BYTES",
     "MITMProxyInterceptor",
     "MitmproxyAddon",
-    "_MAX_SSE_BUFFER_BYTES",
     "addons",
 ]
 
@@ -78,6 +79,41 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_PROXY_LISTEN_PORT = 8080
 _MAX_SSE_BUFFER_BYTES = 50 * 1024 * 1024
+
+
+def _get_in_container() -> Any:
+    mod = sys.modules.get("holon_coherence.mitm_addon")
+    if mod is not None and hasattr(mod, "in_container"):
+        return mod.in_container
+    return in_container
+
+
+def _get_resolve_gateway_address() -> Any:
+    mod = sys.modules.get("holon_coherence.mitm_addon")
+    if mod is not None and hasattr(mod, "resolve_gateway_address"):
+        return mod.resolve_gateway_address
+    return resolve_gateway_address
+
+
+def _get_log_telemetry() -> Any:
+    mod = sys.modules.get("holon_coherence.mitm_addon")
+    if mod is not None and hasattr(mod, "log_telemetry"):
+        return mod.log_telemetry
+    return log_telemetry
+
+
+def _get_ctx() -> Any:
+    mod = sys.modules.get("holon_coherence.mitm_addon")
+    if mod is not None and hasattr(mod, "ctx"):
+        return mod.ctx
+    return ctx
+
+
+def _get_is_local_target() -> Any:
+    mod = sys.modules.get("holon_coherence.mitm_addon")
+    if mod is not None and hasattr(mod, "is_local_target"):
+        return mod.is_local_target
+    return is_local_target
 
 
 class MITMProxyInterceptor:
@@ -284,13 +320,14 @@ class MitmproxyAddon:
                 if 1 <= parsed <= 65535:
                     ports.append(parsed)
 
-        if in_container():
+        if _get_in_container()():
             return tuple(dict.fromkeys(ports)) or (DEFAULT_PROXY_LISTEN_PORT,)
 
+        active_ctx = _get_ctx()
         with contextlib.suppress(Exception):
-            if ctx is not None and getattr(ctx, "options", None) is not None:
+            if active_ctx is not None and getattr(active_ctx, "options", None) is not None:
                 for name in ("listen_port", "web_port"):
-                    value = getattr(ctx.options, name, None)
+                    value = getattr(active_ctx.options, name, None)
                     if isinstance(value, int) and value > 0:
                         ports.append(value)
         return tuple(dict.fromkeys(ports)) or (DEFAULT_PROXY_LISTEN_PORT,)
@@ -303,7 +340,7 @@ class MitmproxyAddon:
         """
         if self._gateway_ip is not None:
             return self._gateway_ip
-        ip = resolve_gateway_address()
+        ip = _get_resolve_gateway_address()()
         if ip is not None:
             self._gateway_ip = ip
         return ip
@@ -321,7 +358,7 @@ class MitmproxyAddon:
         Rewriting the dial address leaves ``flow.request`` -- and therefore the wire logs
         and token telemetry -- reporting the authority the agent actually asked for.
         """
-        if not in_container():
+        if not _get_in_container()():
             return
         targets = targets_from_env()
         if not targets:
@@ -333,7 +370,7 @@ class MitmproxyAddon:
 
         decision = rewrite_connection(data, targets, self._resolve_gateway(), self._proxy_own_ports())
         if decision.should_rewrite and decision.address is not None and original:
-            log_telemetry(
+            _get_log_telemetry()(
                 f"holon: host-local endpoint {original[0]}:{original[1]} -> "
                 f"{decision.address[0]}:{decision.address[1]} ({GATEWAY_HOSTNAME}, {decision.reason})"
             )
@@ -341,7 +378,7 @@ class MitmproxyAddon:
 
         if decision.reason == "proxy-own-port":
             if original:
-                log_telemetry(
+                _get_log_telemetry()(
                     f"holon: BLOCKED connection to proxy's own port {original[0]}:{original[1]} "
                     "to prevent self-loop dialing"
                 )
@@ -352,7 +389,7 @@ class MitmproxyAddon:
 
         if decision.reason == "gateway-unresolved" and not self._warned_gateway:
             self._warned_gateway = True
-            log_telemetry(
+            _get_log_telemetry()(
                 "holon: WARNING host-local LLM traffic needs the Docker host gateway, but "
                 f"'{GATEWAY_HOSTNAME}' does not resolve inside this container. Restart the proxy so it is "
                 "created with --add-host=host.docker.internal:host-gateway (Linux), or bind the model "
@@ -547,7 +584,7 @@ class MitmproxyAddon:
             targets = targets_from_env()
             if targets:
                 target = targets[0]
-                if in_container():
+                if _get_in_container()():
                     flow.request.host = GATEWAY_HOSTNAME
                 else:
                     flow.request.host = target.host
@@ -571,7 +608,7 @@ class MitmproxyAddon:
             flow.request_start_time = time.perf_counter()  # float: timestamp from time.perf_counter()
             self.total_requests += 1
             self.metrics.record_request()
-            is_local = is_local_target(flow)
+            is_local = _get_is_local_target()(flow)
 
             # Gemini v1beta bridge to OpenAI /v1/chat/completions for host-local engines
             if provider == "gemini" and is_local and data is not None:
@@ -632,7 +669,7 @@ class MitmproxyAddon:
                                     f"Turns Summarized: {clean_res.turns_summarized} | "
                                     f"Cache Control Injected: {clean_res.cache_control_injected}"
                                 )
-                                log_telemetry(cleaner_log)
+                                _get_log_telemetry()(cleaner_log)
 
                         if cached_resp:
                             self.cache_hits += 1
@@ -670,7 +707,7 @@ class MitmproxyAddon:
                                 f"TTFT: 0.00ms | Prefill: 0.00 t/s | Output: 0.00 t/s | "
                                 f"Total: 0.00ms"
                             )
-                            log_telemetry(log_msg)
+                            _get_log_telemetry()(log_msg)
 
                             # Dump wire transaction for cache hit
                             self._dump_flow_transaction(flow, resp_data=cached_resp, status_code=200, is_hit=True)
@@ -829,7 +866,7 @@ class MitmproxyAddon:
                         f"Output: {output_label} | "
                         f"Total: {total_label}"
                     )
-                    log_telemetry(log_msg)
+                    _get_log_telemetry()(log_msg)
 
                     # Persist wire transaction dump
                     self._dump_flow_transaction(
@@ -868,7 +905,7 @@ class MitmproxyAddon:
             start_t = getattr(flow, "request_start_time", None) or time.perf_counter()
             elapsed_ms = (time.perf_counter() - start_t) * 1000
             log_msg = f"⚠️ [TELEMETRY] Provider: {provider.upper()} | Status: {status_code} | Total: {elapsed_ms:.1f}ms"
-            log_telemetry(log_msg)
+            _get_log_telemetry()(log_msg)
 
             try:
                 if (

@@ -296,6 +296,7 @@
 
      ```python
      """Backward-compatible entry point re-exporting proxy components."""
+
      from holon_coherence.proxy.addon import (
          DEFAULT_PROXY_LISTEN_PORT,
          _MAX_SSE_BUFFER_BYTES,
@@ -344,6 +345,7 @@
          log_telemetry,
          shutdown_wire_logs,
      )
+
      # Re-export parser helpers previously exposed on mitm_addon
      from holon_coherence.parsers import (
          TokenCounts,
@@ -580,7 +582,7 @@ $$\text{EV} = (0.96 \times 8.50) + (0.5 \times 2.00) - (0.3 \times 3.30) - 0.85 
 - **$P(\text{success})$ (0.96):** The refactoring strategy relies on pure move-only semantics verified by programmatic AST node comparisons. Preserving the public interface in `mitm_addon.py` as a facade eliminates regression risks for existing callers and CLI runners.
 - **$\text{Impact}$ (8.50):** Deconstructs a 2,348-line monolithic script with 9 mixed concerns into 9 cohesive modules within a structured `src/holon_coherence/proxy/` package, establishing clean isolation between network routing, wire logging, metrics accumulation, protocol translation, and HTML dashboard rendering.
 - **$\mu \times \text{LearningValue}$ ($0.5 \times 2.00 = 1.00$):** Codifies clean subpackage modularization patterns for proxy interceptors, establishes direct unit testing suites, and demonstrates AST-verified safe code migration.
-- **$\lambda \times \Delta S_{\text{intent}}$ ($0.3 \times 3.30 = 0.99$):** Bounded entropy distribution across the 6 execution steps totaling 3.30, safely below the 5.0 entropy budget.
+- **$\lambda \times \Delta S\_{\text{intent}}$ ($0.3 \times 3.30 = 0.99$):** Bounded entropy distribution across the 6 execution steps totaling 3.30, safely below the 5.0 entropy budget.
 - **$\text{Cost}$ (0.85):** Direct refactoring cost covering AST verification script creation, package wiring, test suite modularization, and multi-gate pytest/ruff execution.
 
 ---

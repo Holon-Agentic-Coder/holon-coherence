@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from holon_coherence.proxy.addon import (
-    DEFAULT_PROXY_LISTEN_PORT,
-    MITMProxyInterceptor,
-    MitmproxyAddon,
     _MAX_SSE_BUFFER_BYTES,
+    DEFAULT_PROXY_LISTEN_PORT,
+    MitmproxyAddon,
+    MITMProxyInterceptor,
     addons,
 )
 from holon_coherence.proxy.dashboard import render_dashboard_html
@@ -52,13 +52,25 @@ from holon_coherence.proxy.wire_log import (
 )
 
 __all__ = [
-    "CumulativeMetrics",
     "DEFAULT_PROXY_LISTEN_PORT",
+    "WIRE_LOG_DIR",
+    "_BODY_SECRET_PATTERNS",
+    "_MAX_SSE_BUFFER_BYTES",
+    "_SECRET_DICT_KEY_PATTERN",
+    "_SECRET_HEADER_NAMES",
+    "_URL_QUERY_SECRET_PATTERN",
+    "CumulativeMetrics",
     "FlowTiming",
     "MITMProxyInterceptor",
     "MitmproxyAddon",
-    "WIRE_LOG_DIR",
-    "_MAX_SSE_BUFFER_BYTES",
+    "_discard_pending_future",
+    "_get_wire_log_executor",
+    "_make_http_response",
+    "_pending_wire_log_futures",
+    "_wall_clock_seconds",
+    "_wire_log_executor",
+    "_wire_log_lock",
+    "_write_transaction_sync",
     "addons",
     "derive_turn_id",
     "dump_wire_transaction",
