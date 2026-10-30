@@ -117,3 +117,46 @@ graph TD
 - Specific terminal commands, linters, or small edits are delegated to a cheaper, faster Executor model (e.g. Gemini 3.5
   Flash) via the CLI.
 - Execution output is summarized and compressed before being returned to the Architect, preventing context window bloat.
+
+---
+
+## 🛡️ Code Quality & Complexity Gate
+
+To ensure sustainable codebase health, maintainability, and architectural coherence, `holon-coherence` enforces automated static complexity gates aligned with the broader Holon ecosystem. These gates ensure that incoming modifications remain modular, readable, and testable without regressing into deeply nested procedural routines.
+
+### Static Analysis Complexity Thresholds
+
+Static complexity metrics are evaluated via Ruff's McCabe (`C901`) and Pylint structural complexity (`PLR0911`–`PLR0915`) rules configured directly within `pyproject.toml`:
+
+| Rule Code | Analysis Dimension           | Configured Section        | Numerical Ceiling     | Rationale & Impact                                                                             |
+| :-------- | :--------------------------- | :------------------------ | :-------------------- | :--------------------------------------------------------------------------------------------- |
+| `C901`    | McCabe Cyclomatic Complexity | `[tool.ruff.lint.mccabe]` | `max-complexity = 10` | Restricts independent execution paths per function to ensure straightforward unit testing.     |
+| `PLR0911` | Maximum Return Statements    | `[tool.ruff.lint.pylint]` | `max-returns = 6`     | Limits excessive exit branches, encouraging clean control flow consolidation.                  |
+| `PLR0912` | Maximum Branching Paths      | `[tool.ruff.lint.pylint]` | `max-branches = 12`   | Prevents deeply nested conditional logic (`if`/`elif`/`match`/`try`) within a single scope.    |
+| `PLR0913` | Maximum Function Arguments   | `[tool.ruff.lint.pylint]` | `max-args = 5`        | Encourages parameter grouping into typed structures, dataclasses, or configuration namespaces. |
+| `PLR0915` | Maximum Statements           | `[tool.ruff.lint.pylint]` | `max-statements = 50` | Prevents monolithic function bodies by requiring decomposed helper procedures.                 |
+
+### Inline `# noqa` Baseline Policy
+
+Legacy functions created prior to the introduction of these complexity constraints are grandfathered strictly using targeted, inline `# noqa` annotations placed directly on their function definition (`def`) lines:
+
+```python
+def legacy_processing_routine(payload: dict[str, Any]) -> dict[str, Any]:  # noqa: C901, PLR0912, PLR0915
+    ...
+```
+
+The baseline policy adheres to three non-negotiable operational invariants:
+
+1. **No Blanket Suppressions**: Complexity rules must never be bypassed globally via `[tool.ruff.lint].ignore` or on a file level via `[tool.ruff.lint.per-file-ignores]`. Suppressions must remain localised and explicitly visible at the exact point of definition.
+2. **Zero Runtime Alterations**: Grandfathering legacy routines preserves exact existing control flow, error handling, and networking behaviour with zero refactoring risk during baseline establishment.
+3. **No Legacy Expansion**: New functions or touched methods must comply with the complexity thresholds without introducing new inline suppressions.
+
+### Automated Ratchet Ceiling Governance
+
+To prevent technical debt accumulation and ensure that legacy complexity is monotonically eliminated over time, an automated ratchet ceiling is enforced in `tests/test_complexity_baseline.py`.
+
+The ratchet test programmatically inspects all source files under `src/holon_coherence/`:
+
+- **Inventory & Matching**: Accurately counts every line containing inline complexity suppressions (`C901`, `PLR0911`, `PLR0912`, `PLR0913`, `PLR0915`).
+- **Ceiling Enforcement**: Asserts that total suppressions do not exceed `BASELINE_CEILING` (currently 40). Any commit introducing an ungrandfathered complexity violation or additional `# noqa` suppression will fail CI automatically.
+- **Monotonic Ratchet Down**: When legacy functions are refactored into smaller, modular sub-routines during standard maintenance, the corresponding `# noqa` tags are removed and `BASELINE_CEILING` is reduced accordingly, permanently locking in the code quality improvement.

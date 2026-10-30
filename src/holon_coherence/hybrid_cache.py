@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class HybridCacheStore:
     """Hybrid exact prefix tree and semantic local cache store for LLM responses."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         cache_dir: str | None = None,
         similarity_threshold: float = 0.85,
@@ -214,7 +214,9 @@ class HybridCacheStore:
         norm = re.sub(r"\b(?:task|run)[-_]\d+\b", "task-<ID>", norm)
         return norm
 
-    def _extract_user_content(self, payload: dict[str, Any], max_recent_turns: int = 2) -> str:
+    def _extract_user_content(  # noqa: C901, PLR0912
+        self, payload: dict[str, Any], max_recent_turns: int = 2
+    ) -> str:
         """Extracts user message content specifically to avoid system prompt and JSON key token pollution.
         Prioritizes the most recent user turns to prevent long conversation history token dilution.
         """
@@ -280,7 +282,7 @@ class HybridCacheStore:
             user_texts.append(payload["prompt"])
         return " ".join(user_texts)
 
-    def _extract_system_prompt(self, payload: dict[str, Any]) -> str:
+    def _extract_system_prompt(self, payload: dict[str, Any]) -> str:  # noqa: C901, PLR0912
         """Extracts normalized system instructions from Anthropic/Gemini/OpenAI payload schemas."""
         if not isinstance(payload, dict):
             return ""
@@ -322,7 +324,7 @@ class HybridCacheStore:
 
         return " ".join(system_texts).strip()
 
-    def get(self, payload: dict[str, Any], provider: str = "anthropic") -> dict[str, Any] | None:
+    def get(self, payload: dict[str, Any], provider: str = "anthropic") -> dict[str, Any] | None:  # noqa: C901
         """Looks up cached response by exact prefix match or semantic similarity match.
 
         Returns:

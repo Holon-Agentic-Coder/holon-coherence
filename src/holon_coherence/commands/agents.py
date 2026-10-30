@@ -42,7 +42,7 @@ class RunnerFlags(NamedTuple):
     model: str | None = None
 
 
-def extract_runner_flags(argv: list[str]) -> RunnerFlags:
+def extract_runner_flags(argv: list[str]) -> RunnerFlags:  # noqa: C901, PLR0912, PLR0915
     """Extract runner flags and ``--help`` from arguments, preserving agent argument order."""
     ephemeral = False
     port = None
@@ -142,7 +142,7 @@ def resolve_agent_binary(agent_name: str) -> str | None:
     return None
 
 
-def build_agent_env(
+def build_agent_env(  # noqa: C901, PLR0912
     agent_name: str,
     port: int,
     drop_no_proxy: tuple[str, ...] = (),
@@ -202,7 +202,7 @@ def build_agent_env(
     return env
 
 
-def run_agent(
+def run_agent(  # noqa: C901, PLR0912, PLR0913, PLR0915
     agent_name: str,
     agent_args: list[str],
     ephemeral: bool = False,

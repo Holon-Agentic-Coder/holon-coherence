@@ -142,7 +142,7 @@ __all__ = [
 ]
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> None:  # noqa: C901, PLR0912, PLR0915
     if argv is None:
         argv = sys.argv[1:]
 

@@ -71,7 +71,7 @@ class TokenCounts(tuple):
         return inst
 
 
-def extract_token_counts(
+def extract_token_counts(  # noqa: C901, PLR0912
     req_data: dict[str, Any], resp_data: dict[str, Any] | str, provider: str
 ) -> tuple[int, int, int]:
     """Extracts (input_tokens, output_tokens, cache_read_tokens) from request/response data.

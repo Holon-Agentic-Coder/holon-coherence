@@ -120,7 +120,7 @@ def is_loopback_host(host: str) -> bool:
         return False
 
 
-def _split_authority(value: str) -> tuple[str | None, int | None]:
+def _split_authority(value: str) -> tuple[str | None, int | None]:  # noqa: C901, PLR0911, PLR0912
     """Split ``host``, ``host:port`` or ``[ipv6]:port`` into a normalized host and optional port."""
     value = value.strip()
     if not value:
@@ -207,7 +207,7 @@ def parse_local_target(raw: str | None) -> LocalTarget | None:
 _parse_url = parse_local_target
 
 
-def detect_host_addresses() -> tuple[str, ...]:
+def detect_host_addresses() -> tuple[str, ...]:  # noqa: C901
     """Return the host's own non-loopback unicast addresses.
 
     Safe to rewrite onto the gateway *because these addresses are the host*: the probe
@@ -334,7 +334,7 @@ def targets_from_env(environ: dict[str, str] | None = None) -> tuple[LocalTarget
     return decode_targets(env.get(HOST_LOCAL_ENV_VAR))
 
 
-def decide_rewrite(
+def decide_rewrite(  # noqa: C901, PLR0911, PLR0912
     host: str | None,
     port: int | None,
     targets: tuple[LocalTarget, ...],

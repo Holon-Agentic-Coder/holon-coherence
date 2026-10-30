@@ -127,7 +127,7 @@ class JSONContextCleaner:
 
         return payload
 
-    def _deduplicate_anthropic_tool_outputs(
+    def _deduplicate_anthropic_tool_outputs(  # noqa: C901, PLR0912, PLR0915
         self,
         messages: list[dict[str, Any]],
         seen_content_hashes: dict[str, tuple[int, str]],
@@ -274,7 +274,7 @@ class JSONContextCleaner:
 
         return [*prefix, summary_msg, *suffix]
 
-    def _merge_consecutive_roles(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _merge_consecutive_roles(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:  # noqa: C901, PLR0912
         if not messages:
             return []
         merged = []
@@ -320,7 +320,7 @@ class JSONContextCleaner:
                 merged.append(copy.deepcopy(msg))
         return merged
 
-    def _count_existing_cache_controls(self, payload: dict[str, Any]) -> int:
+    def _count_existing_cache_controls(self, payload: dict[str, Any]) -> int:  # noqa: C901, PLR0912
         count = 0
 
         system = payload.get("system")
@@ -353,7 +353,7 @@ class JSONContextCleaner:
 
         return count
 
-    def _inject_anthropic_cache_control(
+    def _inject_anthropic_cache_control(  # noqa: C901, PLR0912
         self, payload: dict[str, Any], stats: dict[str, int] | None = None
     ) -> dict[str, Any]:
         existing_count = self._count_existing_cache_controls(payload)
@@ -411,7 +411,7 @@ class JSONContextCleaner:
 
         return payload
 
-    def _clean_openai(
+    def _clean_openai(  # noqa: C901, PLR0912, PLR0915
         self,
         payload: dict[str, Any],
         seen_content_hashes: dict[str, tuple[int, str]],
@@ -499,7 +499,7 @@ class JSONContextCleaner:
         payload["messages"] = cleaned_messages
         return payload
 
-    def _clean_gemini(
+    def _clean_gemini(  # noqa: C901, PLR0912, PLR0915
         self,
         payload: dict[str, Any],
         seen_content_hashes: dict[str, tuple[int, str]],

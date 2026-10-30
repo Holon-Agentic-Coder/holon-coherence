@@ -421,7 +421,7 @@ def _wall_clock_seconds(*values: Any) -> float | None:
     return None
 
 
-def resolve_flow_timing(flow: Any, completed_at: float | None = None) -> FlowTiming:
+def resolve_flow_timing(flow: Any, completed_at: float | None = None) -> FlowTiming:  # noqa: C901
     """Derive TTFT / total / generation seconds for one flow using a single clock domain.
 
     Prefers the ``time.perf_counter()`` stamps the addon records in ``request()`` /
@@ -541,7 +541,7 @@ class CumulativeMetrics:
             self.cache_hits += 1
             self.total_turns += 1
 
-    def record_response(
+    def record_response(  # noqa: PLR0913
         self,
         input_tokens: int = 0,
         output_tokens: int = 0,
@@ -657,7 +657,7 @@ def _make_http_response(flow: Any, status_code: int, content: bytes, headers: di
     return _SimpleResponse(status_code, content, headers)
 
 
-def is_local_target(flow: Any) -> bool:
+def is_local_target(flow: Any) -> bool:  # noqa: C901
     """Checks whether flow is directed to a local or non-cloud target."""
     req = getattr(flow, "request", None)
     if req is None:
@@ -693,7 +693,7 @@ def is_local_target(flow: Any) -> bool:
     return bool(provider == "gemini" and host_lower and not any(host_lower.endswith(c) for c in cloud_gemini))
 
 
-def normalize_anthropic_request(
+def normalize_anthropic_request(  # noqa: C901, PLR0912
     flow: Any,
     data: dict[str, Any],
     is_local: bool | None = None,
@@ -755,7 +755,7 @@ def normalize_anthropic_request(
     return data, True
 
 
-def translate_gemini_to_openai_request(
+def translate_gemini_to_openai_request(  # noqa: C901, PLR0912, PLR0915
     gemini_req: dict[str, Any],
     model: str | None = None,
 ) -> dict[str, Any]:
@@ -910,7 +910,7 @@ def translate_gemini_to_openai_request(
     return openai_req
 
 
-def translate_openai_to_gemini_response(openai_resp: dict[str, Any]) -> dict[str, Any]:
+def translate_openai_to_gemini_response(openai_resp: dict[str, Any]) -> dict[str, Any]:  # noqa: C901, PLR0912
     """Translates an OpenAI chat completion response to Gemini v1beta candidate structure."""
     candidates: list[dict[str, Any]] = []
     choices = openai_resp.get("choices", [])
@@ -1003,7 +1003,7 @@ def translate_openai_to_gemini_response(openai_resp: dict[str, Any]) -> dict[str
     }
 
 
-def translate_openai_sse_chunk_to_gemini(
+def translate_openai_sse_chunk_to_gemini(  # noqa: C901, PLR0912, PLR0915
     chunk_str: str,
     stream_state: dict[str, Any] | None = None,
 ) -> str:
@@ -1789,7 +1789,7 @@ class MitmproxyAddon:
                 "server to a non-loopback interface."
             )
 
-    def _dump_flow_transaction(
+    def _dump_flow_transaction(  # noqa: PLR0913, PLR0915
         self,
         flow: Any,
         resp_data: Any,
@@ -1899,7 +1899,7 @@ class MitmproxyAddon:
         except Exception as exc:
             logger.debug("Failed to record flow wire transaction: %s", exc)
 
-    def request(self, flow: Any) -> None:
+    def request(self, flow: Any) -> None:  # noqa: C901, PLR0912, PLR0915
         """Mitmproxy request callback."""
         if getattr(flow, "request", None) is None:
             return
@@ -2156,7 +2156,7 @@ class MitmproxyAddon:
 
                     response.stream = sse_stream_wrapper
 
-    def response(self, flow: Any) -> None:
+    def response(self, flow: Any) -> None:  # noqa: C901, PLR0912, PLR0915
         """Mitmproxy response callback."""
         if getattr(flow, "request", None) is None or getattr(flow, "response", None) is None:
             return

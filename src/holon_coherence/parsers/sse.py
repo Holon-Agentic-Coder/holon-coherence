@@ -42,7 +42,7 @@ def find_nested_key(data: Any, target_keys: tuple[str, ...] | str, max_depth: in
     return None
 
 
-def extract_sse_content(resp_text: str, provider: str) -> str:
+def extract_sse_content(resp_text: str, provider: str) -> str:  # noqa: C901, PLR0912, PLR0915
     """Extracts aggregated completion text from SSE lines."""
     accumulated_content: list[str] = []
     lines = resp_text.splitlines()
@@ -138,7 +138,7 @@ def extract_sse_content(resp_text: str, provider: str) -> str:
     return "".join(accumulated_content)
 
 
-def extract_sse_token_counts(resp_text: str, req_data: dict[str, Any], provider: str) -> TokenCounts:
+def extract_sse_token_counts(resp_text: str, req_data: dict[str, Any], provider: str) -> TokenCounts:  # noqa: C901, PLR0912, PLR0915
     """Extracts (input_tokens, output_tokens, cache_read_tokens) from SSE stream text.
 
     Args:

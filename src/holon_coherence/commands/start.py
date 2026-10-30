@@ -394,7 +394,7 @@ def _chmod_proxy_dirs(ca_dir: str, cache_dir: str, logs_dir: str, ca_files: bool
             os.chmod(path, mode)
 
 
-def ensure_proxy_running(
+def ensure_proxy_running(  # noqa: C901, PLR0912, PLR0915
     port: int = DEFAULT_PROXY_PORT,
     image: str = "holon-coherence:latest",
     host_local_spec: str = "",
@@ -567,7 +567,7 @@ def ensure_proxy_running(
     return not was_running
 
 
-def handle_start(args: Any) -> None:
+def handle_start(args: Any) -> None:  # noqa: C901, PLR0912, PLR0915
     """Execute proxy start command in container or on host."""
     cli = get_cli()
     in_container = getattr(cli, "is_in_container", is_in_container)
