@@ -8,6 +8,7 @@ import os
 import secrets
 from collections.abc import Callable
 from typing import Any
+
 from holon_coherence.commands.docker_ops import (
     get_container_mapped_port,
     get_container_name,
@@ -65,21 +66,25 @@ def get_active_web_token(token_path: str = WEB_TOKEN_PATH) -> str | None:
     return None
 
 
-def handle_web_token(
+def handle_web_token(  # noqa: PLR0913
     args: Any = None,
     token_path: str = WEB_TOKEN_PATH,
     *,
-    tok_getter_fn: Callable[[str], str | None] = get_active_web_token,
-    container_tok_getter_fn: Callable[[str], str | None] = get_container_web_token,
-    is_running_fn: Callable[[str], bool] = is_container_running,
-    get_mapped_port_fn: Callable[[str, int], int | None] = get_container_mapped_port,
+    tok_getter_fn: Callable[[str], str | None] | None = None,
+    container_tok_getter_fn: Callable[[str], str | None] | None = None,
+    is_running_fn: Callable[[str], bool] | None = None,
+    get_mapped_port_fn: Callable[[str, int], int | None] | None = None,
 ) -> int:
     """Displays the active mitmweb inspector token and, when it is running, its resolved URL."""
+    tok_getter = tok_getter_fn or get_active_web_token
+    container_tok_getter = container_tok_getter_fn or get_container_web_token
+    is_running = is_running_fn or is_container_running
+    get_mapped_port = get_mapped_port_fn or get_container_mapped_port
     name = getattr(args, "name", None) or get_container_name()
-    web_port = get_mapped_port_fn(name, INSPECTOR_CONTAINER_PORT) if is_running_fn(name) else None
+    web_port = get_mapped_port(name, INSPECTOR_CONTAINER_PORT) if is_running(name) else None
     if web_port is not None:
         # A running inspector accepts only its own container's token, not the last-written file.
-        container_token = container_tok_getter_fn(name)
+        container_token = container_tok_getter(name)
         if container_token:
             print(f"🔑 Active mitmweb inspector token: {container_token}")
             print(f"🌐 {INSPECTOR_LABEL}: {inspector_url(web_port, container_token)}")
@@ -87,7 +92,7 @@ def handle_web_token(
         print(f"🌐 mitmweb inspector: running on 127.0.0.1:{web_port} (token unavailable for container '{name}')")
         print(f"   Recover the token the container saved with: {token_recovery_command(name)}")
         return 1
-    token = tok_getter_fn(token_path)
+    token = tok_getter(token_path)
     if token:
         print(f"🔑 Last saved mitmweb inspector token ({token_path}): {token}")
         print(

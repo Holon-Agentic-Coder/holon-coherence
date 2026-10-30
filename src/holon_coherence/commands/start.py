@@ -169,10 +169,8 @@ def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
 
 def find_available_port(start_port: int = 8080, max_attempts: int = 100, host: str = "127.0.0.1") -> int:
     """Find an available TCP port on the host starting from start_port."""
-    cli = get_cli()
-    in_use = getattr(cli, "is_port_in_use", is_port_in_use)
     for p in range(start_port, start_port + max_attempts):
-        if not in_use(p, host=host):
+        if not is_port_in_use(p, host=host):
             return p
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind((host, 0))
@@ -193,8 +191,6 @@ def wait_for_proxy_ready(
     ``timeout`` is a duration measured on the monotonic clock, so a wall-clock step (NTP
     correction, VM resume, a manual ``date``) can neither stretch nor cut short the cold-start wait.
     """
-    cli = get_cli()
-    is_running = getattr(cli, "is_container_running", is_container_running)
     name = container_name or get_container_name()
     deadline = time.monotonic() + timeout
     candidate_urls = (
@@ -202,7 +198,7 @@ def wait_for_proxy_ready(
         f"http://127.0.0.1:{port}/_holon/metrics",
     )
     while time.monotonic() < deadline:
-        if not is_running(name):
+        if not is_container_running(name):
             return False
 
         for url in candidate_urls:
@@ -312,21 +308,23 @@ def probe_host_local_reachable(port: int, timeout: float = 15.0, container_name:
 def plan_local_llm_route(
     raw_base: str,
     *,
-    merge_no_proxy_fn: Callable[[dict[str, str] | None], str] = merge_no_proxy_values,
-    detect_addrs_fn: Callable[[], tuple[str, ...]] = detect_host_addresses,
+    merge_no_proxy_fn: Callable[[dict[str, str] | None], str] | None = None,
+    detect_addrs_fn: Callable[[], tuple[str, ...]] | None = None,
 ) -> LocalLlmRoute | None:
     """Turn a ``--local-llm-base`` value into the route a runner session applies."""
+    merge_no_proxy = merge_no_proxy_fn or merge_no_proxy_values
+    detect_addrs = detect_addrs_fn or detect_host_addresses
     target = parse_local_target(raw_base)
     if target is None:
         return None
-    host_addresses = detect_addrs_fn()
+    host_addresses = detect_addrs()
     targets = expand_equivalence_class(target, host_addresses)
     return LocalLlmRoute(
         target=target,
         targets=targets,
         container_env_value=encode_targets(targets),
         host_addresses=host_addresses,
-        no_proxy_plan=plan_no_proxy_pruning(merge_no_proxy_fn(None), target, host_addresses),
+        no_proxy_plan=plan_no_proxy_pruning(merge_no_proxy(None), target, host_addresses),
     )
 
 

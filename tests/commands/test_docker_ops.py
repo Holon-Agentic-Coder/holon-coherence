@@ -9,18 +9,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from holon_coherence.commands.docker_ops import (
-    DEFAULT_CONTAINER_NAME,
     DOCKER_BUILD_TIMEOUT_SECONDS,
     check_docker_daemon,
     ensure_docker_image,
     get_container_mapped_port,
-    get_container_name,
     get_container_web_token,
     handle,
-    handle_build,
-    handle_logs,
-    handle_status,
-    handle_stop,
     is_container_bound_to_port,
     is_container_running,
     register,
@@ -58,7 +52,7 @@ class TestDockerDiagnostics:
         timeout_err = subprocess.TimeoutExpired(cmd=["docker", "info"], timeout=5.0)
         with (
             patch("shutil.which", return_value="/usr/local/bin/docker"),
-            patch("subprocess.run", side_effect=timeout_err) as mock_run,
+            patch("subprocess.run", side_effect=timeout_err),
         ):
             ok, err = check_docker_daemon()
             assert ok is False
@@ -151,7 +145,7 @@ class TestDockerOpsRegistrationAndDispatch:
         args_build = parser.parse_args(["build", "--tag", "custom:1.0"])
         assert args_build.command == "build"
         assert args_build.tag == "custom:1.0"
-        assert getattr(args_build, "handler") == handle
+        assert args_build.handler == handle
 
         args_stop = parser.parse_args(["stop", "--name", "my-box"])
         assert args_stop.command == "stop"
@@ -182,3 +176,134 @@ class TestDockerOpsRegistrationAndDispatch:
         with patch("holon_coherence.commands.docker_ops.handle_logs", return_value=0) as mock_l:
             assert handle(argparse.Namespace(command="logs")) == 0
             mock_l.assert_called_once()
+
+
+class TestEnsureDockerImage:
+    """Tests for unified ensure_docker_image helper."""
+
+    def test_image_already_exists(self) -> None:
+        with patch("subprocess.run", return_value=MagicMock(returncode=0)) as mock_run:
+            ensure_docker_image("holon-coherence:latest", rebuild=False)
+            mock_run.assert_called_once_with(
+                ["docker", "image", "inspect", "holon-coherence:latest"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+    def test_image_builds_when_rebuild_true(self) -> None:
+        with (
+            patch("os.path.exists", return_value=True),
+            patch("subprocess.run", return_value=MagicMock(returncode=0)) as mock_run,
+        ):
+            ensure_docker_image("holon-coherence:latest", rebuild=True)
+            mock_run.assert_called_once()
+            cmd = mock_run.call_args[0][0]
+            assert cmd[:4] == ["docker", "build", "-t", "holon-coherence:latest"]
+
+    def test_image_pulls_and_ghcr_fallback(self) -> None:
+        with (
+            patch(
+                "subprocess.run",
+                side_effect=[
+                    MagicMock(returncode=1),  # inspect fails
+                    MagicMock(returncode=1),  # docker pull image fails
+                    MagicMock(returncode=0),  # docker pull ghcr succeeds
+                    MagicMock(returncode=0),  # docker tag succeeds
+                ],
+            ) as mock_run,
+            patch("os.path.exists", side_effect=lambda p: not str(p).endswith("Dockerfile")),
+        ):
+            ensure_docker_image("holon-coherence:latest", rebuild=False)
+            assert mock_run.call_count == 4
+            pull_call = mock_run.call_args_list[1]
+            assert pull_call[0][0] == ["docker", "pull", "holon-coherence:latest"]
+            assert pull_call[1].get("stdout") == subprocess.DEVNULL
+            assert pull_call[1].get("stderr") == subprocess.DEVNULL
+
+    def test_image_pull_slash_not_prefixed_to_ghcr(self) -> None:
+        with (
+            patch(
+                "subprocess.run",
+                side_effect=[
+                    MagicMock(returncode=1),  # inspect fails
+                    MagicMock(returncode=1),  # docker pull image fails
+                ],
+            ) as mock_run,
+            patch("os.path.exists", side_effect=lambda p: not str(p).endswith("Dockerfile")),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            ensure_docker_image("custom-org/custom-img:latest", rebuild=False)
+        assert exc_info.value.code == 1
+        assert mock_run.call_count == 2
+
+    def test_docker_build_timeout_exits(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """ensure_docker_image exits 1 when docker build times out."""
+        with (
+            patch("os.path.exists", return_value=True),
+            patch(
+                "subprocess.run",
+                side_effect=subprocess.TimeoutExpired(cmd=["docker", "build"], timeout=DOCKER_BUILD_TIMEOUT_SECONDS),
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            ensure_docker_image("holon-coherence:latest", rebuild=True)
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert f"timed out after {DOCKER_BUILD_TIMEOUT_SECONDS}s" in captured.err
+
+    def test_docker_pull_timeout_exits(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """ensure_docker_image exits 1 when docker pull times out."""
+        with (
+            patch("os.path.exists", side_effect=lambda p: not str(p).endswith("Dockerfile")),
+            patch(
+                "subprocess.run",
+                side_effect=[
+                    MagicMock(returncode=1),  # inspect fails
+                    subprocess.TimeoutExpired(cmd=["docker", "pull"], timeout=DOCKER_BUILD_TIMEOUT_SECONDS),
+                ],
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            ensure_docker_image("holon-coherence:latest", rebuild=False)
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "timed out" in captured.err
+
+    def test_docker_ghcr_pull_timeout_exits(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """ensure_docker_image exits 1 when GHCR pull fallback times out."""
+        with (
+            patch("os.path.exists", side_effect=lambda p: not str(p).endswith("Dockerfile")),
+            patch(
+                "subprocess.run",
+                side_effect=[
+                    MagicMock(returncode=1),  # inspect fails
+                    MagicMock(returncode=1),  # docker pull primary fails
+                    subprocess.TimeoutExpired(cmd=["docker", "pull"], timeout=DOCKER_BUILD_TIMEOUT_SECONDS),
+                ],
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            ensure_docker_image("holon-coherence:latest", rebuild=False)
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "timed out" in captured.err
+
+    def test_docker_tag_timeout_exits(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """ensure_docker_image exits 1 when docker tag times out after successful GHCR pull."""
+        with (
+            patch("os.path.exists", side_effect=lambda p: not str(p).endswith("Dockerfile")),
+            patch(
+                "subprocess.run",
+                side_effect=[
+                    MagicMock(returncode=1),  # inspect fails
+                    MagicMock(returncode=1),  # docker pull primary fails
+                    MagicMock(returncode=0),  # docker pull ghcr succeeds
+                    subprocess.TimeoutExpired(cmd=["docker", "tag"], timeout=30),
+                ],
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            ensure_docker_image("holon-coherence:latest", rebuild=False)
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "timed out" in captured.err

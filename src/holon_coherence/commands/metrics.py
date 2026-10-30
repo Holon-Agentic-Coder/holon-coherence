@@ -10,6 +10,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from typing import Any
+
 from holon_coherence.commands.docker_ops import (
     get_container_mapped_port,
     get_container_name,
@@ -234,7 +235,7 @@ def handle_metrics(  # noqa: C901, PLR0912, PLR0915
     json_output: bool = False,
     live: bool = False,
     *,
-    resolve_endpoints_fn: Callable[..., ExposedEndpoints] = resolve_container_endpoints,
+    resolve_endpoints_fn: Callable[..., ExposedEndpoints] | None = None,
 ) -> int:
     """Fetch and display cumulative optimization metrics via terminal or JSON.
 
@@ -363,7 +364,8 @@ def handle_metrics(  # noqa: C901, PLR0912, PLR0915
         provider_cache_rate = (total_cache_read / total_in) if total_in > 0 else 0.0
     provider_cache_pct = provider_cache_rate * 100.0
 
-    endpoints = resolve_endpoints_fn(container, fallback_proxy_port=target_port)
+    resolve_endpoints = resolve_endpoints_fn or resolve_container_endpoints
+    endpoints = resolve_endpoints(container, fallback_proxy_port=target_port)
     if is_live:
         # The live proxy answered on target_port, so that is the address to report, even when an
         # explicit --port points somewhere other than the container's mapping.

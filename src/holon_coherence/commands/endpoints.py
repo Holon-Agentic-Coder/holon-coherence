@@ -61,9 +61,9 @@ def resolve_container_endpoints(
     container_name: str,
     fallback_proxy_port: int | None = None,
     *,
-    is_running_fn: Callable[[str], bool] = is_container_running,
-    get_mapped_port_fn: Callable[[str, int], int | None] = get_container_mapped_port,
-    get_token_fn: Callable[[str], str | None] = get_container_web_token,
+    is_running_fn: Callable[[str], bool] | None = None,
+    get_mapped_port_fn: Callable[[str, int], int | None] | None = None,
+    get_token_fn: Callable[[str], str | None] | None = None,
 ) -> ExposedEndpoints:
     """Resolve the endpoints a proxy container really exposes from its Docker port mappings.
 
@@ -72,12 +72,15 @@ def resolve_container_endpoints(
     The token comes from the container itself, never from the shared ``~/.holon/web-token``, which
     every host ``start`` overwrites regardless of ``--name``.
     """
-    if not is_running_fn(container_name):
+    is_running = is_running_fn or is_container_running
+    get_mapped_port = get_mapped_port_fn or get_container_mapped_port
+    get_token = get_token_fn or get_container_web_token
+    if not is_running(container_name):
         return ExposedEndpoints(proxy_port=None, web_port=None, web_token=None)
 
-    proxy_port = get_mapped_port_fn(container_name, PROXY_CONTAINER_PORT) or fallback_proxy_port
-    web_port = get_mapped_port_fn(container_name, INSPECTOR_CONTAINER_PORT)
-    web_token = get_token_fn(container_name) if web_port is not None else None
+    proxy_port = get_mapped_port(container_name, PROXY_CONTAINER_PORT) or fallback_proxy_port
+    web_port = get_mapped_port(container_name, INSPECTOR_CONTAINER_PORT)
+    web_token = get_token(container_name) if web_port is not None else None
     return ExposedEndpoints(proxy_port=proxy_port, web_port=web_port, web_token=web_token)
 
 

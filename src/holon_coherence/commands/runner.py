@@ -33,14 +33,16 @@ def build_proxy_env(
     ca_cert_path: str | None = None,
     drop_no_proxy: tuple[str, ...] = (),
     *,
-    merge_no_proxy_fn: Callable[[dict[str, str] | None], str] = merge_no_proxy_values,
-    bundle_getter_fn: Callable[[str], str] = get_or_create_merged_ca_bundle,
+    merge_no_proxy_fn: Callable[[dict[str, str] | None], str] | None = None,
+    bundle_getter_fn: Callable[[str], str] | None = None,
 ) -> dict[str, str]:
     """Construct environment variables for proxy routing and CA bundle trust.
 
     ``drop_no_proxy`` removes entries that would keep a declared host-local LLM endpoint
     away from the proxy (see ``plan_no_proxy_pruning``).
     """
+    merge_no_proxy = merge_no_proxy_fn or merge_no_proxy_values
+    bundle_getter = bundle_getter_fn or get_or_create_merged_ca_bundle
     env: dict[str, str] = {
         "HTTP_PROXY": proxy_url,
         "HTTPS_PROXY": proxy_url,
@@ -50,7 +52,7 @@ def build_proxy_env(
         "all_proxy": proxy_url,
     }
 
-    merged_no_proxy = merge_no_proxy_fn(None)
+    merged_no_proxy = merge_no_proxy(None)
     if drop_no_proxy:
         dropped = {entry.strip().lower() for entry in drop_no_proxy if entry.strip()}
         merged_no_proxy = ",".join(entry for entry in parse_no_proxy(merged_no_proxy) if entry.lower() not in dropped)
@@ -78,7 +80,7 @@ def build_proxy_env(
                 ca_cert = alt_ca
 
     if os.path.exists(ca_cert):
-        merged_bundle = bundle_getter_fn(ca_cert)
+        merged_bundle = bundle_getter(ca_cert)
         for var in CA_ENV_VARS:
             env[var] = merged_bundle
     else:
@@ -151,10 +153,12 @@ def execute_interactive_process(cmd: list[str], env: dict[str, str]) -> int:  # 
 def handle_run(
     args: Any,
     *,
-    env_builder_fn: Callable[..., dict[str, str]] = build_proxy_env,
-    exec_proc_fn: Callable[[list[str], dict[str, str]], int] = execute_interactive_process,
+    env_builder_fn: Callable[..., dict[str, str]] | None = None,
+    exec_proc_fn: Callable[[list[str], dict[str, str]], int] | None = None,
 ) -> int:
     """Run a command with inline proxy properties."""
+    env_builder = env_builder_fn or build_proxy_env
+    exec_proc = exec_proc_fn or execute_interactive_process
     if not args.cmd:
         print("Error: No command specified to run.", file=sys.stderr)
         sys.exit(1)
@@ -166,9 +170,9 @@ def handle_run(
         sys.exit(1)
 
     env = os.environ.copy()
-    env.update(env_builder_fn(args.proxy_url, args.ca_cert))
+    env.update(env_builder(args.proxy_url, args.ca_cert))
 
-    return exec_proc_fn(raw_cmd, env)
+    return exec_proc(raw_cmd, env)
 
 
 def handle(args: Any) -> int:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 
 from holon_coherence.ca_generator import generate_root_ca
@@ -79,7 +78,7 @@ from holon_coherence.commands import (
     wait_for_proxy_ready,
     web_token,
 )
-from holon_coherence.host_local import GATEWAY_HOSTNAME, detect_host_addresses
+from holon_coherence.host_local import detect_host_addresses
 
 COMMAND_MODULES = (
     start,
@@ -175,6 +174,44 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _runner_kwargs(flags: RunnerFlags) -> dict[str, object]:
+    """Translate extracted runner flags into ``run_agent`` keyword arguments."""
+    kwargs: dict[str, object] = {
+        "ephemeral": flags.ephemeral,
+        "port": flags.port,
+        "local_llm_base": flags.local_llm_base,
+    }
+    if flags.model is not None:
+        kwargs["model"] = flags.model
+    return kwargs
+
+
+def _dispatch_run_agent(argv: list[str]) -> None:
+    """Dispatch the ``run-agent`` subcommand from raw argv; always exits."""
+    if not argv[1:]:
+        _print_run_agent_help()
+        sys.exit(1)
+    flags = extract_runner_flags(argv[1:])
+    if flags.help_requested:
+        if flags.agent_args and flags.agent_args[0] in SUPPORTED_AGENTS:
+            _print_agent_help(flags.agent_args[0])
+        else:
+            _print_run_agent_help()
+        sys.exit(0)
+    if not flags.agent_args:
+        _print_run_agent_help()
+        sys.exit(1)
+    agent_target = flags.agent_args[0]
+    if agent_target not in SUPPORTED_AGENTS:
+        supported_list = ", ".join(sorted(set(SUPPORTED_AGENTS)))
+        print(
+            f"Error: Unsupported agent '{agent_target}'. Supported agents: {supported_list}.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    sys.exit(run_agent(agent_target, flags.agent_args[1:], **_runner_kwargs(flags)))
+
+
 def _dispatch_agent_argv(argv: list[str]) -> bool:
     """Direct agent invocation fast-path or run-agent subcommand dispatch."""
     first = argv[0]
@@ -183,44 +220,9 @@ def _dispatch_agent_argv(argv: list[str]) -> bool:
         if flags.help_requested:
             _print_agent_help(first)
             sys.exit(0)
-        kwargs = {
-            "ephemeral": flags.ephemeral,
-            "port": flags.port,
-            "local_llm_base": flags.local_llm_base,
-        }
-        if flags.model is not None:
-            kwargs["model"] = flags.model
-        sys.exit(run_agent(first, flags.agent_args, **kwargs))
+        sys.exit(run_agent(first, flags.agent_args, **_runner_kwargs(flags)))
     if first == "run-agent":
-        if not argv[1:]:
-            _print_run_agent_help()
-            sys.exit(1)
-        flags = extract_runner_flags(argv[1:])
-        if flags.help_requested:
-            if flags.agent_args and flags.agent_args[0] in SUPPORTED_AGENTS:
-                _print_agent_help(flags.agent_args[0])
-            else:
-                _print_run_agent_help()
-            sys.exit(0)
-        if not flags.agent_args:
-            _print_run_agent_help()
-            sys.exit(1)
-        agent_target = flags.agent_args[0]
-        if agent_target not in SUPPORTED_AGENTS:
-            supported_list = ", ".join(sorted(set(SUPPORTED_AGENTS)))
-            print(
-                f"Error: Unsupported agent '{agent_target}'. Supported agents: {supported_list}.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        kwargs = {
-            "ephemeral": flags.ephemeral,
-            "port": flags.port,
-            "local_llm_base": flags.local_llm_base,
-        }
-        if flags.model is not None:
-            kwargs["model"] = flags.model
-        sys.exit(run_agent(agent_target, flags.agent_args[1:], **kwargs))
+        _dispatch_run_agent(argv)
     return False
 
 
@@ -244,8 +246,8 @@ def main(argv: list[str] | None = None) -> None:
         res = handler(args)
         if args.command in ("run", "metrics", "ab-test", "web-token", "web-key"):
             sys.exit(res if isinstance(res, int) else 0)
-        if isinstance(res, int) and res != 0:
-            sys.exit(res)
+        # Parity with the pre-refactor dispatcher: build/stop/status/logs/start/init-ca
+        # report via stdout/stderr and never propagate their return codes as exit codes.
         return
 
     parser.print_help(sys.stderr)

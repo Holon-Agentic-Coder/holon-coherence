@@ -4,18 +4,15 @@ from __future__ import annotations
 
 import argparse
 import os
-import ssl
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from holon_coherence.commands.ca import (
-    CA_ENV_VARS,
     find_system_ca_bundle,
     get_or_create_merged_ca_bundle,
     handle,
-    handle_init_ca,
     register,
 )
 
@@ -65,10 +62,11 @@ class TestFindSystemCABundle:
     def test_find_system_ca_bundle_ignores_merged_bundle(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         merged_file = tmp_path / "holon-merged-ca-bundle.crt"
         merged_file.write_text("merged")
+        real_sys_ca = tmp_path / "sys-ca.crt"
+        real_sys_ca.write_text("sys")
         monkeypatch.setenv("SSL_CERT_FILE", str(merged_file))
-        with patch("ssl.get_default_verify_paths", return_value=MagicMock(cafile=None)):
-            with patch("os.path.isfile", side_effect=lambda p: p != str(merged_file) and os.path.exists(p)):
-                assert find_system_ca_bundle() is None
+        monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(real_sys_ca))
+        assert find_system_ca_bundle() == str(real_sys_ca)
 
 
 class TestGetOrCreateMergedCABundle:
@@ -159,12 +157,12 @@ class TestCACommandRegistrationAndDispatch:
     def test_register_and_defaults(self) -> None:
         parser = argparse.ArgumentParser()
         subparsers = parser.add_subparsers(dest="command")
-        ca_parser = register(subparsers)
+        register(subparsers)
 
         args = parser.parse_args(["init-ca"])
         assert args.command == "init-ca"
         assert args.output_dir == os.path.expanduser("~/.holon/proxy-ca")
-        assert getattr(args, "handler") == handle
+        assert args.handler == handle
 
     def test_handle_init_ca_invoked(self, tmp_path: Path) -> None:
         out_dir = tmp_path / "ca"

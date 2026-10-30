@@ -11,7 +11,10 @@ import sys
 import urllib.error
 import urllib.request
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from holon_coherence.commands.endpoints import ExposedEndpoints
 
 DEFAULT_CONTAINER_NAME = "holon-coherence-proxy"
 CONTAINER_NAME = DEFAULT_CONTAINER_NAME
@@ -240,11 +243,12 @@ def handle_build(args: Any) -> int:
 def handle_stop(
     args: Any = None,
     *,
-    stopper_fn: Callable[[str | None], None] = stop_proxy_container,
+    stopper_fn: Callable[[str | None], None] | None = None,
 ) -> int:
     """Stop and remove running holon-coherence Docker container."""
+    stopper = stopper_fn or stop_proxy_container
     target_container = getattr(args, "name", None) or get_container_name()
-    stopper_fn(target_container)
+    stopper(target_container)
     return 0
 
 
@@ -304,21 +308,19 @@ def get_container_web_token(container_name: str | None = None) -> str | None:
     return None
 
 
-# Imported lazily: the endpoints helper imports this module.
-from holon_coherence.commands.endpoints import (
-    ExposedEndpoints,
-    print_endpoints,
-    resolve_container_endpoints,
-)
-
-
 def handle_status(
     args: Any = None,
     *,
-    is_running_fn: Callable[[str], bool] = is_container_running,
-    resolve_endpoints_fn: Callable[..., ExposedEndpoints] = resolve_container_endpoints,
+    is_running_fn: Callable[[str], bool] | None = None,
+    resolve_endpoints_fn: Callable[..., ExposedEndpoints] | None = None,
 ) -> int:
     """Check status of holon-coherence Docker container."""
+    # Imported inside the function: the endpoints helper imports this module at the top level,
+    # so a module-level import here would be circular.
+    from holon_coherence.commands.endpoints import print_endpoints, resolve_container_endpoints
+
+    is_running = is_running_fn or is_container_running
+    resolve_endpoints = resolve_endpoints_fn or resolve_container_endpoints
     target_container = getattr(args, "name", None) or get_container_name()
     is_default = target_container in (DEFAULT_CONTAINER_NAME, "holon-coherence")
     display_name = "holon-coherence" if is_default else target_container
@@ -329,7 +331,7 @@ def handle_status(
     except (subprocess.SubprocessError, OSError):
         retcode = 1
 
-    if not is_running_fn(target_container):
+    if not is_running(target_container):
         print(f"\n🔴 {display_name} is down (not running).")
         # Never echo ~/.holon/web-token here: it outlives the container and would be a stale URL.
         print("   mitmweb inspector: not running")
@@ -340,7 +342,7 @@ def handle_status(
         fallback_proxy_port = int(proxy_port_str)
     except ValueError:
         fallback_proxy_port = 8080
-    endpoints = resolve_endpoints_fn(target_container, fallback_proxy_port=fallback_proxy_port)
+    endpoints = resolve_endpoints(target_container, fallback_proxy_port=fallback_proxy_port)
     proxy_port = endpoints.proxy_port or fallback_proxy_port
     print()
     print_endpoints(endpoints, container_name=target_container)

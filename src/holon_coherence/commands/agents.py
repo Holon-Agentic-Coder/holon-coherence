@@ -7,13 +7,14 @@ import os
 import shutil
 import sys
 from collections.abc import Callable
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from holon_coherence.commands.ca import CA_ENV_VARS
 from holon_coherence.commands.docker_ops import stop_proxy_container
 from holon_coherence.commands.runner import build_proxy_env, execute_interactive_process
 from holon_coherence.commands.start import (
     DEFAULT_PROXY_PORT,
+    LocalLlmRoute,
     ensure_proxy_running,
     plan_local_llm_route,
     probe_host_local_reachable,
@@ -143,18 +144,19 @@ def resolve_agent_binary(agent_name: str) -> str | None:
     return None
 
 
-def build_agent_env(  # noqa: C901, PLR0912
+def build_agent_env(  # noqa: C901, PLR0912, PLR0913
     agent_name: str,
     port: int,
     drop_no_proxy: tuple[str, ...] = (),
     model: str | None = None,
     local_llm_base: str | None = None,
+    *,
+    env_builder_fn: Callable[..., dict[str, str]] | None = None,
 ) -> dict[str, str]:
     """Construct environment variables for the child agent subprocess."""
-    cli = get_cli()
     env = os.environ.copy()
     proxy_url = f"http://127.0.0.1:{port}"
-    env_builder = getattr(cli, "build_proxy_env", build_proxy_env)
+    env_builder = env_builder_fn or build_proxy_env
     proxy_env = env_builder(proxy_url, drop_no_proxy=drop_no_proxy)
     env.update(proxy_env)
     if not all(var in proxy_env for var in CA_ENV_VARS):
@@ -211,24 +213,24 @@ def run_agent(  # noqa: C901, PLR0912, PLR0913, PLR0915
     local_llm_base: str | None = None,
     model: str | None = None,
     *,
-    resolve_bin_fn: Callable[[str], str | None] = resolve_agent_binary,
-    plan_route_fn: Callable[[str], LocalLlmRoute | None] = plan_local_llm_route,
-    ensure_proxy_fn: Callable[..., bool] = ensure_proxy_running,
-    probe_host_fn: Callable[[int], tuple[bool, str]] = probe_host_local_reachable,
-    report_route_fn: Callable[..., tuple[str, ...]] = report_local_llm_route,
-    build_env_fn: Callable[..., dict[str, str]] = build_agent_env,
-    exec_proc_fn: Callable[[list[str], dict[str, str]], int] = execute_interactive_process,
-    stop_container_fn: Callable[..., None] = stop_proxy_container,
+    resolve_bin_fn: Callable[[str], str | None] | None = None,
+    plan_route_fn: Callable[[str], LocalLlmRoute | None] | None = None,
+    ensure_proxy_fn: Callable[..., bool] | None = None,
+    probe_host_fn: Callable[[int], tuple[bool, str]] | None = None,
+    report_route_fn: Callable[..., tuple[str, ...]] | None = None,
+    build_env_fn: Callable[..., dict[str, str]] | None = None,
+    exec_proc_fn: Callable[[list[str], dict[str, str]], int] | None = None,
+    stop_container_fn: Callable[..., None] | None = None,
 ) -> int:
     """Launch the optimization proxy and execute the requested coding agent with full telemetry."""
-    resolve_bin = resolve_bin_fn
-    plan_route = plan_route_fn
-    ensure_proxy = ensure_proxy_fn
-    probe_host = probe_host_fn
-    report_route = report_route_fn
-    build_env = build_env_fn
-    exec_proc = exec_proc_fn
-    stop_container = stop_container_fn
+    resolve_bin = resolve_bin_fn or resolve_agent_binary
+    plan_route = plan_route_fn or plan_local_llm_route
+    ensure_proxy = ensure_proxy_fn or ensure_proxy_running
+    probe_host = probe_host_fn or probe_host_local_reachable
+    report_route = report_route_fn or report_local_llm_route
+    build_env = build_env_fn or build_agent_env
+    exec_proc = exec_proc_fn or execute_interactive_process
+    stop_container = stop_container_fn or stop_proxy_container
 
     if port is not None and not (1 <= port <= 65535):
         print(f"Error: Port must be between 1 and 65535, got {port}.", file=sys.stderr)
