@@ -69,17 +69,17 @@ def test_agent_runner_cold_start_help(
     try:
         stop_proxy_container(container_name)
 
-        import holon_coherence.cli as cli_module
+        import holon_coherence.commands.start as start_module
 
         readiness: list[bool] = []
-        real_wait = cli_module.wait_for_proxy_ready
+        real_wait = start_module.wait_for_proxy_ready
 
         def recording_wait(*args: object, **kwargs: object) -> bool:
             result = real_wait(*args, **kwargs)
             readiness.append(result)
             return result
 
-        monkeypatch.setattr(cli_module, "wait_for_proxy_ready", recording_wait)
+        monkeypatch.setattr(start_module, "wait_for_proxy_ready", recording_wait)
 
         # Launch agent runner with --ephemeral and -- --help
         with pytest.raises(SystemExit) as exc_info:
