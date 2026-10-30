@@ -161,7 +161,7 @@ def test_sqlite_pragmas_applied_on_every_connection(tmp_path) -> None:
     assert synchronous == 1
 
 
-def test_concurrent_prune_and_read_write_interleaving(tmp_path) -> None:
+def test_concurrent_prune_and_read_write_interleaving(tmp_path) -> None:  # noqa: C901
     """Background pruning threads concurrently with active readers and writers."""
     store = HybridCacheStore(cache_dir=str(tmp_path), ttl_seconds=1.0, prune_interval_seconds=0.01, prune_batch_size=5)
     for i in range(20):

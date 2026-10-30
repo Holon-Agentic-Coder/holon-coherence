@@ -191,7 +191,7 @@ def _run_recipe_against_stub_conda(tmp_path, recipe, existing_envs=(), env_extra
     return result, _recorded_calls(call_log)
 
 
-def _run_recipe_on_tty(
+def _run_recipe_on_tty(  # noqa: PLR0913
     tmp_path, recipe, keystrokes=None, existing_envs=(), env_extra=None, timeout=30, shell="/bin/sh"
 ):
     """Execute an emitted recipe with stdin on a real pty, so the recipe's `[ -t 0 ]` is true.

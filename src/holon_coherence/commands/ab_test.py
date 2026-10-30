@@ -201,7 +201,7 @@ class ABComparisonScorecard:
         return "\n".join(lines)
 
 
-def load_trace_transactions(file_path: str) -> list[dict[str, Any]]:
+def load_trace_transactions(file_path: str) -> list[dict[str, Any]]:  # noqa: C901, PLR0912
     """Load authentic trace transactions from a .jsonl or .json file."""
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Trace file not found: {file_path}")
@@ -247,7 +247,7 @@ def load_trace_transactions(file_path: str) -> list[dict[str, Any]]:
     return transactions
 
 
-def load_transactions_from_path(path: str) -> list[dict[str, Any]]:
+def load_transactions_from_path(path: str) -> list[dict[str, Any]]:  # noqa: C901
     """Load authentic trace transactions from a file or directory."""
     if not os.path.exists(path):
         raise FileNotFoundError(f"Trace path not found: {path}")
@@ -277,7 +277,7 @@ def load_transactions_from_path(path: str) -> list[dict[str, Any]]:
     return load_trace_transactions(path)
 
 
-def evaluate_offline_ab_run(
+def evaluate_offline_ab_run(  # noqa: C901, PLR0912, PLR0915
     transactions: list[dict[str, Any]],
     cleaner: JSONContextCleaner | None = None,
     rounds: int = 1,
@@ -446,7 +446,7 @@ def evaluate_offline_ab_run(
     return scorecard
 
 
-def evaluate_runs(
+def evaluate_runs(  # noqa: C901, PLR0912, PLR0915
     baseline_transactions: list[dict[str, Any]],
     optimized_transactions: list[dict[str, Any]],
     rounds: int = 1,
@@ -705,7 +705,7 @@ def run_workload_ab_test(
     )
 
 
-def run_live_replay_ab_test(
+def run_live_replay_ab_test(  # noqa: PLR0915
     config: ABRunConfig,
     proxy_port: int = 8080,
 ) -> ABComparisonScorecard:
@@ -797,7 +797,7 @@ def run_live_replay_ab_test(
     )
 
 
-def handle_ab_test(args: argparse.Namespace) -> int:
+def handle_ab_test(args: argparse.Namespace) -> int:  # noqa: C901, PLR0911, PLR0912
     """Handle holon-coherence ab-test command execution across real traffic and offline modes."""
     workload_cmd = getattr(args, "workload_cmd", None)
     trace_path = getattr(args, "trace_file", None)

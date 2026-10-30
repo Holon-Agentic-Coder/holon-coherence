@@ -92,7 +92,7 @@ def build_proxy_env(
     return env
 
 
-def execute_interactive_process(cmd: list[str], env: dict[str, str]) -> int:
+def execute_interactive_process(cmd: list[str], env: dict[str, str]) -> int:  # noqa: C901
     """Execute child process with interactive stdio passthrough, signal forwarding, and exit code propagation."""
 
     def _real_fd(stream: Any, default: int) -> Any:

@@ -62,7 +62,7 @@ def find_system_ca_bundle() -> str | None:
     return None
 
 
-def get_or_create_merged_ca_bundle(ca_cert_path: str) -> str:
+def get_or_create_merged_ca_bundle(ca_cert_path: str) -> str:  # noqa: C901
     """Create or return a merged CA certificate bundle combining system/certifi CA roots and the Holon CA.
 
     This ensures direct connections via NO_PROXY succeed without TLS failures while still trusting

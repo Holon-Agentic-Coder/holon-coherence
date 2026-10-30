@@ -541,7 +541,7 @@ class CumulativeMetrics:
             self.cache_hits += 1
             self.total_turns += 1
 
-    def record_response(
+    def record_response(  # noqa: PLR0913
         self,
         input_tokens: int = 0,
         output_tokens: int = 0,
@@ -693,7 +693,7 @@ def is_local_target(flow: Any) -> bool:
     return bool(provider == "gemini" and host_lower and not any(host_lower.endswith(c) for c in cloud_gemini))
 
 
-def normalize_anthropic_request(
+def normalize_anthropic_request(  # noqa: C901, PLR0912
     flow: Any,
     data: dict[str, Any],
     is_local: bool | None = None,
@@ -755,7 +755,7 @@ def normalize_anthropic_request(
     return data, True
 
 
-def translate_gemini_to_openai_request(
+def translate_gemini_to_openai_request(  # noqa: C901, PLR0912, PLR0915
     gemini_req: dict[str, Any],
     model: str | None = None,
 ) -> dict[str, Any]:
@@ -910,7 +910,7 @@ def translate_gemini_to_openai_request(
     return openai_req
 
 
-def translate_openai_to_gemini_response(openai_resp: dict[str, Any]) -> dict[str, Any]:
+def translate_openai_to_gemini_response(openai_resp: dict[str, Any]) -> dict[str, Any]:  # noqa: C901, PLR0912
     """Translates an OpenAI chat completion response to Gemini v1beta candidate structure."""
     candidates: list[dict[str, Any]] = []
     choices = openai_resp.get("choices", [])
@@ -1003,7 +1003,7 @@ def translate_openai_to_gemini_response(openai_resp: dict[str, Any]) -> dict[str
     }
 
 
-def translate_openai_sse_chunk_to_gemini(
+def translate_openai_sse_chunk_to_gemini(  # noqa: C901, PLR0912, PLR0915
     chunk_str: str,
     stream_state: dict[str, Any] | None = None,
 ) -> str:
@@ -1514,7 +1514,7 @@ class MITMProxyInterceptor:
             self._cache_store = HybridCacheStore(cache_dir=self.cache_dir)
         return self._cache_store
 
-    def detect_provider(self, url_or_path: str, payload: dict[str, Any] | None = None) -> str:
+    def detect_provider(self, url_or_path: str, payload: dict[str, Any] | None = None) -> str:  # noqa: PLR0911
         """Determines the provider protocol family (anthropic, openai, gemini)
         based on target URL, path, or payload structure.
         """
@@ -1789,7 +1789,7 @@ class MitmproxyAddon:
                 "server to a non-loopback interface."
             )
 
-    def _dump_flow_transaction(
+    def _dump_flow_transaction(  # noqa: PLR0913
         self,
         flow: Any,
         resp_data: Any,
@@ -1899,7 +1899,7 @@ class MitmproxyAddon:
         except Exception as exc:
             logger.debug("Failed to record flow wire transaction: %s", exc)
 
-    def request(self, flow: Any) -> None:
+    def request(self, flow: Any) -> None:  # noqa: C901, PLR0912, PLR0915
         """Mitmproxy request callback."""
         if getattr(flow, "request", None) is None:
             return
@@ -2109,7 +2109,7 @@ class MitmproxyAddon:
             except Exception:
                 logger.exception("Mitmproxy request intercept error for endpoint: %s", url)
 
-    def responseheaders(self, flow: Any) -> None:
+    def responseheaders(self, flow: Any) -> None:  # noqa: C901
         """Mitmproxy response headers callback."""
         if getattr(flow, "provider", "unknown") != "unknown":
             flow.response_headers_time = time.perf_counter()  # float: timestamp from time.perf_counter()
@@ -2156,7 +2156,7 @@ class MitmproxyAddon:
 
                     response.stream = sse_stream_wrapper
 
-    def response(self, flow: Any) -> None:
+    def response(self, flow: Any) -> None:  # noqa: C901, PLR0912, PLR0915
         """Mitmproxy response callback."""
         if getattr(flow, "request", None) is None or getattr(flow, "response", None) is None:
             return

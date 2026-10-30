@@ -55,7 +55,7 @@ def _stored_rate(stored: Any, derived: float | None) -> float | None:
     return derived
 
 
-def _read_offline_metrics(wire_log_dir: str) -> dict[str, Any] | None:
+def _read_offline_metrics(wire_log_dir: str) -> dict[str, Any] | None:  # noqa: C901, PLR0912, PLR0915
     """Calculates cumulative metrics from persisted transactions.jsonl when proxy is offline."""
     jsonl_path = os.path.join(wire_log_dir, "transactions.jsonl")
     if not os.path.exists(jsonl_path):
@@ -228,7 +228,7 @@ def _read_offline_metrics(wire_log_dir: str) -> dict[str, Any] | None:
     }
 
 
-def handle_metrics(
+def handle_metrics(  # noqa: C901, PLR0912, PLR0915
     args: Any = None,
     port: int | None = None,
     json_output: bool = False,

@@ -157,7 +157,7 @@ def _relative_verdict(relative: str | Skip | None, accepted: bool, accept_label:
     return Verdict("fail", [relative])
 
 
-def decide(
+def decide(  # noqa: PLR0913
     duration: float,
     baseline: list[float],
     *,

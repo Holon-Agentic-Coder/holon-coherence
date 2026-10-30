@@ -112,7 +112,7 @@ def check_docker_daemon() -> tuple[bool, str]:
     return True, ""
 
 
-def ensure_docker_image(image: str, rebuild: bool = False) -> None:
+def ensure_docker_image(image: str, rebuild: bool = False) -> None:  # noqa: C901, PLR0912
     """Ensure the Docker image exists locally, building or pulling from registry/GHCR if needed."""
     if not rebuild:
         img_check = subprocess.run(
