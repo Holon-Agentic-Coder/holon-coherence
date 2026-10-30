@@ -396,13 +396,7 @@ def handle(args: Any) -> int:
 
 
 def register(subparsers: Any) -> list[argparse.ArgumentParser]:
-    """Register Docker operations subparsers (build, stop, status, logs)."""
-    build_parser = subparsers.add_parser("build", help="Build the holon-coherence Docker image")
-    build_parser.add_argument(
-        "--tag", default="holon-coherence:latest", help="Docker tag (default: holon-coherence:latest)"
-    )
-    build_parser.set_defaults(handler=handle)
-
+    """Register Docker operations subparsers (stop, status, logs, build)."""
     stop_parser = subparsers.add_parser("stop", help="Stop and remove running holon-coherence Docker container")
     stop_parser.add_argument(
         "--name",
@@ -428,4 +422,10 @@ def register(subparsers: Any) -> list[argparse.ArgumentParser]:
     )
     logs_parser.set_defaults(handler=handle)
 
-    return [build_parser, stop_parser, status_parser, logs_parser]
+    build_parser = subparsers.add_parser("build", help="Build the holon-coherence Docker image")
+    build_parser.add_argument(
+        "--tag", default="holon-coherence:latest", help="Docker tag (default: holon-coherence:latest)"
+    )
+    build_parser.set_defaults(handler=handle)
+
+    return [stop_parser, status_parser, logs_parser, build_parser]

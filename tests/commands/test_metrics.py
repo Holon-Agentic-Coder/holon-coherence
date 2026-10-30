@@ -114,6 +114,7 @@ class TestMetricsRegistrationAndDispatch:
         assert args.json is True
         assert args.port == 9090
         assert args.handler == handle
+        assert args.propagates_exit is True
 
     def test_handle_metrics_dispatch(self) -> None:
         args = argparse.Namespace(command="metrics", port=8080, json=True, offline=False, name=None)

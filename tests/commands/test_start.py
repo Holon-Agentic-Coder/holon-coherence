@@ -127,6 +127,7 @@ class TestStartCommandRegistrationAndDispatch:
         assert args.detach is True
         assert args.port == 8888
         assert args.handler == handle
+        assert getattr(args, "propagates_exit", False) is False
 
     def test_handle_start_dispatch(self) -> None:
         args = argparse.Namespace(

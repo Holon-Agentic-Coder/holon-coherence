@@ -102,6 +102,7 @@ class TestAgentsRegistrationAndDispatch:
         assert args_run_agent.port == 9090
         assert args_run_agent.agent_args == ["task.py"]
         assert args_run_agent.handler == handle
+        assert getattr(args_run_agent, "propagates_exit", False) is False
 
         args_alias = parser.parse_args(["claude", "--port", "9090"])
         assert args_alias.command == "claude"

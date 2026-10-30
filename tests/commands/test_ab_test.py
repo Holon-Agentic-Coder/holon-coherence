@@ -34,6 +34,7 @@ def test_register_ab_test():
     assert args.fail_under_reduction == 15.0
     assert args.json is True
     assert args.handler == handle
+    assert args.propagates_exit is True
 
 
 def test_handle_ab_test_no_arguments(capsys):

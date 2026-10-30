@@ -956,5 +956,5 @@ def register(subparsers: Any) -> argparse.ArgumentParser:
         action="store_true",
         help="Output raw JSON comparison scorecard",
     )
-    ab_parser.set_defaults(handler=handle)
+    ab_parser.set_defaults(handler=handle, propagates_exit=True)
     return ab_parser

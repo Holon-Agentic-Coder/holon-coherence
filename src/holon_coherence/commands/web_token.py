@@ -123,6 +123,6 @@ def register(subparsers: Any) -> list[argparse.ArgumentParser]:
             default=None,
             help="Container name (defaults to HOLON_CONTAINER_NAME or holon-coherence-proxy)",
         )
-        token_parser.set_defaults(handler=handle)
+        token_parser.set_defaults(handler=handle, propagates_exit=True)
         parsers.append(token_parser)
     return parsers

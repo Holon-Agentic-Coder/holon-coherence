@@ -430,5 +430,5 @@ def register(subparsers: Any) -> argparse.ArgumentParser:
         help="Display offline telemetry metrics if live proxy is unreachable",
     )
     metrics_parser.add_argument("--json", action="store_true", help="Output metrics as raw JSON")
-    metrics_parser.set_defaults(handler=handle)
+    metrics_parser.set_defaults(handler=handle, propagates_exit=True)
     return metrics_parser

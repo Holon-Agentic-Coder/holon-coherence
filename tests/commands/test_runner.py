@@ -165,6 +165,7 @@ class TestRunnerRegistrationAndDispatch:
         assert args.proxy_url == "http://127.0.0.1:8080"
         assert args.cmd == ["--", "echo", "hello"]
         assert args.handler == handle
+        assert args.propagates_exit is True
 
     def test_handle_run_delegation(self) -> None:
         args = argparse.Namespace(cmd=["echo", "hi"], proxy_url="http://127.0.0.1:8080", ca_cert="ca.pem")

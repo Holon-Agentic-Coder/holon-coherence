@@ -79,11 +79,13 @@ class TestWebTokenRegistrationAndDispatch:
         assert args_tok.command == "web-token"
         assert args_tok.name == "my-box"
         assert args_tok.handler == handle
+        assert args_tok.propagates_exit is True
 
         args_key = parser.parse_args(["web-key", "--name", "my-box"])
         assert args_key.command == "web-key"
         assert args_key.name == "my-box"
         assert args_key.handler == handle
+        assert args_key.propagates_exit is True
 
     def test_handle_web_token_saved_token(self, capsys: pytest.CaptureFixture[str]) -> None:
         args = argparse.Namespace(name=None)

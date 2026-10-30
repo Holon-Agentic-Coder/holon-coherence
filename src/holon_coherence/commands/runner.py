@@ -197,5 +197,5 @@ def register(subparsers: Any) -> argparse.ArgumentParser:
         help="Path to CA certificate PEM",
     )
     run_parser.add_argument("cmd", nargs=argparse.REMAINDER, help="Command and arguments to execute")
-    run_parser.set_defaults(handler=handle)
+    run_parser.set_defaults(handler=handle, propagates_exit=True)
     return run_parser

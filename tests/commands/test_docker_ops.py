@@ -146,6 +146,7 @@ class TestDockerOpsRegistrationAndDispatch:
         assert args_build.command == "build"
         assert args_build.tag == "custom:1.0"
         assert args_build.handler == handle
+        assert getattr(args_build, "propagates_exit", False) is False
 
         args_stop = parser.parse_args(["stop", "--name", "my-box"])
         assert args_stop.command == "stop"

@@ -163,6 +163,7 @@ class TestCACommandRegistrationAndDispatch:
         assert args.command == "init-ca"
         assert args.output_dir == os.path.expanduser("~/.holon/proxy-ca")
         assert args.handler == handle
+        assert getattr(args, "propagates_exit", False) is False
 
     def test_handle_init_ca_invoked(self, tmp_path: Path) -> None:
         out_dir = tmp_path / "ca"

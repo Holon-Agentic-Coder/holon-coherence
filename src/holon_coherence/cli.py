@@ -80,15 +80,18 @@ from holon_coherence.commands import (
 )
 from holon_coherence.host_local import detect_host_addresses
 
+# Registration order mirrors the pre-refactor cli.py so `--help` lists
+# subcommands identically: start, stop/status/logs/build, init-ca,
+# web-token/web-key, metrics, ab-test, run, run-agent, agent aliases.
 COMMAND_MODULES = (
     start,
     docker_ops,
-    agents,
-    runner,
     ca,
+    web_token,
     metrics,
     ab_test,
-    web_token,
+    runner,
+    agents,
 )
 
 __all__ = [
@@ -212,8 +215,13 @@ def _dispatch_run_agent(argv: list[str]) -> None:
     sys.exit(run_agent(agent_target, flags.agent_args[1:], **_runner_kwargs(flags)))
 
 
-def _dispatch_agent_argv(argv: list[str]) -> bool:
-    """Direct agent invocation fast-path or run-agent subcommand dispatch."""
+def _dispatch_agent_argv(argv: list[str]) -> None:
+    """Direct agent invocation fast-path or run-agent subcommand dispatch.
+
+    Exits the process when ``argv`` targets a supported agent or the
+    ``run-agent`` subcommand; otherwise returns so the argparse-based
+    dispatch in :func:`main` can handle the arguments.
+    """
     first = argv[0]
     if first in SUPPORTED_AGENTS:
         flags = extract_runner_flags(argv[1:])
@@ -223,7 +231,6 @@ def _dispatch_agent_argv(argv: list[str]) -> bool:
         sys.exit(run_agent(first, flags.agent_args, **_runner_kwargs(flags)))
     if first == "run-agent":
         _dispatch_run_agent(argv)
-    return False
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -231,8 +238,8 @@ def main(argv: list[str] | None = None) -> None:
     if argv is None:
         argv = sys.argv[1:]
 
-    if argv and _dispatch_agent_argv(argv):
-        return
+    if argv:
+        _dispatch_agent_argv(argv)
 
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -244,10 +251,13 @@ def main(argv: list[str] | None = None) -> None:
     handler = getattr(args, "handler", None)
     if handler is not None:
         res = handler(args)
-        if args.command in ("run", "metrics", "ab-test", "web-token", "web-key"):
+        if getattr(args, "propagates_exit", False):
             sys.exit(res if isinstance(res, int) else 0)
-        # Parity with the pre-refactor dispatcher: build/stop/status/logs/start/init-ca
-        # report via stdout/stderr and never propagate their return codes as exit codes.
+        # Parity with the pre-refactor dispatcher: modules that declare
+        # propagates_exit=True at registration (run/metrics/ab-test/web-token/
+        # web-key) exit with their handler's return code; the rest
+        # (build/stop/status/logs/start/init-ca) report via stdout/stderr and
+        # never propagate their return codes as exit codes.
         return
 
     parser.print_help(sys.stderr)
