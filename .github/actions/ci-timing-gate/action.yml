@@ -1,0 +1,37 @@
+name: "CI Timing Gate"
+description: "Records job start time or checks total elapsed job runtime against a threshold budget."
+inputs:
+  phase:
+    description: "Execution phase: 'start' to record start epoch, 'check' to evaluate runtime budget."
+    required: true
+  max-seconds:
+    description: "Maximum allowable runtime in seconds before failing."
+    required: false
+    default: "300"
+runs:
+  using: "composite"
+  steps:
+    - name: Validate Phase Input
+      if: inputs.phase != 'start' && inputs.phase != 'check'
+      shell: bash
+      run: |
+        echo "::error::Invalid phase '${{ inputs.phase }}'. Expected 'start' or 'check'."
+        exit 1
+
+    - name: CI Timing Gate (Start)
+      if: inputs.phase == 'start'
+      shell: bash
+      run: |
+        CI_JOB_START_EPOCH=$(date +%s)
+        echo "CI_JOB_START_EPOCH=${CI_JOB_START_EPOCH}" >> "$GITHUB_ENV"
+        # Maintain backward compatibility with CI_TIMING_STARTED_AT consumers
+        echo "CI_TIMING_STARTED_AT=${CI_JOB_START_EPOCH}" >> "$GITHUB_ENV"
+
+    - name: CI Timing Gate (Check)
+      if: inputs.phase == 'check'
+      shell: bash
+      run: |
+        python3 "${GITHUB_WORKSPACE}/scripts/check_ci_runtime_budget.py" \
+          --start-epoch "${CI_JOB_START_EPOCH}" \
+          --max-seconds "${{ inputs.max-seconds }}" \
+          --step-summary "${GITHUB_STEP_SUMMARY}"

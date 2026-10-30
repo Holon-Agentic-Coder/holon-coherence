@@ -106,6 +106,32 @@ use-only-tar-bz2: false
 
 ## Reusable Actions
 
+- `.github/actions/ci-timing-gate`: Reusable composite action eliminating duplicated shell blocks for recording job
+  start epochs and verifying job runtimes against maximum duration budgets.
+  - **Prerequisite:** `actions/checkout` must execute before invoking this action so the local composite action definition exists on disk.
+  - **Inputs:**
+    - `phase`: Required. `'start'` writes `CI_JOB_START_EPOCH` (and `CI_TIMING_STARTED_AT` for backward compatibility) to `$GITHUB_ENV`; `'check'` invokes the runtime budget checker script (`scripts/check_ci_runtime_budget.py`).
+    - `max-seconds`: Optional (default: `'300'`). Maximum allowed runtime threshold in seconds.
+
+  ```yaml
+  - name: Checkout repository
+    uses: actions/checkout@v7
+
+  - name: CI Timing Gate (Start)
+    uses: ./.github/actions/ci-timing-gate
+    with:
+      phase: start
+
+  # ... job execution steps ...
+
+  - name: CI Timing Gate (Check <= 5 min)
+    if: always()
+    uses: ./.github/actions/ci-timing-gate
+    with:
+      phase: check
+      max-seconds: "300"
+  ```
+
 - `.github/actions/docker-pull`: Reusable composite action to pull images from GHCR mirror with automatic fallback to
   public upstream registry and local re-tagging. Note: Workflows using this action require `packages: write` permissions
   to push images to the GHCR mirror on fallback.
