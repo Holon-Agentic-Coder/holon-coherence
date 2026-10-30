@@ -171,7 +171,7 @@ def get_staged_files() -> list[str]:
         return []
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:  # noqa: C901
     """CLI entrypoint for pre-commit check."""
     if argv is None:
         argv = sys.argv[1:]
