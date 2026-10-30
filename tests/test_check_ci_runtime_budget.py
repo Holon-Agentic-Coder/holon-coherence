@@ -35,14 +35,16 @@ def test_budget_within_limit(tmp_path: pathlib.Path, capsys):
     now_time = 1100.0  # elapsed 100s <= 300s budget
 
     with mock.patch("time.time", return_value=now_time):
-        ret = check_ci_runtime_budget.main([
-            "--start-epoch",
-            str(start_time),
-            "--max-seconds",
-            "300",
-            "--step-summary",
-            str(summary_file),
-        ])
+        ret = check_ci_runtime_budget.main(
+            [
+                "--start-epoch",
+                str(start_time),
+                "--max-seconds",
+                "300",
+                "--step-summary",
+                str(summary_file),
+            ]
+        )
 
     assert ret == 0
     out = capsys.readouterr().out
@@ -50,6 +52,7 @@ def test_budget_within_limit(tmp_path: pathlib.Path, capsys):
     assert summary_file.exists()
     content = summary_file.read_text(encoding="utf-8")
     assert "### CI Runtime Budget Check" in content
+    assert "| Budget Utilisation |" in content
     assert "| Status | PASS |" in content
     assert "100.0 s" in content
 
@@ -60,14 +63,16 @@ def test_budget_exceeded(tmp_path: pathlib.Path, capsys):
     now_time = 1400.0  # elapsed 400s > 300s budget
 
     with mock.patch("time.time", return_value=now_time):
-        ret = check_ci_runtime_budget.main([
-            "--start-epoch",
-            str(start_time),
-            "--max-seconds",
-            "300",
-            "--step-summary",
-            str(summary_file),
-        ])
+        ret = check_ci_runtime_budget.main(
+            [
+                "--start-epoch",
+                str(start_time),
+                "--max-seconds",
+                "300",
+                "--step-summary",
+                str(summary_file),
+            ]
+        )
 
     assert ret == 1
     out = capsys.readouterr().out
@@ -85,15 +90,18 @@ def test_zero_max_seconds(tmp_path: pathlib.Path, capsys):
     now_time = 1005.0
 
     with mock.patch("time.time", return_value=now_time):
-        ret = check_ci_runtime_budget.main([
-            "--start-epoch",
-            str(start_time),
-            "--max-seconds",
-            "0",
-            "--step-summary",
-            str(summary_file),
-        ])
+        ret = check_ci_runtime_budget.main(
+            [
+                "--start-epoch",
+                str(start_time),
+                "--max-seconds",
+                "0",
+                "--step-summary",
+                str(summary_file),
+            ]
+        )
 
     assert ret == 1
     content = summary_file.read_text(encoding="utf-8")
     assert "N/A" in content
+    assert "N/A%" not in content

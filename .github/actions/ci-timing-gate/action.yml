@@ -14,8 +14,10 @@ runs:
     - name: Validate Phase Input
       if: inputs.phase != 'start' && inputs.phase != 'check'
       shell: bash
+      env:
+        PHASE_INPUT: ${{ inputs.phase }}
       run: |
-        echo "::error::Invalid phase '${{ inputs.phase }}'. Expected 'start' or 'check'."
+        echo "::error::Invalid phase '${PHASE_INPUT}'. Expected 'start' or 'check'."
         exit 1
 
     - name: CI Timing Gate (Start)
@@ -30,8 +32,10 @@ runs:
     - name: CI Timing Gate (Check)
       if: inputs.phase == 'check'
       shell: bash
+      env:
+        MAX_SECONDS: ${{ inputs.max-seconds }}
       run: |
         python3 "${GITHUB_WORKSPACE}/scripts/check_ci_runtime_budget.py" \
           --start-epoch "${CI_JOB_START_EPOCH}" \
-          --max-seconds "${{ inputs.max-seconds }}" \
+          --max-seconds "${MAX_SECONDS}" \
           --step-summary "${GITHUB_STEP_SUMMARY}"

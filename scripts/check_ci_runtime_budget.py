@@ -53,7 +53,7 @@ def write_step_summary(summary_path_str: str, elapsed: float, max_seconds: float
     summary_path = Path(summary_path_str)
     try:
         summary_path.parent.mkdir(parents=True, exist_ok=True)
-        pct_str = f"{(elapsed / max_seconds * 100):.1f}" if max_seconds > 0 else "N/A"
+        pct_str = f"{(elapsed / max_seconds * 100):.1f}%" if max_seconds > 0 else "N/A"
         status_str = "PASS" if passed else "FAIL"
 
         markdown = (
@@ -62,7 +62,7 @@ def write_step_summary(summary_path_str: str, elapsed: float, max_seconds: float
             "| :--- | :--- |\n"
             f"| Elapsed Duration | {elapsed:.1f} s |\n"
             f"| Maximum Budget | {max_seconds:.1f} s |\n"
-            f"| Budget Utilization | {pct_str}% |\n"
+            f"| Budget Utilisation | {pct_str} |\n"
             f"| Status | {status_str} |\n\n"
         )
 
@@ -83,15 +83,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         start_epoch = float(raw_start)
     except ValueError:
-        print(
-            f"::warning::CI timing gate: invalid start epoch {raw_start!r}; skipping runtime budget check."
-        )
+        print(f"::warning::CI timing gate: invalid start epoch {raw_start!r}; skipping runtime budget check.")
         return 0
 
     if start_epoch <= 0:
-        print(
-            f"::warning::CI timing gate: non-positive start epoch {start_epoch}; skipping runtime budget check."
-        )
+        print(f"::warning::CI timing gate: non-positive start epoch {start_epoch}; skipping runtime budget check.")
         return 0
 
     current_epoch = time.time()
@@ -100,9 +96,7 @@ def main(argv: list[str] | None = None) -> int:
     passed = elapsed <= max_seconds
 
     pct_str = f"{(elapsed / max_seconds * 100):.1f}%" if max_seconds > 0 else "N/A"
-    print(
-        f"CI runtime budget check: elapsed {elapsed:.1f}s, maximum budget {max_seconds:.1f}s ({pct_str})"
-    )
+    print(f"CI runtime budget check: elapsed {elapsed:.1f}s, maximum budget {max_seconds:.1f}s ({pct_str})")
 
     if args.step_summary:
         write_step_summary(args.step_summary, elapsed, max_seconds, passed)
