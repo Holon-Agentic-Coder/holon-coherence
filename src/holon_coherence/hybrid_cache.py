@@ -324,7 +324,7 @@ class HybridCacheStore:
 
         return " ".join(system_texts).strip()
 
-    def get(self, payload: dict[str, Any], provider: str = "anthropic") -> dict[str, Any] | None:  # noqa: C901
+    def get(self, payload: dict[str, Any], provider: str = "anthropic") -> dict[str, Any] | None:
         """Looks up cached response by exact prefix match or semantic similarity match.
 
         Returns:

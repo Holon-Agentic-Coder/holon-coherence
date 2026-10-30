@@ -421,7 +421,7 @@ def _wall_clock_seconds(*values: Any) -> float | None:
     return None
 
 
-def resolve_flow_timing(flow: Any, completed_at: float | None = None) -> FlowTiming:  # noqa: C901
+def resolve_flow_timing(flow: Any, completed_at: float | None = None) -> FlowTiming:
     """Derive TTFT / total / generation seconds for one flow using a single clock domain.
 
     Prefers the ``time.perf_counter()`` stamps the addon records in ``request()`` /
@@ -657,7 +657,7 @@ def _make_http_response(flow: Any, status_code: int, content: bytes, headers: di
     return _SimpleResponse(status_code, content, headers)
 
 
-def is_local_target(flow: Any) -> bool:  # noqa: C901
+def is_local_target(flow: Any) -> bool:
     """Checks whether flow is directed to a local or non-cloud target."""
     req = getattr(flow, "request", None)
     if req is None:
@@ -1514,7 +1514,7 @@ class MITMProxyInterceptor:
             self._cache_store = HybridCacheStore(cache_dir=self.cache_dir)
         return self._cache_store
 
-    def detect_provider(self, url_or_path: str, payload: dict[str, Any] | None = None) -> str:
+    def detect_provider(self, url_or_path: str, payload: dict[str, Any] | None = None) -> str:  # noqa: PLR0911
         """Determines the provider protocol family (anthropic, openai, gemini)
         based on target URL, path, or payload structure.
         """
@@ -1789,7 +1789,7 @@ class MitmproxyAddon:
                 "server to a non-loopback interface."
             )
 
-    def _dump_flow_transaction(  # noqa: PLR0913, PLR0915
+    def _dump_flow_transaction(  # noqa: PLR0913
         self,
         flow: Any,
         resp_data: Any,
@@ -2109,7 +2109,7 @@ class MitmproxyAddon:
             except Exception:
                 logger.exception("Mitmproxy request intercept error for endpoint: %s", url)
 
-    def responseheaders(self, flow: Any) -> None:
+    def responseheaders(self, flow: Any) -> None:  # noqa: C901
         """Mitmproxy response headers callback."""
         if getattr(flow, "provider", "unknown") != "unknown":
             flow.response_headers_time = time.perf_counter()  # float: timestamp from time.perf_counter()

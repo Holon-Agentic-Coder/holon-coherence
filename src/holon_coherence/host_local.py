@@ -334,7 +334,7 @@ def targets_from_env(environ: dict[str, str] | None = None) -> tuple[LocalTarget
     return decode_targets(env.get(HOST_LOCAL_ENV_VAR))
 
 
-def decide_rewrite(  # noqa: C901, PLR0911, PLR0912
+def decide_rewrite(  # noqa: C901, PLR0911
     host: str | None,
     port: int | None,
     targets: tuple[LocalTarget, ...],

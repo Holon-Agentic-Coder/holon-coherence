@@ -59,7 +59,7 @@ class DummyHeaders(dict):
 
 
 class DummyRequest:
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         url: str = "http://localhost:8080/v1/messages",
         method: str = "POST",

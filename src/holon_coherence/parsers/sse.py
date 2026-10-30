@@ -11,7 +11,7 @@ from holon_coherence.parsers.tokens import TokenCounts, estimate_chars, safe_int
 logger = logging.getLogger(__name__)
 
 
-def find_nested_key(data: Any, target_keys: tuple[str, ...] | str, max_depth: int = 10) -> Any:
+def find_nested_key(data: Any, target_keys: tuple[str, ...] | str, max_depth: int = 10) -> Any:  # noqa: C901, PLR0912
     """Recursively searches nested dicts/lists to find the first occurrence of any key in target_keys.
 
     Evaluates target keys on the immediate node before recursively traversing child dictionaries
