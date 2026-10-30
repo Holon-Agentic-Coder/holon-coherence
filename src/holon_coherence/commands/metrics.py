@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from typing import Any
 
-from holon_coherence.commands._dispatch import get_cli
 from holon_coherence.commands.docker_ops import (
     get_container_mapped_port,
     get_container_name,
@@ -233,6 +234,8 @@ def handle_metrics(  # noqa: C901, PLR0912, PLR0915
     port: int | None = None,
     json_output: bool = False,
     live: bool = False,
+    *,
+    resolve_endpoints_fn: Callable[..., ExposedEndpoints] | None = None,
 ) -> int:
     """Fetch and display cumulative optimization metrics via terminal or JSON.
 
@@ -361,7 +364,7 @@ def handle_metrics(  # noqa: C901, PLR0912, PLR0915
         provider_cache_rate = (total_cache_read / total_in) if total_in > 0 else 0.0
     provider_cache_pct = provider_cache_rate * 100.0
 
-    resolve_endpoints = getattr(get_cli(), "resolve_container_endpoints", resolve_container_endpoints)
+    resolve_endpoints = resolve_endpoints_fn or resolve_container_endpoints
     endpoints = resolve_endpoints(container, fallback_proxy_port=target_port)
     if is_live:
         # The live proxy answered on target_port, so that is the address to report, even when an
@@ -400,3 +403,32 @@ def handle_metrics(  # noqa: C901, PLR0912, PLR0915
         print(row)
     print("=" * 64)
     return 0
+
+
+def handle(args: Any) -> int:
+    """Handle metrics command."""
+    return handle_metrics(args)
+
+
+def register(subparsers: Any) -> argparse.ArgumentParser:
+    """Register metrics subparser."""
+    metrics_parser = subparsers.add_parser("metrics", help="Display cumulative optimization metrics")
+    metrics_parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help=f"Proxy listen port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)",
+    )
+    metrics_parser.add_argument(
+        "--name",
+        default=None,
+        help="Container name (defaults to HOLON_CONTAINER_NAME or holon-coherence-proxy)",
+    )
+    metrics_parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Display offline telemetry metrics if live proxy is unreachable",
+    )
+    metrics_parser.add_argument("--json", action="store_true", help="Output metrics as raw JSON")
+    metrics_parser.set_defaults(handler=handle, propagates_exit=True)
+    return metrics_parser

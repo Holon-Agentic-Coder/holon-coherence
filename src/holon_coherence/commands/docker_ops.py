@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
@@ -9,9 +10,11 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-from typing import Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
-from holon_coherence.commands._dispatch import get_cli
+if TYPE_CHECKING:
+    from holon_coherence.commands.endpoints import ExposedEndpoints
 
 DEFAULT_CONTAINER_NAME = "holon-coherence-proxy"
 CONTAINER_NAME = DEFAULT_CONTAINER_NAME
@@ -237,11 +240,14 @@ def handle_build(args: Any) -> int:
     return 0
 
 
-def handle_stop(args: Any = None) -> int:
+def handle_stop(
+    args: Any = None,
+    *,
+    stopper_fn: Callable[[str | None], None] | None = None,
+) -> int:
     """Stop and remove running holon-coherence Docker container."""
+    stopper = stopper_fn or stop_proxy_container
     target_container = getattr(args, "name", None) or get_container_name()
-    cli = get_cli()
-    stopper = getattr(cli, "stop_proxy_container", stop_proxy_container)
     stopper(target_container)
     return 0
 
@@ -302,17 +308,23 @@ def get_container_web_token(container_name: str | None = None) -> str | None:
     return None
 
 
-def handle_status(args: Any = None) -> int:
+def handle_status(
+    args: Any = None,
+    *,
+    is_running_fn: Callable[[str], bool] | None = None,
+    resolve_endpoints_fn: Callable[..., ExposedEndpoints] | None = None,
+) -> int:
     """Check status of holon-coherence Docker container."""
+    # Imported inside the function: the endpoints helper imports this module at the top level,
+    # so a module-level import here would be circular.
+    from holon_coherence.commands.endpoints import print_endpoints, resolve_container_endpoints
+
+    is_running = is_running_fn or is_container_running
+    resolve_endpoints = resolve_endpoints_fn or resolve_container_endpoints
     target_container = getattr(args, "name", None) or get_container_name()
     is_default = target_container in (DEFAULT_CONTAINER_NAME, "holon-coherence")
     display_name = "holon-coherence" if is_default else target_container
-    cli = get_cli()
-    # Imported lazily: the endpoints helper imports this module.
-    from holon_coherence.commands.endpoints import print_endpoints, resolve_container_endpoints
 
-    is_running = getattr(cli, "is_container_running", is_container_running)
-    resolve_endpoints = getattr(cli, "resolve_container_endpoints", resolve_container_endpoints)
     try:
         res = subprocess.run(["docker", "ps", "-a", "--filter", f"name=^{target_container}$"])
         retcode = res.returncode
@@ -367,3 +379,53 @@ def handle_logs(args: Any) -> int:
     cmd.append(target_container)
     res = subprocess.run(cmd)
     return res.returncode
+
+
+def handle(args: Any) -> int:
+    """Dispatch Docker operation command."""
+    cmd = getattr(args, "command", None)
+    if cmd == "build":
+        return handle_build(args)
+    if cmd == "stop":
+        return handle_stop(args)
+    if cmd == "status":
+        return handle_status(args)
+    if cmd == "logs":
+        return handle_logs(args)
+    return 1
+
+
+def register(subparsers: Any) -> list[argparse.ArgumentParser]:
+    """Register Docker operations subparsers (stop, status, logs, build)."""
+    stop_parser = subparsers.add_parser("stop", help="Stop and remove running holon-coherence Docker container")
+    stop_parser.add_argument(
+        "--name",
+        default=None,
+        help="Container name (defaults to HOLON_CONTAINER_NAME or holon-coherence-proxy)",
+    )
+    stop_parser.set_defaults(handler=handle)
+
+    status_parser = subparsers.add_parser("status", help="Check status of holon-coherence Docker container")
+    status_parser.add_argument(
+        "--name",
+        default=None,
+        help="Container name (defaults to HOLON_CONTAINER_NAME or holon-coherence-proxy)",
+    )
+    status_parser.set_defaults(handler=handle)
+
+    logs_parser = subparsers.add_parser("logs", help="View logs of holon-coherence Docker container")
+    logs_parser.add_argument("-f", "--follow", action="store_true", help="Follow log stream")
+    logs_parser.add_argument(
+        "--name",
+        default=None,
+        help="Container name (defaults to HOLON_CONTAINER_NAME or holon-coherence-proxy)",
+    )
+    logs_parser.set_defaults(handler=handle)
+
+    build_parser = subparsers.add_parser("build", help="Build the holon-coherence Docker image")
+    build_parser.add_argument(
+        "--tag", default="holon-coherence:latest", help="Docker tag (default: holon-coherence:latest)"
+    )
+    build_parser.set_defaults(handler=handle)
+
+    return [stop_parser, status_parser, logs_parser, build_parser]

@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import os
 import signal
 import subprocess
 import sys
+from collections.abc import Callable
 from typing import Any
 
-from holon_coherence.commands._dispatch import get_cli
 from holon_coherence.commands.ca import CA_ENV_VARS, get_or_create_merged_ca_bundle
 from holon_coherence.host_local import parse_no_proxy
 
@@ -31,12 +32,17 @@ def build_proxy_env(
     proxy_url: str,
     ca_cert_path: str | None = None,
     drop_no_proxy: tuple[str, ...] = (),
+    *,
+    merge_no_proxy_fn: Callable[[dict[str, str] | None], str] | None = None,
+    bundle_getter_fn: Callable[[str], str] | None = None,
 ) -> dict[str, str]:
     """Construct environment variables for proxy routing and CA bundle trust.
 
     ``drop_no_proxy`` removes entries that would keep a declared host-local LLM endpoint
     away from the proxy (see ``plan_no_proxy_pruning``).
     """
+    merge_no_proxy = merge_no_proxy_fn or merge_no_proxy_values
+    bundle_getter = bundle_getter_fn or get_or_create_merged_ca_bundle
     env: dict[str, str] = {
         "HTTP_PROXY": proxy_url,
         "HTTPS_PROXY": proxy_url,
@@ -46,9 +52,7 @@ def build_proxy_env(
         "all_proxy": proxy_url,
     }
 
-    cli = get_cli()
-    merger = getattr(cli, "merge_no_proxy_values", merge_no_proxy_values)
-    merged_no_proxy = merger()
+    merged_no_proxy = merge_no_proxy(None)
     if drop_no_proxy:
         dropped = {entry.strip().lower() for entry in drop_no_proxy if entry.strip()}
         merged_no_proxy = ",".join(entry for entry in parse_no_proxy(merged_no_proxy) if entry.lower() not in dropped)
@@ -76,7 +80,6 @@ def build_proxy_env(
                 ca_cert = alt_ca
 
     if os.path.exists(ca_cert):
-        bundle_getter = getattr(cli, "get_or_create_merged_ca_bundle", get_or_create_merged_ca_bundle)
         merged_bundle = bundle_getter(ca_cert)
         for var in CA_ENV_VARS:
             env[var] = merged_bundle
@@ -147,8 +150,15 @@ def execute_interactive_process(cmd: list[str], env: dict[str, str]) -> int:  # 
     return returncode if returncode is not None else 0
 
 
-def handle_run(args: Any) -> int:
+def handle_run(
+    args: Any,
+    *,
+    env_builder_fn: Callable[..., dict[str, str]] | None = None,
+    exec_proc_fn: Callable[[list[str], dict[str, str]], int] | None = None,
+) -> int:
     """Run a command with inline proxy properties."""
+    env_builder = env_builder_fn or build_proxy_env
+    exec_proc = exec_proc_fn or execute_interactive_process
     if not args.cmd:
         print("Error: No command specified to run.", file=sys.stderr)
         sys.exit(1)
@@ -159,10 +169,33 @@ def handle_run(args: Any) -> int:
         print("Error: No command specified after '--'.", file=sys.stderr)
         sys.exit(1)
 
-    cli = get_cli()
     env = os.environ.copy()
-    env_builder = getattr(cli, "build_proxy_env", build_proxy_env)
     env.update(env_builder(args.proxy_url, args.ca_cert))
 
-    exec_proc = getattr(cli, "execute_interactive_process", execute_interactive_process)
     return exec_proc(raw_cmd, env)
+
+
+def handle(args: Any) -> int:
+    """Handle run command."""
+    return handle_run(args)
+
+
+def register(subparsers: Any) -> argparse.ArgumentParser:
+    """Register the run subparser."""
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Run a command with inline proxy properties (avoids terminal session contamination)",
+    )
+    run_parser.add_argument(
+        "--proxy-url",
+        default="http://127.0.0.1:8080",
+        help="Proxy URL (default: http://127.0.0.1:8080)",
+    )
+    run_parser.add_argument(
+        "--ca-cert",
+        default=os.path.expanduser("~/.holon/proxy-ca/mitmproxy-ca-cert.pem"),
+        help="Path to CA certificate PEM",
+    )
+    run_parser.add_argument("cmd", nargs=argparse.REMAINDER, help="Command and arguments to execute")
+    run_parser.set_defaults(handler=handle, propagates_exit=True)
+    return run_parser
