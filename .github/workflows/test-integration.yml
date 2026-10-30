@@ -24,11 +24,13 @@ jobs:
         os: [ubuntu-latest]
 
     steps:
-      - name: Record job start time
-        run: echo "CI_TIMING_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
-
       - name: Checkout code
         uses: actions/checkout@v7
+
+      - name: CI Timing Gate (Start)
+        uses: ./.github/actions/ci-timing-gate
+        with:
+          phase: start
 
       - name: Cache conda packages
         uses: actions/cache@v4
@@ -98,3 +100,10 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
           overwrite: true
+
+      - name: CI Timing Gate (Check <= 5 min)
+        if: always()
+        uses: ./.github/actions/ci-timing-gate
+        with:
+          phase: check
+          max-seconds: "300"
