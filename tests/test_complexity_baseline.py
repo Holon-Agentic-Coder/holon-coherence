@@ -19,7 +19,7 @@ COMPLEXITY_RULES = frozenset({"C901", "PLR0911", "PLR0912", "PLR0913", "PLR0915"
 
 # Ratchet ceiling: Maximum permissible legacy function inline noqa suppressions for complexity rules.
 # This baseline must NEVER increase. When legacy functions are refactored, reduce this ceiling accordingly.
-BASELINE_CEILING = 42
+BASELINE_CEILING = 38
 
 COMPLEXITY_NOQA_PATTERN = re.compile(r"#\s*noqa(?::|\s).*?\b(C901|PLR0911|PLR0912|PLR0913|PLR0915)\b")
 
