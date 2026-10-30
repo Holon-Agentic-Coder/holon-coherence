@@ -29,9 +29,23 @@ and once with it disabled:
 ```bash
 # `--command` hands the proxy on port 8080 a host temp dir as its wire-log dir, so it needs a proxy that writes to the
 # host filesystem: from a source checkout, start the addon host-side, then run the same real workload twice through it
-# (baseline vs optimised) and compare the captured turns
+# (baseline vs optimised) and compare the captured turns.
+#
+# Running mitmdump synchronously in the foreground blocks execution in a single shell, whilst a bare `&` introduces a
+# socket readiness race where `set_proxy_mode()` can fail silently before HTTP endpoints listen.
+#
+# Option A: Start mitmdump in a dedicated terminal, then run ab-test in your active terminal:
+# Terminal 1:
 uv run mitmdump -s src/holon_coherence/mitm_addon.py --listen-port 8080 --set confdir=~/.holon/proxy-ca
+# Terminal 2 (once listening):
 holon-coherence ab-test --command "<agent workload command>"
+
+# Option B: Run in background with an explicit readiness polling loop in a single shell:
+uv run mitmdump -s src/holon_coherence/mitm_addon.py --listen-port 8080 --set confdir=~/.holon/proxy-ca &
+MITM_PID=$!
+until curl -s -f http://127.0.0.1:8080/holon/api/metrics >/dev/null 2>&1 || curl -s -f http://127.0.0.1:8080/__holon__/health >/dev/null 2>&1; do sleep 0.2; done
+holon-coherence ab-test --command "<agent workload command>"
+kill $MITM_PID 2>/dev/null || true
 
 # The container proxy (`holon-coherence start -d`) can only write to `~/.holon/logs/`: run the same workload once
 # under the passive proxy and once under the optimised one, then score the mode-tagged log

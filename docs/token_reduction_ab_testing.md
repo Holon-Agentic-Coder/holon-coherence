@@ -105,9 +105,20 @@ OPENAI_API_KEY="sk-..." holon-coherence run -- <client command against the targe
 holon-coherence stop && holon-coherence start -d
 OPENAI_API_KEY="sk-..." holon-coherence run -- <client command against the target LLM URL>
 
-# Inspect live cumulative totals
+# Inspect live cumulative totals (in-memory counter for the current container session)
 holon-coherence metrics --json
+
+# Generate the comprehensive paired baseline vs optimised scorecard across both passes
+holon-coherence ab-test --trace-file ~/.holon/logs/transactions.jsonl
 ```
+
+> [!NOTE] **In-Memory Cumulative Metrics Lifecycle**:
+> `CumulativeMetrics` resides entirely in proxy process memory and resets whenever the proxy container restarts.
+> Therefore, running `holon-coherence metrics --json` after `holon-coherence stop && holon-coherence start -d` reports
+> only the metrics captured during the second (optimised) pass unless captured prior to the restart. To generate the
+> authentic paired baseline-vs-optimised scorecard reading across both passes, use
+> `holon-coherence ab-test --trace-file ~/.holon/logs/transactions.jsonl`, which processes the append-only JSONL wire log
+> recording both passes.
 
 #### Tier 4: End-to-End Agent A/B Test (Arbitrary Agents & Models)
 
@@ -120,9 +131,23 @@ and cannot write to the host temp dir; with it, run the Tier 3 passive and optim
 log with `--trace-file` instead:
 
 ```bash
-# Host-side proxy, then a paired baseline/optimised agent run with a comparison scorecard
+# Host-side proxy, then a paired baseline/optimised agent run with a comparison scorecard.
+# Mitmdump must either be run in a separate terminal or backgrounded with a readiness wait loop;
+# running synchronously in the foreground blocks execution in a single shell, whilst a bare `&` introduces
+# a socket readiness race where `set_proxy_mode()` can fail silently before HTTP endpoints listen.
+#
+# Option A (Dedicated Terminal):
+# Terminal 1:
 uv run mitmdump -s src/holon_coherence/mitm_addon.py --listen-port 8080 --set confdir=~/.holon/proxy-ca
+# Terminal 2 (once the proxy is listening):
 holon-coherence ab-test --command "<agent workload command>"
+#
+# Option B (Single Terminal / Backgrounded with readiness polling):
+uv run mitmdump -s src/holon_coherence/mitm_addon.py --listen-port 8080 --set confdir=~/.holon/proxy-ca &
+MITM_PID=$!
+until curl -s -f http://127.0.0.1:8080/holon/api/metrics >/dev/null 2>&1 || curl -s -f http://127.0.0.1:8080/__holon__/health >/dev/null 2>&1; do sleep 0.2; done
+holon-coherence ab-test --command "<agent workload command>"
+kill $MITM_PID 2>/dev/null || true
 
 # Container proxy: score the baseline and optimised turns the Tier 3 passes logged
 holon-coherence ab-test --trace-file ~/.holon/logs/transactions.jsonl
