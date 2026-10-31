@@ -13,6 +13,16 @@ import urllib.request
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from holon_coherence.commands.stop import (
+    handle_stop,
+)
+from holon_coherence.commands.stop import (
+    register as register_stop,
+)
+from holon_coherence.commands.stop import (
+    stop_proxy_container as _stop_proxy_container,
+)
+
 if TYPE_CHECKING:
     from holon_coherence.commands.endpoints import ExposedEndpoints
 
@@ -207,24 +217,7 @@ def ensure_docker_image(image: str, rebuild: bool = False) -> None:  # noqa: C90
 
 def stop_proxy_container(container_name: str | None = None) -> None:
     """Stop and remove the holon-coherence background Docker container on demand."""
-    target_container = container_name or get_container_name()
-    is_default = target_container in (DEFAULT_CONTAINER_NAME, "holon-coherence")
-    display_name = "holon-coherence" if is_default else target_container
-    print(f"🛑 Stopping and removing {display_name} Docker container...")
-    try:
-        res = subprocess.run(
-            ["docker", "rm", "-f", target_container],
-            capture_output=True,
-            text=True,
-        )
-        if res.returncode == 0:
-            print(f"✅ {display_name} container stopped and removed.")
-        elif "no such container" in (res.stderr or "").lower():
-            print(f"✅ No active {display_name} container found.")
-        else:
-            print(f"⚠️  Failed to remove container: {res.stderr.strip()}")
-    except OSError as e:
-        print(f"⚠️  Failed to remove container: {e}")
+    _stop_proxy_container(container_name)
 
 
 def handle_build(args: Any) -> int:
@@ -237,18 +230,6 @@ def handle_build(args: Any) -> int:
     print(f"🐳 Building Docker image {args.tag}...")
     subprocess.run(["docker", "build", "-t", args.tag, repo_root], check=True)
     print(f"✅ Docker image '{args.tag}' built successfully.")
-    return 0
-
-
-def handle_stop(
-    args: Any = None,
-    *,
-    stopper_fn: Callable[[str | None], None] | None = None,
-) -> int:
-    """Stop and remove running holon-coherence Docker container."""
-    stopper = stopper_fn or stop_proxy_container
-    target_container = getattr(args, "name", None) or get_container_name()
-    stopper(target_container)
     return 0
 
 
@@ -397,13 +378,8 @@ def handle(args: Any) -> int:
 
 def register(subparsers: Any) -> list[argparse.ArgumentParser]:
     """Register Docker operations subparsers (stop, status, logs, build)."""
-    stop_parser = subparsers.add_parser("stop", help="Stop and remove running holon-coherence Docker container")
-    stop_parser.add_argument(
-        "--name",
-        default=None,
-        help="Container name (defaults to HOLON_CONTAINER_NAME or holon-coherence-proxy)",
-    )
-    stop_parser.set_defaults(handler=handle)
+    name_parser_map = getattr(subparsers, "_name_parser_map", {})
+    stop_parser = name_parser_map["stop"] if "stop" in name_parser_map else register_stop(subparsers)
 
     status_parser = subparsers.add_parser("status", help="Check status of holon-coherence Docker container")
     status_parser.add_argument(
