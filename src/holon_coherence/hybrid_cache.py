@@ -214,115 +214,30 @@ class HybridCacheStore:
         norm = re.sub(r"\b(?:task|run)[-_]\d+\b", "task-<ID>", norm)
         return norm
 
-    def _extract_user_content(  # noqa: C901, PLR0912
-        self, payload: dict[str, Any], max_recent_turns: int = 2
-    ) -> str:
+    def _extract_cache_key_parts(self, payload: dict[str, Any], max_recent_turns: int = 2) -> tuple[str, str]:
+        if not isinstance(payload, dict):
+            return str(payload) if payload else "", ""
+        cached = getattr(self, "_last_key_parts", None)
+        if cached is not None and cached[0] is payload and cached[1] == max_recent_turns:
+            return cached[2]
+        from holon_coherence.providers import resolve_provider
+
+        provider_format = resolve_provider("", payload)
+        result = provider_format.extract_cache_key_parts(payload, max_recent_turns)
+        self._last_key_parts = (payload, max_recent_turns, result)
+        return result
+
+    def _extract_user_content(self, payload: dict[str, Any], max_recent_turns: int = 2) -> str:
         """Extracts user message content specifically to avoid system prompt and JSON key token pollution.
         Prioritizes the most recent user turns to prevent long conversation history token dilution.
         """
-        if not isinstance(payload, dict):
-            return str(payload) if payload else ""
+        user_content, _ = self._extract_cache_key_parts(payload, max_recent_turns)
+        return user_content
 
-        def _extract_item_text(item: Any) -> list[str]:
-            texts: list[str] = []
-            if isinstance(item, str):
-                texts.append(item)
-            elif isinstance(item, dict):
-                if "text" in item and isinstance(item["text"], str):
-                    texts.append(item["text"])
-                if item.get("type") == "tool_result":
-                    tr_content = item.get("content")
-                    if isinstance(tr_content, str):
-                        texts.append(tr_content)
-                    elif isinstance(tr_content, list):
-                        for sub in tr_content:
-                            texts.extend(_extract_item_text(sub))
-                    elif isinstance(tr_content, dict):
-                        texts.extend(_extract_item_text(tr_content))
-            return texts
-
-        user_texts = []
-        messages = payload.get("messages")
-        if isinstance(messages, list):
-            user_msgs = [msg for msg in messages if isinstance(msg, dict) and msg.get("role") == "user"]
-            recent_msgs = user_msgs[-max_recent_turns:] if max_recent_turns > 0 else user_msgs
-            for msg in recent_msgs:
-                content = msg.get("content")
-                if isinstance(content, str):
-                    user_texts.append(content)
-                elif isinstance(content, list):
-                    for item in content:
-                        extracted = _extract_item_text(item)
-                        if extracted:
-                            user_texts.extend(extracted)
-                        elif isinstance(item, str):
-                            user_texts.append(item)
-                elif isinstance(content, dict):
-                    extracted = _extract_item_text(content)
-                    if extracted:
-                        user_texts.extend(extracted)
-                elif content is not None:
-                    user_texts.append(json.dumps(content, default=str))
-        contents = payload.get("contents")
-        if isinstance(contents, list):
-            user_turns = [
-                turn for turn in contents if isinstance(turn, dict) and turn.get("role") in ("user", None, "")
-            ]
-            recent_turns = user_turns[-max_recent_turns:] if max_recent_turns > 0 else user_turns
-            for turn in recent_turns:
-                parts = turn.get("parts")
-                if isinstance(parts, list):
-                    for part in parts:
-                        extracted = _extract_item_text(part)
-                        if extracted:
-                            user_texts.extend(extracted)
-                        elif isinstance(part, str):
-                            user_texts.append(part)
-        if not user_texts and "prompt" in payload and isinstance(payload["prompt"], str):
-            user_texts.append(payload["prompt"])
-        return " ".join(user_texts)
-
-    def _extract_system_prompt(self, payload: dict[str, Any]) -> str:  # noqa: C901, PLR0912
+    def _extract_system_prompt(self, payload: dict[str, Any]) -> str:
         """Extracts normalized system instructions from Anthropic/Gemini/OpenAI payload schemas."""
-        if not isinstance(payload, dict):
-            return ""
-        system_texts: list[str] = []
-
-        # 1. Top-level 'system' or 'system_instruction' field (Anthropic/Gemini)
-        system_val = payload.get("system") or payload.get("system_instruction")
-        if system_val is not None:
-            if isinstance(system_val, str):
-                system_texts.append(system_val)
-            elif isinstance(system_val, list):
-                for item in system_val:
-                    if isinstance(item, str):
-                        system_texts.append(item)
-                    elif isinstance(item, dict) and "text" in item and isinstance(item["text"], str):
-                        system_texts.append(item["text"])
-            elif isinstance(system_val, dict):
-                if "text" in system_val and isinstance(system_val["text"], str):
-                    system_texts.append(system_val["text"])
-                elif "parts" in system_val and isinstance(system_val["parts"], list):
-                    for part in system_val["parts"]:
-                        if isinstance(part, dict) and "text" in part and isinstance(part["text"], str):
-                            system_texts.append(part["text"])
-
-        # 2. System messages in 'messages' array (OpenAI schema)
-        messages = payload.get("messages")
-        if isinstance(messages, list):
-            for msg in messages:
-                if isinstance(msg, dict) and msg.get("role") == "system":
-                    content = msg.get("content")
-                    if isinstance(content, str):
-                        system_texts.append(content)
-                    elif isinstance(content, list):
-                        for item in content:
-                            if isinstance(item, str):
-                                system_texts.append(item)
-                            elif isinstance(item, dict) and "text" in item and isinstance(item["text"], str):
-                                system_texts.append(item["text"])
-
-        return " ".join(system_texts).strip()
+        _, system_prompt = self._extract_cache_key_parts(payload)
+        return system_prompt
 
     def get(self, payload: dict[str, Any], provider: str = "anthropic") -> dict[str, Any] | None:
         """Looks up cached response by exact prefix match or semantic similarity match.
@@ -381,8 +296,9 @@ class HybridCacheStore:
                         stored_payload = json.loads(stored_norm)
                     except Exception:
                         continue
-                    stored_token_set = self._tokenize(self._extract_user_content(stored_payload))
-                    stored_system_hash = self._system_hash(self._extract_system_prompt(stored_payload))
+                    stored_user, stored_sys = self._extract_cache_key_parts(stored_payload)
+                    stored_token_set = self._tokenize(stored_user)
+                    stored_system_hash = self._system_hash(stored_sys)
                     self._backfill_shingles(conn, key, " ".join(sorted(stored_token_set)), stored_system_hash)
                 else:
                     stored_token_set = set(stored_tokens.split())
@@ -415,8 +331,9 @@ class HybridCacheStore:
         prefix_key = self.generate_prefix_key(payload, provider)
         norm_prompt = self.normalize_payload(payload, provider)
         normalized = self._normalized_payload(payload, provider)
-        user_tokens = " ".join(sorted(self._tokenize(self._extract_user_content(normalized))))
-        system_hash = self._system_hash(self._extract_system_prompt(normalized))
+        user_content, system_prompt = self._extract_cache_key_parts(normalized)
+        user_tokens = " ".join(sorted(self._tokenize(user_content)))
+        system_hash = self._system_hash(system_prompt)
         resp_json = json.dumps(response, default=str)
         now = time.time()
         self._prune_expired()
