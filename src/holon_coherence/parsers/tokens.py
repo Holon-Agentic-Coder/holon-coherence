@@ -71,9 +71,7 @@ class TokenCounts(tuple):
         return inst
 
 
-def extract_token_counts(  # noqa: C901, PLR0912, PLR0915
-    req_data: dict[str, Any], resp_data: dict[str, Any] | str, provider: str
-) -> tuple[int, int, int]:
+def extract_token_counts(req_data: dict[str, Any], resp_data: dict[str, Any] | str, provider: str) -> TokenCounts:
     """Extracts (input_tokens, output_tokens, cache_read_tokens) from request/response data.
 
     Args:
@@ -82,7 +80,7 @@ def extract_token_counts(  # noqa: C901, PLR0912, PLR0915
         provider: Detected model provider ("anthropic", "openai", "gemini").
 
     Returns:
-        tuple[int, int, int]: A 3-tuple containing (input_tokens, output_tokens, cache_read_tokens).
+        TokenCounts: A 3-tuple compatible object containing (input_tokens, output_tokens, cache_read_tokens).
             For Anthropic prompt caching, input_tokens reflects total input tokens (prompt tokens,
             cache read tokens, and cache creation tokens), while cache_read_tokens tracks ephemeral
             prompt cache read hits separately.
@@ -91,73 +89,12 @@ def extract_token_counts(  # noqa: C901, PLR0912, PLR0915
         If provider usage metadata is missing or unparseable, fallback token counts are estimated
         using character count integer division (chars // 4 heuristic, ~4 characters per token).
     """
+    from holon_coherence.providers import get_provider
+
+    provider_format = get_provider(provider)
     if isinstance(resp_data, str):
-        from holon_coherence.parsers.sse import extract_sse_token_counts
-
-        return extract_sse_token_counts(resp_data, req_data, provider)
-
-    input_tokens = 0
-    output_tokens = 0
-    cache_read_tokens = 0
-    cache_creation_tokens = 0
-    reasoning_tokens = 0
-    parsed = False
-
-    try:
-        if isinstance(resp_data, dict):
-            if provider == "anthropic":
-                usage = resp_data.get("usage")
-                if isinstance(usage, dict) and "input_tokens" in usage and "output_tokens" in usage:
-                    cache_read_tokens = safe_int(usage.get("cache_read_input_tokens"))
-                    cache_creation_tokens = safe_int(usage.get("cache_creation_input_tokens"))
-                    input_tokens = safe_int(usage.get("input_tokens")) + cache_read_tokens + cache_creation_tokens
-                    output_tokens = safe_int(usage.get("output_tokens"))
-                    reasoning_tokens = safe_int(usage.get("reasoning_tokens")) or safe_int(usage.get("thinking_tokens"))
-                    parsed = True
-            elif provider == "openai":
-                usage = resp_data.get("usage")
-                if isinstance(usage, dict) and "prompt_tokens" in usage and "completion_tokens" in usage:
-                    input_tokens = safe_int(usage.get("prompt_tokens"))
-                    output_tokens = safe_int(usage.get("completion_tokens"))
-                    prompt_tokens_details = usage.get("prompt_tokens_details")
-                    if isinstance(prompt_tokens_details, dict) and "cached_tokens" in prompt_tokens_details:
-                        cache_read_tokens = safe_int(prompt_tokens_details.get("cached_tokens"))
-                    elif "cached_tokens" in usage:
-                        cache_read_tokens = safe_int(usage.get("cached_tokens"))
-                    comp_details = usage.get("completion_tokens_details")
-                    if isinstance(comp_details, dict) and "reasoning_tokens" in comp_details:
-                        reasoning_tokens = safe_int(comp_details.get("reasoning_tokens"))
-                    parsed = True
-            elif provider == "gemini":
-                usage = resp_data.get("usageMetadata") or resp_data.get("usage")
-                if isinstance(usage, dict) and "promptTokenCount" in usage and "candidatesTokenCount" in usage:
-                    input_tokens = safe_int(usage.get("promptTokenCount"))
-                    output_tokens = safe_int(usage.get("candidatesTokenCount"))
-                    if "cachedContentTokenCount" in usage:
-                        cache_read_tokens = safe_int(usage.get("cachedContentTokenCount"))
-                    if "reasoningTokenCount" in usage:
-                        reasoning_tokens = safe_int(usage.get("reasoningTokenCount"))
-                    parsed = True
-    except Exception:
-        logger.debug("Failed to parse token counts for provider %s from response; using estimation fallback", provider)
-
-    if not parsed:
-        logger.debug(
-            "Provider usage dictionary missing or invalid for %s; estimating token counts from payload characters",
-            provider,
-        )
-        input_chars = estimate_chars(req_data)
-        output_chars = estimate_chars(resp_data)
-        input_tokens = max(1, input_chars // 4) if input_chars > 0 else 0
-        output_tokens = max(1, output_chars // 4) if output_chars > 0 else 0
-
-    return TokenCounts(
-        input_tokens,
-        output_tokens,
-        cache_read_tokens,
-        cache_creation_tokens=cache_creation_tokens,
-        reasoning_tokens=reasoning_tokens,
-    )
+        return provider_format.token_counts_from_sse(resp_data, req_data)
+    return provider_format.token_counts_from_dict(req_data, resp_data)
 
 
 def extract_detailed_token_counts(

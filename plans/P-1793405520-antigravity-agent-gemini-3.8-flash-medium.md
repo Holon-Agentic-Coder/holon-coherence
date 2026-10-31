@@ -486,7 +486,7 @@ $$\text{EV} = (0.98 \times 8.90) + (0.5 \times 2.50) - (0.3 \times 3.80) - 0.85 
 - **$P(\text{success})$ (0.98):** The refactoring strategy relies on clean polymorphic delegation conforming to a well-defined `ProviderFormat` protocol. Because existing behavior is comprehensively pinned by existing test suites in `tests/test_mitm_addon.py`, `tests/test_mitm_addon_sse.py`, and `tests/test_hybrid_cache.py`, regressions are prevented systematically.
 - **$\text{Impact}$ (8.90):** Deconstructs duplicated multi-branch conditional cascades across 5 critical files (`parsers/sse.py`, `parsers/tokens.py`, `hybrid_cache.py`, `payload_cleaner.py`, and `proxy/translation/gemini_openai.py`), eliminating up to 13 legacy `# noqa` complexity suppressions and establishing the Open-Closed Principle for future provider wire format additions.
 - **$\mu \times \text{LearningValue}$ ($0.5 \times 2.50 = 1.25$):** Codifies reusable provider protocol design, granular function decomposition patterns for strict Bean 0186 compliance, and complexity ratchet reduction practices.
-- **$\lambda \times \Delta S_{\text{intent}}$ ($0.3 \times 3.80 = 1.14$):** Bounded entropy distribution across the 6 execution steps totaling 3.80, remaining safely below the allocated 5.0 entropy budget.
+- **$\lambda \times \Delta S\_{\text{intent}}$ ($0.3 \times 3.80 = 1.14$):** Bounded entropy distribution across the 6 execution steps totaling 3.80, remaining safely below the allocated 5.0 entropy budget.
 - **$\text{Cost}$ (0.85):** Direct implementation cost covering module creation, protocol wiring, granular function decomposition, comprehensive test suite authoring under `tests/providers/`, and multi-gate pytest/ruff execution.
 
 ---
