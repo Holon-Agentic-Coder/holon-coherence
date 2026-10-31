@@ -74,6 +74,7 @@ from holon_coherence.commands import (
     runner,
     save_web_token,
     start,
+    stop,
     stop_proxy_container,
     wait_for_proxy_ready,
     web_token,
@@ -85,6 +86,7 @@ from holon_coherence.host_local import detect_host_addresses
 # web-token/web-key, metrics, ab-test, run, run-agent, agent aliases.
 COMMAND_MODULES = (
     start,
+    stop,
     docker_ops,
     ca,
     web_token,
@@ -160,6 +162,7 @@ __all__ = [
     "resolve_web_password",
     "run_agent",
     "save_web_token",
+    "stop",
     "stop_proxy_container",
     "wait_for_proxy_ready",
 ]

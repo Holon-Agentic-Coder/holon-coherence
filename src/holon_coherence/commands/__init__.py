@@ -1,5 +1,6 @@
 """CLI command implementations and dispatchers for Holon Coherence."""
 
+from holon_coherence.commands import stop
 from holon_coherence.commands.ab_test import (
     ABComparisonScorecard,
     ABRunConfig,
@@ -162,6 +163,7 @@ __all__ = [
     "run_live_replay_ab_test",
     "run_workload_ab_test",
     "save_web_token",
+    "stop",
     "stop_proxy_container",
     "wait_for_proxy_ready",
 ]
