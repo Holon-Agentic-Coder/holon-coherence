@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from holon_coherence.parsers.tokens import TokenCounts
+
+if TYPE_CHECKING:
+    from holon_coherence.payload_cleaner import JSONContextCleaner
 
 ProviderName = Literal["anthropic", "openai", "gemini"]
 
@@ -15,7 +18,7 @@ class ProviderFormat(Protocol):
 
     def clean(
         self,
-        cleaner: Any,
+        cleaner: JSONContextCleaner,
         payload: dict[str, Any],
         seen_content_hashes: dict[str, tuple[int, str]],
         stats: dict[str, int] | None = None,

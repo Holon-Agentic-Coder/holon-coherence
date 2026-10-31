@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import json
 import logging
-import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -19,10 +18,6 @@ from holon_coherence.providers.anthropic import (
 )
 
 logger = logging.getLogger(__name__)
-
-_SECRET_DICT_KEY_PATTERN = re.compile(
-    r"(?i)^(?:auth|credential|credentials|password|passwd|api[-_]?key|apikey|api[-_]?token|auth[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|secret[-_]?key|secret|private[-_]?key|client[-_]?secret|session[-_]?token)$"
-)
 
 _DEFAULT_RECENT_TURNS_TO_KEEP = 10
 _RECENT_TURNS_TO_KEEP = _DEFAULT_RECENT_TURNS_TO_KEEP

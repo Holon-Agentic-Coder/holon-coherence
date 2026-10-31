@@ -41,7 +41,15 @@ def find_nested_key(data: Any, target_keys: tuple[str, ...] | str, max_depth: in
     return None
 
 
-KNOWN_PROVIDERS: tuple[str, ...] = ("anthropic", "openai", "gemini")
+KNOWN_PROVIDERS: tuple[str, ...] = (
+    "anthropic",
+    "openai",
+    "gemini",
+    "openrouter",
+    "deepseek",
+    "groq",
+    "together",
+)
 
 
 def extract_sse_content(resp_text: str, provider: str) -> str:

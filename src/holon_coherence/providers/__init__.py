@@ -89,12 +89,15 @@ def _detect_by_url(url_or_path: str) -> str | None:
 def _detect_by_payload(payload: dict[str, Any]) -> str | None:
     if "anthropic-version" in payload or "anthropic_version" in payload:
         return "anthropic"
+    model = payload.get("model", "")
+    if isinstance(model, str) and "claude" in model.lower():
+        return "anthropic"
     if "contents" in payload:
         return "gemini"
-    if "messages" in payload or "prompt" in payload:
-        return "openai"
     if "system" in payload:
         return "anthropic"
+    if "messages" in payload or "prompt" in payload:
+        return "openai"
     return None
 
 

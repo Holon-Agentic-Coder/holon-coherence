@@ -7,10 +7,13 @@ import hashlib
 import json
 import logging
 from collections.abc import Iterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from holon_coherence.parsers.tokens import TokenCounts, estimate_chars, safe_int
 from holon_coherence.providers.base import ProviderFormat
+
+if TYPE_CHECKING:
+    from holon_coherence.payload_cleaner import JSONContextCleaner
 
 logger = logging.getLogger(__name__)
 
@@ -466,7 +469,7 @@ class AnthropicProvider(ProviderFormat):
 
     def clean(
         self,
-        cleaner: Any,
+        cleaner: JSONContextCleaner,
         payload: dict[str, Any],
         seen_content_hashes: dict[str, tuple[int, str]],
         stats: dict[str, int] | None = None,

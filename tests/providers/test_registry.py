@@ -45,6 +45,20 @@ def test_detect_provider_name_from_url() -> None:
 
 def test_detect_provider_name_from_payload() -> None:
     assert detect_provider_name("", {"anthropic-version": "2023-06-01"}) == "anthropic"
+    assert (
+        detect_provider_name(
+            "",
+            {"model": "claude-3-5-sonnet-20241022", "messages": [{"role": "user", "content": "hello"}]},
+        )
+        == "anthropic"
+    )
+    assert (
+        detect_provider_name(
+            "",
+            {"system": "You are a helpful assistant", "messages": [{"role": "user", "content": "hello"}]},
+        )
+        == "anthropic"
+    )
     assert detect_provider_name("", {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}) == "gemini"
     assert detect_provider_name("", {"messages": [{"role": "user", "content": "hello"}]}) == "openai"
 

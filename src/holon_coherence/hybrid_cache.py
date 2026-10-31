@@ -217,10 +217,15 @@ class HybridCacheStore:
     def _extract_cache_key_parts(self, payload: dict[str, Any], max_recent_turns: int = 2) -> tuple[str, str]:
         if not isinstance(payload, dict):
             return str(payload) if payload else "", ""
+        cached = getattr(self, "_last_key_parts", None)
+        if cached is not None and cached[0] is payload and cached[1] == max_recent_turns:
+            return cached[2]
         from holon_coherence.providers import resolve_provider
 
         provider_format = resolve_provider("", payload)
-        return provider_format.extract_cache_key_parts(payload, max_recent_turns)
+        result = provider_format.extract_cache_key_parts(payload, max_recent_turns)
+        self._last_key_parts = (payload, max_recent_turns, result)
+        return result
 
     def _extract_user_content(self, payload: dict[str, Any], max_recent_turns: int = 2) -> str:
         """Extracts user message content specifically to avoid system prompt and JSON key token pollution.
@@ -291,8 +296,9 @@ class HybridCacheStore:
                         stored_payload = json.loads(stored_norm)
                     except Exception:
                         continue
-                    stored_token_set = self._tokenize(self._extract_user_content(stored_payload))
-                    stored_system_hash = self._system_hash(self._extract_system_prompt(stored_payload))
+                    stored_user, stored_sys = self._extract_cache_key_parts(stored_payload)
+                    stored_token_set = self._tokenize(stored_user)
+                    stored_system_hash = self._system_hash(stored_sys)
                     self._backfill_shingles(conn, key, " ".join(sorted(stored_token_set)), stored_system_hash)
                 else:
                     stored_token_set = set(stored_tokens.split())
@@ -325,8 +331,9 @@ class HybridCacheStore:
         prefix_key = self.generate_prefix_key(payload, provider)
         norm_prompt = self.normalize_payload(payload, provider)
         normalized = self._normalized_payload(payload, provider)
-        user_tokens = " ".join(sorted(self._tokenize(self._extract_user_content(normalized))))
-        system_hash = self._system_hash(self._extract_system_prompt(normalized))
+        user_content, system_prompt = self._extract_cache_key_parts(normalized)
+        user_tokens = " ".join(sorted(self._tokenize(user_content)))
+        system_hash = self._system_hash(system_prompt)
         resp_json = json.dumps(response, default=str)
         now = time.time()
         self._prune_expired()
