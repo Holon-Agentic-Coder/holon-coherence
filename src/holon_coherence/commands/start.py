@@ -411,6 +411,9 @@ def _get_start_hooks() -> ProxyLifecycleHooks:
         urlopen_no_proxy_fn=_urlopen_no_proxy,
         generate_ca_fn=generate_root_ca,
         container_host_local_spec_fn=container_host_local_spec,
+        is_in_container_fn=is_in_container,
+        resolve_web_password_fn=resolve_web_password,
+        save_web_token_fn=save_web_token,
     )
 
 

@@ -21,7 +21,9 @@ def handle_stop(
     stopper_fn: Callable[[str | None], None] | None = None,
 ) -> int:
     """Stop and remove running holon-coherence Docker container."""
-    stopper = stopper_fn or stop_proxy_container
+    from holon_coherence.commands.docker_ops import stop_proxy_container as docker_stop
+
+    stopper = stopper_fn or docker_stop
     target_container = getattr(args, "name", None) or get_container_name()
     stopper(target_container)
     return 0

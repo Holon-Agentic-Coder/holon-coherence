@@ -281,6 +281,9 @@ class ProxyLifecycleHooks:
     urlopen_no_proxy_fn: Callable[..., Any] = _urlopen_no_proxy
     generate_ca_fn: Callable[..., Any] = generate_root_ca
     container_host_local_spec_fn: Callable[..., str] = container_host_local_spec
+    is_in_container_fn: Callable[[], bool] | None = None
+    resolve_web_password_fn: Callable[[str | None], str] | None = None
+    save_web_token_fn: Callable[[str], str] | None = None
 
 
 def _resolve_ensure_image(hook: Callable[..., None] | None) -> Callable[..., None]:
@@ -607,8 +610,10 @@ class ProxyLifecycle:
 
         cmd = [tool_path, "-s", addon_path, "--listen-port", str(self.config.port)]
         if web_enabled:
-            web_password = resolve_web_password(self.config.web_password)
-            save_web_token(web_password)
+            resolver = self.hooks.resolve_web_password_fn if self.hooks and self.hooks.resolve_web_password_fn else resolve_web_password
+            saver = self.hooks.save_web_token_fn if self.hooks and self.hooks.save_web_token_fn else save_web_token
+            web_password = resolver(self.config.web_password)
+            saver(web_password)
             cmd.extend(
                 [
                     "--web-host",
@@ -672,7 +677,12 @@ class ProxyLifecycle:
 
     def start(self, recreate_if_mismatch: bool = True) -> bool:
         """Start the proxy server in container or host Docker mode."""
-        if is_in_container():
+        check_in_container = (
+            self.hooks.is_in_container_fn
+            if self.hooks and self.hooks.is_in_container_fn
+            else is_in_container
+        )
+        if check_in_container():
             return self._start_in_container()
 
         if self.config.detach:
