@@ -10,6 +10,7 @@ from holon_coherence.proxy.addon import (
     addons,
 )
 from holon_coherence.proxy.dashboard import render_dashboard_html
+from holon_coherence.proxy.lifecycle import ProxyLifecycle, ProxyLifecycleConfig
 from holon_coherence.proxy.metrics import CumulativeMetrics
 from holon_coherence.proxy.normalise.anthropic import normalize_anthropic_request
 from holon_coherence.proxy.routing import _make_http_response, is_local_target
@@ -63,6 +64,8 @@ __all__ = [
     "FlowTiming",
     "MITMProxyInterceptor",
     "MitmproxyAddon",
+    "ProxyLifecycle",
+    "ProxyLifecycleConfig",
     "_discard_pending_future",
     "_get_wire_log_executor",
     "_make_http_response",
