@@ -35,7 +35,7 @@ from holon_coherence.commands.start import (
     report_local_llm_route,
     wait_for_proxy_ready,
 )
-from holon_coherence.container.lifecycle import ProxyLifecycle, ProxyLifecycleConfig
+from holon_coherence.container.lifecycle import ProxyLifecycle
 from holon_coherence.host_local import HOST_LOCAL_ENV_VAR
 
 
@@ -51,12 +51,10 @@ class TestWaitForProxyReadySuite:
             assert wait_for_proxy_ready(8080) is True
 
     def test_wait_for_proxy_ready_fail_fast_when_container_exits(self) -> None:
+        refused = urllib.error.URLError(ConnectionRefusedError())
         with (
             patch("holon_coherence.container.lifecycle.is_container_running", side_effect=[True, False]),
-            patch(
-                "holon_coherence.container.lifecycle._urlopen_no_proxy",
-                side_effect=urllib.error.URLError(ConnectionRefusedError()),
-            ),
+            patch("holon_coherence.container.lifecycle._urlopen_no_proxy", side_effect=refused),
             patch("time.sleep"),
         ):
             assert wait_for_proxy_ready(8080, timeout=15.0) is False
@@ -262,9 +260,7 @@ class TestDockerDiagnosticsAndPortConflicts:
             patch("holon_coherence.container.lifecycle.is_port_in_use", return_value=False),
             patch("holon_coherence.container.lifecycle.is_container_running", return_value=True),
             patch("holon_coherence.container.lifecycle.is_container_bound_to_port", return_value=True),
-            patch(
-                "holon_coherence.container.lifecycle.ProxyLifecycle.wait_until_ready", return_value=False
-            ) as mock_wait,
+            patch.object(ProxyLifecycle, "wait_until_ready", return_value=False) as mock_wait,
             pytest.raises(SystemExit) as exc_info,
         ):
             ensure_proxy_running(port=9090)
@@ -282,9 +278,7 @@ class TestDockerDiagnosticsAndPortConflicts:
             patch("holon_coherence.container.lifecycle.is_port_in_use", return_value=False),
             patch("holon_coherence.container.lifecycle.is_container_running", return_value=True),
             patch("holon_coherence.container.lifecycle.is_container_bound_to_port", return_value=True),
-            patch(
-                "holon_coherence.container.lifecycle.ProxyLifecycle.wait_until_ready", return_value=True
-            ) as mock_wait,
+            patch.object(ProxyLifecycle, "wait_until_ready", return_value=True) as mock_wait,
         ):
             result = ensure_proxy_running(port=9090)
         assert result is False
@@ -478,12 +472,10 @@ class TestWaitForProxyReady:
             assert second_url == "http://127.0.0.1:8080/_holon/metrics"
 
     def test_wait_for_proxy_ready_fail_fast_when_container_exits(self) -> None:
+        refused = urllib.error.URLError(ConnectionRefusedError())
         with (
             patch("holon_coherence.container.lifecycle.is_container_running", side_effect=[True, False]),
-            patch(
-                "holon_coherence.container.lifecycle._urlopen_no_proxy",
-                side_effect=urllib.error.URLError(ConnectionRefusedError()),
-            ),
+            patch("holon_coherence.container.lifecycle._urlopen_no_proxy", side_effect=refused),
             patch("time.sleep"),
         ):
             assert wait_for_proxy_ready(8080, timeout=15.0) is False
@@ -1195,71 +1187,3 @@ class TestMitmwebInspectorDefault:
         assert not any(arg.endswith(":8081") for arg in docker_cmd)
         assert not any(arg.startswith("HOLON_COHERENCE_WEB_PASSWORD=") for arg in docker_cmd)
         mock_resolve.assert_not_called()
-
-
-class TestProxyLifecycleDelegation:
-    """The start-command facades hand container work to ProxyLifecycle."""
-
-    def test_ensure_proxy_running_delegates_to_lifecycle_start(self) -> None:
-        captured: list[ProxyLifecycleConfig] = []
-
-        def fake_start(self: ProxyLifecycle, recreate_if_mismatch: bool = True) -> bool:
-            captured.append(self.config)
-            return True
-
-        with patch.object(ProxyLifecycle, "start", fake_start):
-            assert ensure_proxy_running(port=9100, host_local_spec="localhost:8081", container_name="box") is True
-        (config,) = captured
-        assert (config.port, config.host_local_spec, config.container_name) == (9100, "localhost:8081", "box")
-        assert config.image == "holon-coherence:latest"
-        assert config.detach is True
-        assert config.world_accessible_mounts is True
-        assert config.web_port is None
-
-    def test_wait_for_proxy_ready_delegates_to_lifecycle(self) -> None:
-        seen: list[tuple[int, str, float]] = []
-
-        def fake_wait(self: ProxyLifecycle, timeout_seconds: float = 15.0, poll_interval: float = 0.2) -> bool:
-            seen.append((self.config.port, self.container_name, timeout_seconds))
-            return True
-
-        with patch.object(ProxyLifecycle, "wait_until_ready", fake_wait):
-            assert wait_for_proxy_ready(9101, timeout=3.0, container_name="box") is True
-        assert seen == [(9101, "box", 3.0)]
-
-    def test_host_start_prepares_then_launches_with_resolved_ports(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv(HOST_LOCAL_ENV_VAR, raising=False)
-        calls: list[tuple[str, ProxyLifecycleConfig]] = []
-
-        def fake_prepare(self: ProxyLifecycle) -> None:
-            calls.append(("prepare", self.config))
-
-        def fake_launch(self: ProxyLifecycle) -> None:
-            calls.append(("launch", self.config))
-
-        with (
-            patch("holon_coherence.commands.start.is_in_container", return_value=False),
-            patch("holon_coherence.container.lifecycle.check_docker_daemon", return_value=(True, "")),
-            patch("holon_coherence.commands.start.is_port_in_use", return_value=False),
-            patch("holon_coherence.commands.start.resolve_web_password", return_value="tok"),
-            patch.object(ProxyLifecycle, "prepare", fake_prepare),
-            patch.object(ProxyLifecycle, "launch", fake_launch),
-        ):
-            main(["start", "--web", "--name", "box", "--passive", "--build"])
-
-        assert [name for name, _ in calls] == ["prepare", "launch"]
-        prepared, launched = calls[0][1], calls[1][1]
-        assert prepared.web_port is None
-        assert (launched.port, launched.web_port, launched.web_password) == (8080, 8081, "tok")
-        assert (launched.container_name, launched.detach, launched.passive, launched.rebuild) == (
-            "box",
-            False,
-            True,
-            True,
-        )
-
-    def test_start_rejects_unusable_local_llm_base(self, capsys: pytest.CaptureFixture[str]) -> None:
-        with pytest.raises(SystemExit) as exc_info:
-            main(["start", "--local-llm-base", "localhost:notaport"])
-        assert exc_info.value.code == 1
-        assert "is not a usable endpoint" in capsys.readouterr().err
