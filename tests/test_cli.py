@@ -56,11 +56,11 @@ class TestCLIDispatchAndMain:
         assert exc.value.code == 1
 
     def test_stop_subcommand_dispatch(self) -> None:
-        with patch("holon_coherence.commands.docker_ops.stop_proxy_container") as mock_stop:
+        with patch("holon_coherence.proxy.lifecycle.ProxyLifecycle.stop") as mock_stop:
             main(["stop"])
             mock_stop.assert_called_once_with("holon-coherence-proxy")
 
-        with patch("holon_coherence.commands.docker_ops.stop_proxy_container") as mock_stop:
+        with patch("holon_coherence.proxy.lifecycle.ProxyLifecycle.stop") as mock_stop:
             main(["stop", "--name", "sandbox-custom"])
             mock_stop.assert_called_once_with("sandbox-custom")
 
@@ -242,8 +242,8 @@ class TestCLIDispatchAndMain:
         monkeypatch.setenv("HOLON_PROXY_PORT", "9191")
         with (
             patch("holon_coherence.commands.start.is_in_container", return_value=False),
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
-            patch("holon_coherence.commands.start.ensure_docker_image"),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch("subprocess.run") as mock_run,
@@ -259,9 +259,9 @@ class TestCLIDispatchAndMain:
         monkeypatch.setenv("HOLON_PROXY_PORT", "invalid_port")
         with (
             patch("holon_coherence.commands.start.is_in_container", return_value=False),
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.commands.start.is_port_in_use", return_value=False),
-            patch("holon_coherence.commands.start.ensure_docker_image"),
+            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch("subprocess.run") as mock_run,
@@ -275,8 +275,8 @@ class TestCLIDispatchAndMain:
     def test_start_command_interactive_includes_init_flag(self) -> None:
         with (
             patch("holon_coherence.commands.start.is_in_container", return_value=False),
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
-            patch("holon_coherence.commands.start.ensure_docker_image"),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch("subprocess.run") as mock_run,
@@ -320,10 +320,10 @@ class TestCLIDispatchAndMain:
     def test_start_command_with_web_flag(self) -> None:
         with (
             patch("holon_coherence.commands.start.is_in_container", return_value=False),
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.commands.start.is_port_in_use", return_value=False),
             patch("holon_coherence.commands.start.save_web_token"),
-            patch("holon_coherence.commands.start.ensure_docker_image"),
+            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch("subprocess.run") as mock_run,
@@ -346,9 +346,10 @@ class TestCLIDispatchAndMain:
 
         with (
             patch("holon_coherence.commands.start.is_in_container", return_value=False),
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.commands.start.is_port_in_use", side_effect=fake_in_use),
-            patch("holon_coherence.commands.start.ensure_docker_image"),
+            patch("holon_coherence.proxy.lifecycle.is_port_in_use", side_effect=fake_in_use),
+            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch("subprocess.run") as mock_run,
@@ -365,10 +366,11 @@ class TestCLIDispatchAndMain:
 
         with (
             patch("holon_coherence.commands.start.is_in_container", return_value=False),
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.commands.start.is_port_in_use", side_effect=fake_in_use),
+            patch("holon_coherence.proxy.lifecycle.is_port_in_use", side_effect=fake_in_use),
             patch("holon_coherence.commands.start.save_web_token"),
-            patch("holon_coherence.commands.start.ensure_docker_image"),
+            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch("subprocess.run") as mock_run,
@@ -383,10 +385,11 @@ class TestCLIDispatchAndMain:
 
         with (
             patch("holon_coherence.commands.start.is_in_container", return_value=False),
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.commands.start.is_port_in_use", side_effect=fake_in_use),
+            patch("holon_coherence.proxy.lifecycle.is_port_in_use", side_effect=fake_in_use),
             patch("holon_coherence.commands.start.save_web_token"),
-            patch("holon_coherence.commands.start.ensure_docker_image"),
+            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch("subprocess.run") as mock_run,
@@ -401,10 +404,10 @@ class TestCLIDispatchAndMain:
     def test_start_command_with_custom_web_port(self) -> None:
         with (
             patch("holon_coherence.commands.start.is_in_container", return_value=False),
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.commands.start.is_port_in_use", return_value=False),
             patch("holon_coherence.commands.start.save_web_token"),
-            patch("holon_coherence.commands.start.ensure_docker_image"),
+            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch("subprocess.run") as mock_run,
@@ -420,9 +423,9 @@ class TestCLIDispatchAndMain:
     def test_start_command_with_no_web_flag_omits_web_port(self) -> None:
         with (
             patch("holon_coherence.commands.start.is_in_container", return_value=False),
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.commands.start.is_port_in_use", return_value=False),
-            patch("holon_coherence.commands.start.ensure_docker_image"),
+            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch("subprocess.run") as mock_run,
@@ -708,9 +711,9 @@ class TestLocalLlmRunnerFlag:
     def test_start_command_supports_local_llm_base_flag(self, monkeypatch: pytest.MonkeyPatch) -> None:
         with (
             patch("holon_coherence.commands.start.is_in_container", return_value=False),
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.commands.start.is_port_in_use", return_value=False),
-            patch("holon_coherence.commands.start.ensure_docker_image"),
+            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch("subprocess.run") as mock_subproc,
@@ -732,8 +735,8 @@ class TestLocalLlmRunnerFlag:
         monkeypatch.delenv(HOST_LOCAL_ENV_VAR, raising=False)
         with (
             patch("holon_coherence.commands.start.is_in_container", return_value=False),
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
-            patch("holon_coherence.commands.start.ensure_docker_image"),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch("subprocess.run"),

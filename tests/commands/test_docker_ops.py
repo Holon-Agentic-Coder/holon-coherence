@@ -134,23 +134,19 @@ class TestStopProxyContainerOps:
 
 
 class TestDockerOpsRegistrationAndDispatch:
-    """Tests for subparsers registration and handle dispatch across build, stop, status, logs."""
+    """Tests for subparsers registration (build, status, logs) and handle dispatch (incl. legacy stop)."""
 
     def test_register_and_defaults(self) -> None:
         parser = argparse.ArgumentParser()
         subparsers = parser.add_subparsers(dest="command")
         parsers = register(subparsers)
-        assert len(parsers) == 4
+        assert len(parsers) == 3
 
         args_build = parser.parse_args(["build", "--tag", "custom:1.0"])
         assert args_build.command == "build"
         assert args_build.tag == "custom:1.0"
         assert args_build.handler == handle
         assert getattr(args_build, "propagates_exit", False) is False
-
-        args_stop = parser.parse_args(["stop", "--name", "my-box"])
-        assert args_stop.command == "stop"
-        assert args_stop.name == "my-box"
 
         args_status = parser.parse_args(["status", "--name", "my-box"])
         assert args_status.command == "status"

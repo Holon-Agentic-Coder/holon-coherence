@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 import urllib.error
@@ -13,106 +12,42 @@ import urllib.request
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from holon_coherence.commands.stop import handle_stop
+from holon_coherence.proxy.lifecycle import (
+    DEFAULT_CONTAINER_NAME,
+    ProxyLifecycle,
+    check_docker_daemon,
+    get_container_name,
+    is_container_bound_to_port,
+    is_container_running,
+)
+
 if TYPE_CHECKING:
     from holon_coherence.commands.endpoints import ExposedEndpoints
 
-DEFAULT_CONTAINER_NAME = "holon-coherence-proxy"
+__all__ = [
+    "CONTAINER_NAME",
+    "DEFAULT_CONTAINER_NAME",
+    "DOCKER_BUILD_TIMEOUT_SECONDS",
+    "WEB_PASSWORD_ENV_VAR",
+    "check_docker_daemon",
+    "ensure_docker_image",
+    "get_container_mapped_port",
+    "get_container_name",
+    "get_container_web_token",
+    "handle",
+    "handle_build",
+    "handle_logs",
+    "handle_status",
+    "handle_stop",
+    "is_container_bound_to_port",
+    "is_container_running",
+    "register",
+    "stop_proxy_container",
+]
+
 CONTAINER_NAME = DEFAULT_CONTAINER_NAME
 DOCKER_BUILD_TIMEOUT_SECONDS = 600
-
-
-def get_container_name(override: str | None = None) -> str:
-    """Return configured Docker container name respecting override or HOLON_CONTAINER_NAME."""
-    if override:
-        return override
-    return os.getenv("HOLON_CONTAINER_NAME", DEFAULT_CONTAINER_NAME)
-
-
-def is_container_running(container_name: str | None = None) -> bool:
-    """Check if the Docker container is currently running."""
-    name = container_name or get_container_name()
-    try:
-        res = subprocess.run(
-            ["docker", "inspect", "-f", "{{.State.Running}}", name],
-            capture_output=True,
-            text=True,
-            timeout=5.0,
-        )
-        return res.returncode == 0 and res.stdout.strip().lower() == "true"
-    except (subprocess.TimeoutExpired, OSError):
-        return False
-
-
-def is_container_bound_to_port(port: int, container_name: str | None = None) -> bool:
-    """Check if the container is currently running and bound to the specified host port."""
-    name = container_name or get_container_name()
-    try:
-        res = subprocess.run(
-            ["docker", "port", name, "8080/tcp"],
-            capture_output=True,
-            text=True,
-            timeout=5.0,
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return False
-    output = res.stdout
-    if res.returncode != 0 or not output.strip():
-        try:
-            fallback_res = subprocess.run(
-                ["docker", "port", name],
-                capture_output=True,
-                text=True,
-                timeout=5.0,
-            )
-        except (subprocess.TimeoutExpired, OSError):
-            return False
-        if fallback_res.returncode != 0:
-            return False
-        output = fallback_res.stdout
-
-    for line in output.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        host_part = line.split("->")[-1].strip()
-        if ":" in host_part:
-            try:
-                mapped_port = int(host_part.rsplit(":", 1)[1])
-                if mapped_port == port:
-                    return True
-            except ValueError:
-                continue
-    return False
-
-
-def check_docker_daemon() -> tuple[bool, str]:
-    """Check Docker CLI and daemon status with clean diagnostics."""
-    if not shutil.which("docker"):
-        return (
-            False,
-            "Error: Docker CLI is not installed or not found on PATH.\n"
-            "Please install Docker to run the holon-coherence optimization proxy container.",
-        )
-    try:
-        res = subprocess.run(
-            ["docker", "info"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=5.0,
-        )
-        if res.returncode != 0:
-            return (
-                False,
-                "Error: Docker daemon is not running.\n"
-                "Please start Docker Desktop or the Docker daemon to enable the optimization proxy.",
-            )
-    except subprocess.TimeoutExpired:
-        return (
-            False,
-            "Error: Docker daemon connection timed out.\n"
-            "Please ensure Docker Desktop or the Docker daemon is responding.",
-        )
-    return True, ""
 
 
 def ensure_docker_image(image: str, rebuild: bool = False) -> None:  # noqa: C901, PLR0912
@@ -207,24 +142,7 @@ def ensure_docker_image(image: str, rebuild: bool = False) -> None:  # noqa: C90
 
 def stop_proxy_container(container_name: str | None = None) -> None:
     """Stop and remove the holon-coherence background Docker container on demand."""
-    target_container = container_name or get_container_name()
-    is_default = target_container in (DEFAULT_CONTAINER_NAME, "holon-coherence")
-    display_name = "holon-coherence" if is_default else target_container
-    print(f"🛑 Stopping and removing {display_name} Docker container...")
-    try:
-        res = subprocess.run(
-            ["docker", "rm", "-f", target_container],
-            capture_output=True,
-            text=True,
-        )
-        if res.returncode == 0:
-            print(f"✅ {display_name} container stopped and removed.")
-        elif "no such container" in (res.stderr or "").lower():
-            print(f"✅ No active {display_name} container found.")
-        else:
-            print(f"⚠️  Failed to remove container: {res.stderr.strip()}")
-    except OSError as e:
-        print(f"⚠️  Failed to remove container: {e}")
+    ProxyLifecycle().stop(container_name)
 
 
 def handle_build(args: Any) -> int:
@@ -237,18 +155,6 @@ def handle_build(args: Any) -> int:
     print(f"🐳 Building Docker image {args.tag}...")
     subprocess.run(["docker", "build", "-t", args.tag, repo_root], check=True)
     print(f"✅ Docker image '{args.tag}' built successfully.")
-    return 0
-
-
-def handle_stop(
-    args: Any = None,
-    *,
-    stopper_fn: Callable[[str | None], None] | None = None,
-) -> int:
-    """Stop and remove running holon-coherence Docker container."""
-    stopper = stopper_fn or stop_proxy_container
-    target_container = getattr(args, "name", None) or get_container_name()
-    stopper(target_container)
     return 0
 
 
@@ -396,15 +302,7 @@ def handle(args: Any) -> int:
 
 
 def register(subparsers: Any) -> list[argparse.ArgumentParser]:
-    """Register Docker operations subparsers (stop, status, logs, build)."""
-    stop_parser = subparsers.add_parser("stop", help="Stop and remove running holon-coherence Docker container")
-    stop_parser.add_argument(
-        "--name",
-        default=None,
-        help="Container name (defaults to HOLON_CONTAINER_NAME or holon-coherence-proxy)",
-    )
-    stop_parser.set_defaults(handler=handle)
-
+    """Register Docker operations subparsers (status, logs, build); ``stop`` lives in ``commands.stop``."""
     status_parser = subparsers.add_parser("status", help="Check status of holon-coherence Docker container")
     status_parser.add_argument(
         "--name",
@@ -428,4 +326,4 @@ def register(subparsers: Any) -> list[argparse.ArgumentParser]:
     )
     build_parser.set_defaults(handler=handle)
 
-    return [stop_parser, status_parser, logs_parser, build_parser]
+    return [status_parser, logs_parser, build_parser]

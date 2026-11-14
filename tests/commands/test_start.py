@@ -36,6 +36,7 @@ from holon_coherence.commands.start import (
     wait_for_proxy_ready,
 )
 from holon_coherence.host_local import HOST_LOCAL_ENV_VAR
+from holon_coherence.proxy.lifecycle import ProxyLifecycle, ProxyLifecycleConfig
 
 
 class TestWaitForProxyReadySuite:
@@ -44,16 +45,16 @@ class TestWaitForProxyReadySuite:
     def test_wait_for_proxy_ready_immediate_success(self) -> None:
         mock_resp = MagicMock(status=200)
         with (
-            patch("holon_coherence.commands.start.is_container_running", return_value=True),
-            patch("holon_coherence.commands.start._urlopen_no_proxy", return_value=mock_resp),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=True),
+            patch("holon_coherence.proxy.lifecycle._urlopen_no_proxy", return_value=mock_resp),
         ):
             assert wait_for_proxy_ready(8080) is True
 
     def test_wait_for_proxy_ready_fail_fast_when_container_exits(self) -> None:
         with (
-            patch("holon_coherence.commands.start.is_container_running", side_effect=[True, False]),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", side_effect=[True, False]),
             patch(
-                "holon_coherence.commands.start._urlopen_no_proxy",
+                "holon_coherence.proxy.lifecycle._urlopen_no_proxy",
                 side_effect=urllib.error.URLError(ConnectionRefusedError()),
             ),
             patch("time.sleep"),
@@ -90,10 +91,10 @@ class TestEnsureProxyRunningSuite:
 
     def test_reuse_existing_healthy_container(self) -> None:
         with (
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
-            patch("holon_coherence.commands.start.is_port_in_use", return_value=True),
-            patch("holon_coherence.commands.start.is_container_running", return_value=True),
-            patch("holon_coherence.commands.start.is_container_bound_to_port", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.is_port_in_use", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.is_container_bound_to_port", return_value=True),
             patch("subprocess.run") as mock_run,
         ):
             started = ensure_proxy_running(port=8080)
@@ -102,13 +103,13 @@ class TestEnsureProxyRunningSuite:
 
     def test_ensure_proxy_running_launches_new_container(self) -> None:
         with (
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
-            patch("holon_coherence.commands.start.is_port_in_use", return_value=False),
-            patch("holon_coherence.commands.start.is_container_running", return_value=False),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.is_port_in_use", return_value=False),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=False),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch("subprocess.run", return_value=MagicMock(returncode=0)),
-            patch("holon_coherence.commands.start.wait_for_proxy_ready", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.ProxyLifecycle.wait_until_ready", return_value=True),
         ):
             started = ensure_proxy_running(port=8080)
             assert started is True
@@ -143,9 +144,9 @@ class TestStartCommandRegistrationAndDispatch:
         )
         with (
             patch("holon_coherence.commands.start.is_in_container", return_value=False),
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.commands.start.is_port_in_use", return_value=False),
-            patch("holon_coherence.commands.start.ensure_docker_image"),
+            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch("subprocess.run", return_value=MagicMock(returncode=0)),
@@ -198,9 +199,9 @@ class TestDockerDiagnosticsAndPortConflicts:
 
     def test_port_conflict_detection_when_container_not_running(self) -> None:
         with (
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
-            patch("holon_coherence.commands.start.is_port_in_use", return_value=True),
-            patch("holon_coherence.commands.start.is_container_running", return_value=False),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.is_port_in_use", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=False),
             pytest.raises(SystemExit) as exc_info,
         ):
             ensure_proxy_running(port=8080)
@@ -208,10 +209,10 @@ class TestDockerDiagnosticsAndPortConflicts:
 
     def test_reuse_existing_healthy_container(self) -> None:
         with (
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
-            patch("holon_coherence.commands.start.is_port_in_use", return_value=True),
-            patch("holon_coherence.commands.start.is_container_running", return_value=True),
-            patch("holon_coherence.commands.start.is_container_bound_to_port", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.is_port_in_use", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.is_container_bound_to_port", return_value=True),
             patch("subprocess.run") as mock_run,
         ):
             started = ensure_proxy_running(port=8080)
@@ -221,9 +222,9 @@ class TestDockerDiagnosticsAndPortConflicts:
 
     def test_ensure_proxy_running_launches_new_container_returns_true(self) -> None:
         with (
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
-            patch("holon_coherence.commands.start.is_port_in_use", return_value=False),
-            patch("holon_coherence.commands.start.is_container_running", return_value=False),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.is_port_in_use", return_value=False),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=False),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch(
@@ -234,7 +235,7 @@ class TestDockerDiagnosticsAndPortConflicts:
                     MagicMock(returncode=0),  # docker run
                 ],
             ) as mock_run,
-            patch("holon_coherence.commands.start.wait_for_proxy_ready", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.ProxyLifecycle.wait_until_ready", return_value=True),
         ):
             started = ensure_proxy_running(port=8080)
             assert started is True
@@ -243,10 +244,10 @@ class TestDockerDiagnosticsAndPortConflicts:
 
     def test_container_already_running_on_different_port_error(self, capsys: pytest.CaptureFixture[str]) -> None:
         with (
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
-            patch("holon_coherence.commands.start.is_port_in_use", return_value=False),
-            patch("holon_coherence.commands.start.is_container_running", return_value=True),
-            patch("holon_coherence.commands.start.is_container_bound_to_port", return_value=False),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.is_port_in_use", return_value=False),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.is_container_bound_to_port", return_value=False),
             pytest.raises(SystemExit) as exc_info,
         ):
             ensure_proxy_running(port=9090)
@@ -257,16 +258,16 @@ class TestDockerDiagnosticsAndPortConflicts:
 
     def test_container_unresponsive_diagnostic(self, capsys: pytest.CaptureFixture[str]) -> None:
         with (
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
-            patch("holon_coherence.commands.start.is_port_in_use", return_value=False),
-            patch("holon_coherence.commands.start.is_container_running", return_value=True),
-            patch("holon_coherence.commands.start.is_container_bound_to_port", return_value=True),
-            patch("holon_coherence.commands.start.wait_for_proxy_ready", return_value=False) as mock_wait,
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.is_port_in_use", return_value=False),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.is_container_bound_to_port", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.ProxyLifecycle.wait_until_ready", return_value=False) as mock_wait,
             pytest.raises(SystemExit) as exc_info,
         ):
             ensure_proxy_running(port=9090)
         assert exc_info.value.code == 1
-        mock_wait.assert_called_once_with(9090)
+        mock_wait.assert_called_once_with()
         captured = capsys.readouterr()
         assert (
             "Error: A holon-coherence proxy container is running for port 9090, but is not responding." in captured.err
@@ -275,22 +276,22 @@ class TestDockerDiagnosticsAndPortConflicts:
 
     def test_ensure_proxy_running_bound_container_becomes_ready(self) -> None:
         with (
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
-            patch("holon_coherence.commands.start.is_port_in_use", return_value=False),
-            patch("holon_coherence.commands.start.is_container_running", return_value=True),
-            patch("holon_coherence.commands.start.is_container_bound_to_port", return_value=True),
-            patch("holon_coherence.commands.start.wait_for_proxy_ready", return_value=True) as mock_wait,
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.is_port_in_use", return_value=False),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.is_container_bound_to_port", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.ProxyLifecycle.wait_until_ready", return_value=True) as mock_wait,
         ):
             result = ensure_proxy_running(port=9090)
         assert result is False
-        mock_wait.assert_called_once_with(9090)
+        mock_wait.assert_called_once_with()
 
     def test_port_conflict_when_container_running_on_different_port(self) -> None:
         with (
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
-            patch("holon_coherence.commands.start.is_port_in_use", return_value=True),
-            patch("holon_coherence.commands.start.is_container_running", return_value=True),
-            patch("holon_coherence.commands.start.is_container_bound_to_port", return_value=False),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.is_port_in_use", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.is_container_bound_to_port", return_value=False),
             pytest.raises(SystemExit) as exc_info,
         ):
             ensure_proxy_running(port=8080)
@@ -347,9 +348,9 @@ class TestDockerDiagnosticsAndPortConflicts:
     def test_ensure_proxy_running_timeout_combines_logs(self, capsys: pytest.CaptureFixture[str]) -> None:
         logs_res = MagicMock(returncode=0, stdout="out msg\n", stderr="err traceback\n")
         with (
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
-            patch("holon_coherence.commands.start.is_port_in_use", return_value=False),
-            patch("holon_coherence.commands.start.is_container_running", return_value=False),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.is_port_in_use", return_value=False),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=False),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch(
@@ -361,8 +362,8 @@ class TestDockerDiagnosticsAndPortConflicts:
                     logs_res,  # docker logs
                 ],
             ),
-            patch("holon_coherence.commands.start.wait_for_proxy_ready", return_value=False),
-            patch("holon_coherence.commands.start.stop_proxy_container") as mock_stop,
+            patch("holon_coherence.proxy.lifecycle.ProxyLifecycle.wait_until_ready", return_value=False),
+            patch("holon_coherence.proxy.lifecycle.ProxyLifecycle.stop") as mock_stop,
             pytest.raises(SystemExit) as exc_info,
         ):
             ensure_proxy_running(port=8080)
@@ -374,9 +375,9 @@ class TestDockerDiagnosticsAndPortConflicts:
 
     def test_ensure_proxy_running_build_failure(self, capsys: pytest.CaptureFixture[str]) -> None:
         with (
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
-            patch("holon_coherence.commands.start.is_port_in_use", return_value=False),
-            patch("holon_coherence.commands.start.is_container_running", return_value=False),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.is_port_in_use", return_value=False),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=False),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch(
@@ -395,9 +396,9 @@ class TestDockerDiagnosticsAndPortConflicts:
 
     def test_ensure_proxy_running_ghcr_pull_failure(self, capsys: pytest.CaptureFixture[str]) -> None:
         with (
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
-            patch("holon_coherence.commands.start.is_port_in_use", return_value=False),
-            patch("holon_coherence.commands.start.is_container_running", return_value=False),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.is_port_in_use", return_value=False),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=False),
             patch("os.makedirs"),
             patch("os.path.exists", side_effect=lambda p: not str(p).endswith("Dockerfile")),
             patch(
@@ -423,8 +424,8 @@ class TestWaitForProxyReady:
         mock_resp = MagicMock()
         mock_resp.status = 200
         with (
-            patch("holon_coherence.commands.start.is_container_running", return_value=True),
-            patch("holon_coherence.commands.start._urlopen_no_proxy", return_value=mock_resp) as mock_urlopen,
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=True),
+            patch("holon_coherence.proxy.lifecycle._urlopen_no_proxy", return_value=mock_resp) as mock_urlopen,
             patch("time.sleep") as mock_sleep,
         ):
             assert wait_for_proxy_ready(8080) is True
@@ -440,8 +441,8 @@ class TestWaitForProxyReady:
             mock_resp,
         ]
         with (
-            patch("holon_coherence.commands.start.is_container_running", return_value=True),
-            patch("holon_coherence.commands.start._urlopen_no_proxy", side_effect=side_effects) as mock_urlopen,
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=True),
+            patch("holon_coherence.proxy.lifecycle._urlopen_no_proxy", side_effect=side_effects) as mock_urlopen,
             patch("time.sleep") as mock_sleep,
         ):
             assert wait_for_proxy_ready(8080) is True
@@ -459,9 +460,9 @@ class TestWaitForProxyReady:
             fp=None,
         )
         with (
-            patch("holon_coherence.commands.start.is_container_running", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=True),
             patch(
-                "holon_coherence.commands.start._urlopen_no_proxy", side_effect=[http_404, mock_resp]
+                "holon_coherence.proxy.lifecycle._urlopen_no_proxy", side_effect=[http_404, mock_resp]
             ) as mock_urlopen,
             patch("time.sleep"),
         ):
@@ -474,9 +475,9 @@ class TestWaitForProxyReady:
 
     def test_wait_for_proxy_ready_fail_fast_when_container_exits(self) -> None:
         with (
-            patch("holon_coherence.commands.start.is_container_running", side_effect=[True, False]),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", side_effect=[True, False]),
             patch(
-                "holon_coherence.commands.start._urlopen_no_proxy",
+                "holon_coherence.proxy.lifecycle._urlopen_no_proxy",
                 side_effect=urllib.error.URLError(ConnectionRefusedError()),
             ),
             patch("time.sleep"),
@@ -489,12 +490,12 @@ class TestWaitForProxyReady:
         fake_time.monotonic.side_effect = lambda: clock[0]
         fake_time.sleep.side_effect = lambda s: clock.__setitem__(0, clock[0] + 1.0)
         with (
-            patch("holon_coherence.commands.start.is_container_running", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=True),
             patch(
-                "holon_coherence.commands.start._urlopen_no_proxy",
+                "holon_coherence.proxy.lifecycle._urlopen_no_proxy",
                 side_effect=urllib.error.URLError(ConnectionRefusedError()),
             ) as mock_urlopen,
-            patch("holon_coherence.commands.start.time", fake_time),
+            patch("holon_coherence.proxy.lifecycle.time", fake_time),
         ):
             assert wait_for_proxy_ready(8080, timeout=3.0) is False
             assert mock_urlopen.call_count == 3
@@ -511,9 +512,9 @@ class TestWaitForProxyReady:
         mock_resp = MagicMock()
         mock_resp.status = 200
         with (
-            patch("holon_coherence.commands.start.is_container_running", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=True),
             patch(
-                "holon_coherence.commands.start._urlopen_no_proxy", side_effect=[http_503, mock_resp]
+                "holon_coherence.proxy.lifecycle._urlopen_no_proxy", side_effect=[http_503, mock_resp]
             ) as mock_urlopen,
             patch("time.sleep") as mock_sleep,
         ):
@@ -528,7 +529,7 @@ class TestWaitForProxyReady:
         mock_opener = MagicMock()
         mock_opener.open.return_value = mock_resp
         with (
-            patch("holon_coherence.commands.start.is_container_running", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=True),
             patch("urllib.request.build_opener", return_value=mock_opener) as mock_build,
             patch("time.sleep"),
         ):
@@ -562,12 +563,12 @@ class TestWaitForProxyReady:
     def test_wait_for_proxy_ready_backwards_wall_step_does_not_extend(self) -> None:
         fake_time, _wall, _mono = self._stepping_clock(-3600.0)
         with (
-            patch("holon_coherence.commands.start.is_container_running", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=True),
             patch(
-                "holon_coherence.commands.start._urlopen_no_proxy",
+                "holon_coherence.proxy.lifecycle._urlopen_no_proxy",
                 side_effect=urllib.error.URLError(ConnectionRefusedError()),
             ) as mock_urlopen,
-            patch("holon_coherence.commands.start.time", fake_time),
+            patch("holon_coherence.proxy.lifecycle.time", fake_time),
         ):
             assert wait_for_proxy_ready(8080, timeout=1.0) is False
         # 1.0s budget at 0.25s per poll: exactly four attempts, regardless of the wall-clock step.
@@ -577,12 +578,12 @@ class TestWaitForProxyReady:
     def test_wait_for_proxy_ready_forwards_wall_step_does_not_short_circuit(self) -> None:
         fake_time, _wall, _mono = self._stepping_clock(+3600.0)
         with (
-            patch("holon_coherence.commands.start.is_container_running", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=True),
             patch(
-                "holon_coherence.commands.start._urlopen_no_proxy",
+                "holon_coherence.proxy.lifecycle._urlopen_no_proxy",
                 side_effect=urllib.error.URLError(ConnectionRefusedError()),
             ) as mock_urlopen,
-            patch("holon_coherence.commands.start.time", fake_time),
+            patch("holon_coherence.proxy.lifecycle.time", fake_time),
         ):
             assert wait_for_proxy_ready(8080, timeout=1.0) is False
         assert mock_urlopen.call_count == 4
@@ -605,9 +606,9 @@ class TestWaitForProxyReady:
             return mock_resp
 
         with (
-            patch("holon_coherence.commands.start.is_container_running", return_value=True),
-            patch("holon_coherence.commands.start._urlopen_no_proxy", side_effect=flaky_open) as mock_urlopen,
-            patch("holon_coherence.commands.start.time", fake_time),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=True),
+            patch("holon_coherence.proxy.lifecycle._urlopen_no_proxy", side_effect=flaky_open) as mock_urlopen,
+            patch("holon_coherence.proxy.lifecycle.time", fake_time),
         ):
             assert wait_for_proxy_ready(8080, timeout=15.0) is True
         assert mock_urlopen.call_count == 3
@@ -627,9 +628,9 @@ class TestHostLocalContainerWiring:
 
     def test_docker_run_includes_add_host_and_allow_list(self) -> None:
         with (
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
-            patch("holon_coherence.commands.start.is_port_in_use", return_value=False),
-            patch("holon_coherence.commands.start.is_container_running", return_value=False),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.is_port_in_use", return_value=False),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=False),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch(
@@ -640,7 +641,7 @@ class TestHostLocalContainerWiring:
                     MagicMock(returncode=0),  # docker run
                 ],
             ) as mock_run,
-            patch("holon_coherence.commands.start.wait_for_proxy_ready", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.ProxyLifecycle.wait_until_ready", return_value=True),
         ):
             assert ensure_proxy_running(port=8080, host_local_spec="localhost:8081") is True
 
@@ -654,10 +655,10 @@ class TestHostLocalContainerWiring:
         monkeypatch.delenv(HOST_LOCAL_ENV_VAR, raising=False)
         with (
             patch("holon_coherence.commands.start.is_in_container", return_value=False),
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
             patch("os.makedirs"),
-            patch("holon_coherence.commands.start.generate_root_ca", return_value=("/tmp/ca.pem", "/tmp/ca.key")),
-            patch("holon_coherence.commands.start.ensure_docker_image"),
+            patch("holon_coherence.proxy.lifecycle.generate_root_ca", return_value=("/tmp/ca.pem", "/tmp/ca.key")),
+            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
             patch("subprocess.run") as mock_run,
         ):
             main(["start", "-d"])
@@ -671,11 +672,11 @@ class TestHostLocalContainerWiring:
         monkeypatch.delenv("HOLON_PROXY_PORT", raising=False)
         with (
             patch("holon_coherence.commands.start.is_in_container", return_value=False),
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.commands.start.is_port_in_use", return_value=False),
             patch("os.makedirs"),
-            patch("holon_coherence.commands.start.generate_root_ca", return_value=("/tmp/ca.pem", "/tmp/ca.key")),
-            patch("holon_coherence.commands.start.ensure_docker_image"),
+            patch("holon_coherence.proxy.lifecycle.generate_root_ca", return_value=("/tmp/ca.pem", "/tmp/ca.key")),
+            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
             patch("subprocess.run") as mock_run,
         ):
             main(["start", "-d"])
@@ -704,12 +705,12 @@ class TestHostLocalContainerWiring:
 
     def test_unfit_running_container_is_recreated(self) -> None:
         with (
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
-            patch("holon_coherence.commands.start.is_port_in_use", side_effect=[True, False, False]),
-            patch("holon_coherence.commands.start.is_container_running", return_value=True),
-            patch("holon_coherence.commands.start.is_container_bound_to_port", return_value=True),
-            patch("holon_coherence.commands.start.container_host_local_spec", return_value="localhost:11434"),
-            patch("holon_coherence.commands.start.stop_proxy_container") as mock_stop,
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.is_port_in_use", side_effect=[True, False, False]),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.is_container_bound_to_port", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.container_host_local_spec", return_value="localhost:11434"),
+            patch("holon_coherence.proxy.lifecycle.ProxyLifecycle.stop") as mock_stop,
             patch("holon_coherence.commands.start.detect_host_addresses", return_value=()),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
@@ -721,7 +722,7 @@ class TestHostLocalContainerWiring:
                     MagicMock(returncode=0),  # docker run
                 ],
             ) as mock_subproc,
-            patch("holon_coherence.commands.start.wait_for_proxy_ready", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.ProxyLifecycle.wait_until_ready", return_value=True),
         ):
             assert ensure_proxy_running(port=8080, host_local_spec="localhost:8081") is False
         mock_stop.assert_called_once()
@@ -746,12 +747,12 @@ class TestHostLocalContainerWiring:
 
     def test_unfit_running_container_fails_if_port_cannot_be_freed(self, capsys: pytest.CaptureFixture[str]) -> None:
         with (
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
-            patch("holon_coherence.commands.start.is_port_in_use", return_value=True),
-            patch("holon_coherence.commands.start.is_container_running", return_value=True),
-            patch("holon_coherence.commands.start.is_container_bound_to_port", return_value=True),
-            patch("holon_coherence.commands.start.container_host_local_spec", return_value="localhost:11434"),
-            patch("holon_coherence.commands.start.stop_proxy_container") as mock_stop,
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.is_port_in_use", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.is_container_bound_to_port", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.container_host_local_spec", return_value="localhost:11434"),
+            patch("holon_coherence.proxy.lifecycle.ProxyLifecycle.stop") as mock_stop,
             patch("time.sleep"),
             pytest.raises(SystemExit) as exc_info,
         ):
@@ -976,11 +977,12 @@ class TestMitmwebInspectorDefault:
     ) -> tuple[list[str], MagicMock, MagicMock]:
         with (
             patch("holon_coherence.commands.start.is_in_container", return_value=False),
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.commands.start.is_port_in_use", side_effect=in_use),
+            patch("holon_coherence.proxy.lifecycle.is_port_in_use", side_effect=in_use),
             patch("holon_coherence.commands.start.resolve_web_password", return_value=token) as mock_resolve,
             patch("holon_coherence.commands.start.save_web_token") as mock_save,
-            patch("holon_coherence.commands.start.ensure_docker_image"),
+            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch("subprocess.run") as mock_run,
@@ -1174,14 +1176,14 @@ class TestMitmwebInspectorDefault:
 
     def test_ensure_proxy_running_stays_headless(self) -> None:
         with (
-            patch("holon_coherence.commands.start.check_docker_daemon", return_value=(True, "")),
-            patch("holon_coherence.commands.start.is_port_in_use", return_value=False),
-            patch("holon_coherence.commands.start.is_container_running", return_value=False),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.proxy.lifecycle.is_port_in_use", return_value=False),
+            patch("holon_coherence.proxy.lifecycle.is_container_running", return_value=False),
             patch("holon_coherence.commands.start.resolve_web_password") as mock_resolve,
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch("subprocess.run", return_value=MagicMock(returncode=0)) as mock_run,
-            patch("holon_coherence.commands.start.wait_for_proxy_ready", return_value=True),
+            patch("holon_coherence.proxy.lifecycle.ProxyLifecycle.wait_until_ready", return_value=True),
         ):
             assert ensure_proxy_running(port=8080) is True
         docker_cmd = mock_run.call_args_list[-1][0][0]
@@ -1189,3 +1191,71 @@ class TestMitmwebInspectorDefault:
         assert not any(arg.endswith(":8081") for arg in docker_cmd)
         assert not any(arg.startswith("HOLON_COHERENCE_WEB_PASSWORD=") for arg in docker_cmd)
         mock_resolve.assert_not_called()
+
+
+class TestProxyLifecycleDelegation:
+    """The start-command facades hand container work to ProxyLifecycle."""
+
+    def test_ensure_proxy_running_delegates_to_lifecycle_start(self) -> None:
+        captured: list[ProxyLifecycleConfig] = []
+
+        def fake_start(self: ProxyLifecycle, recreate_if_mismatch: bool = True) -> bool:
+            captured.append(self.config)
+            return True
+
+        with patch.object(ProxyLifecycle, "start", fake_start):
+            assert ensure_proxy_running(port=9100, host_local_spec="localhost:8081", container_name="box") is True
+        (config,) = captured
+        assert (config.port, config.host_local_spec, config.container_name) == (9100, "localhost:8081", "box")
+        assert config.image == "holon-coherence:latest"
+        assert config.detach is True
+        assert config.world_accessible_mounts is True
+        assert config.web_port is None
+
+    def test_wait_for_proxy_ready_delegates_to_lifecycle(self) -> None:
+        seen: list[tuple[int, str, float]] = []
+
+        def fake_wait(self: ProxyLifecycle, timeout_seconds: float = 15.0, poll_interval: float = 0.2) -> bool:
+            seen.append((self.config.port, self.container_name, timeout_seconds))
+            return True
+
+        with patch.object(ProxyLifecycle, "wait_until_ready", fake_wait):
+            assert wait_for_proxy_ready(9101, timeout=3.0, container_name="box") is True
+        assert seen == [(9101, "box", 3.0)]
+
+    def test_host_start_prepares_then_launches_with_resolved_ports(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv(HOST_LOCAL_ENV_VAR, raising=False)
+        calls: list[tuple[str, ProxyLifecycleConfig]] = []
+
+        def fake_prepare(self: ProxyLifecycle) -> None:
+            calls.append(("prepare", self.config))
+
+        def fake_launch(self: ProxyLifecycle) -> None:
+            calls.append(("launch", self.config))
+
+        with (
+            patch("holon_coherence.commands.start.is_in_container", return_value=False),
+            patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.commands.start.is_port_in_use", return_value=False),
+            patch("holon_coherence.commands.start.resolve_web_password", return_value="tok"),
+            patch.object(ProxyLifecycle, "prepare", fake_prepare),
+            patch.object(ProxyLifecycle, "launch", fake_launch),
+        ):
+            main(["start", "--web", "--name", "box", "--passive", "--build"])
+
+        assert [name for name, _ in calls] == ["prepare", "launch"]
+        prepared, launched = calls[0][1], calls[1][1]
+        assert prepared.web_port is None
+        assert (launched.port, launched.web_port, launched.web_password) == (8080, 8081, "tok")
+        assert (launched.container_name, launched.detach, launched.passive, launched.rebuild) == (
+            "box",
+            False,
+            True,
+            True,
+        )
+
+    def test_start_rejects_unusable_local_llm_base(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            main(["start", "--local-llm-base", "localhost:notaport"])
+        assert exc_info.value.code == 1
+        assert "is not a usable endpoint" in capsys.readouterr().err
