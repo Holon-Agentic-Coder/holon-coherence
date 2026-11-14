@@ -196,7 +196,7 @@ class TestWebTokenAndDashboardAuth:
         with (
             patch("holon_coherence.commands.start.save_web_token"),
             patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
-            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
+            patch("holon_coherence.proxy.lifecycle.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch("subprocess.run") as mock_run,

@@ -79,7 +79,7 @@ class TestProxyLifecycleCA:
     def test_ca_dir_override(self, tmp_path: Path) -> None:
         other = tmp_path / "other-ca"
         with patch(f"{LIFECYCLE}.generate_root_ca") as mock_gen:
-            cert, _pem = ProxyLifecycle(_config(tmp_path)).ensure_ca(ca_dir=str(other))
+            cert, _pem = ProxyLifecycle(_config(tmp_path, ca_dir=str(other))).ensure_ca()
         mock_gen.assert_called_once_with(output_dir=str(other))
         assert cert == str(other / CA_CERT_FILENAME)
 
@@ -157,7 +157,7 @@ class TestProxyLifecycleStart:
             patch(f"{LIFECYCLE}.is_port_in_use", return_value=False),
             patch(f"{LIFECYCLE}.is_container_running", return_value=False),
             patch(f"{LIFECYCLE}.generate_root_ca"),
-            patch("holon_coherence.commands.docker_ops.ensure_docker_image") as mock_image,
+            patch("holon_coherence.proxy.lifecycle.ensure_docker_image") as mock_image,
             patch("subprocess.run", return_value=MagicMock(returncode=0)) as mock_run,
             patch.object(ProxyLifecycle, "wait_until_ready", return_value=True),
         ):
@@ -214,7 +214,7 @@ class TestProxyLifecycleStart:
             patch(f"{LIFECYCLE}.is_container_bound_to_port", return_value=True),
             patch(f"{LIFECYCLE}.container_host_local_spec", return_value="localhost:11434"),
             patch(f"{LIFECYCLE}.generate_root_ca"),
-            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
+            patch("holon_coherence.proxy.lifecycle.ensure_docker_image"),
             patch.object(ProxyLifecycle, "stop") as mock_stop,
             patch("subprocess.run", return_value=MagicMock(returncode=0)) as mock_run,
             patch.object(ProxyLifecycle, "wait_until_ready", return_value=True),
@@ -243,7 +243,7 @@ class TestProxyLifecycleStart:
             patch(f"{LIFECYCLE}.is_port_in_use", return_value=False),
             patch(f"{LIFECYCLE}.is_container_running", return_value=False),
             patch(f"{LIFECYCLE}.generate_root_ca"),
-            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
+            patch("holon_coherence.proxy.lifecycle.ensure_docker_image"),
             patch("subprocess.run", side_effect=[MagicMock(returncode=0), MagicMock(returncode=125, stderr="boom\n")]),
             pytest.raises(SystemExit) as exc_info,
         ):
@@ -260,7 +260,7 @@ class TestProxyLifecycleStart:
             patch(f"{LIFECYCLE}.is_port_in_use", return_value=False),
             patch(f"{LIFECYCLE}.is_container_running", return_value=False),
             patch(f"{LIFECYCLE}.generate_root_ca"),
-            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
+            patch("holon_coherence.proxy.lifecycle.ensure_docker_image"),
             patch("subprocess.run", side_effect=[MagicMock(returncode=0), MagicMock(returncode=0), logs]),
             patch.object(ProxyLifecycle, "wait_until_ready", return_value=False),
             patch.object(ProxyLifecycle, "stop") as mock_stop,

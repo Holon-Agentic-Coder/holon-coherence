@@ -1,9 +1,8 @@
 """Proxy container lifecycle: CA material, container launch, readiness polling and teardown.
 
 This module owns the Docker container primitives the lifecycle needs and depends only on low-level
-helpers (``ca_generator``, ``host_local``). ``holon_coherence.commands`` re-exports it through
-``commands.start`` and ``commands.docker_ops``, so importing a command module here at module level
-would be circular.
+helpers (``ca_generator``, ``host_local``, ``proxy.image``); ``holon_coherence.commands`` re-exports
+it through ``commands.start`` and ``commands.docker_ops`` and is never imported from here.
 """
 
 from __future__ import annotations
@@ -30,6 +29,7 @@ from holon_coherence.host_local import (
     decode_targets,
     encode_targets,
 )
+from holon_coherence.proxy.image import ensure_docker_image
 
 DEFAULT_PROXY_PORT = 8080
 DEFAULT_WEB_PORT = 8081
@@ -159,14 +159,6 @@ def require_docker_daemon() -> None:
     ok, err_msg = check_docker_daemon()
     if not ok:
         _fail(err_msg)
-
-
-def _ensure_image(image: str, rebuild: bool) -> None:
-    """Make sure the proxy image exists locally (build, pull or GHCR fallback)."""
-    # Imported here: commands.docker_ops imports this module at the top level (see module docstring).
-    from holon_coherence.commands.docker_ops import ensure_docker_image
-
-    ensure_docker_image(image, rebuild=rebuild)
 
 
 # --- Host environment helpers ----------------------------------------------------------------------
@@ -473,10 +465,13 @@ class ProxyLifecycle:
         """Configured container name, or the ``HOLON_CONTAINER_NAME`` / default name."""
         return self.config.container_name or get_container_name()
 
-    def ensure_ca(self, ca_dir: str | None = None) -> tuple[str, str]:
-        """Create the mounted directories and the mitmproxy root CA when missing; return its two files."""
-        default_ca_dir, cache_dir, logs_dir = _mount_dirs(self.config)
-        ca_path = os.path.expanduser(ca_dir) if ca_dir else default_ca_dir
+    def ensure_ca(self) -> tuple[str, str]:
+        """Create the mounted directories and the mitmproxy root CA when missing; return its two files.
+
+        The CA lands in ``config.ca_dir``, the directory the container mounts; to use another one,
+        build the lifecycle with ``replace(config, ca_dir=...)``.
+        """
+        ca_path, cache_dir, logs_dir = _mount_dirs(self.config)
         shared = self.config.world_accessible_mounts
         _prepare_proxy_directories(ca_path, cache_dir, logs_dir, shared=shared)
 
@@ -506,7 +501,7 @@ class ProxyLifecycle:
     def prepare(self) -> None:
         """Make CA material and the image available and clear any stale container of the same name."""
         self.ensure_ca()
-        _ensure_image(self.config.image, rebuild=self.config.rebuild)
+        ensure_docker_image(self.config.image, rebuild=self.config.rebuild)
         with contextlib.suppress(subprocess.TimeoutExpired, OSError):
             subprocess.run(
                 ["docker", "rm", "-f", self.container_name],

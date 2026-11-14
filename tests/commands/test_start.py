@@ -146,7 +146,7 @@ class TestStartCommandRegistrationAndDispatch:
             patch("holon_coherence.commands.start.is_in_container", return_value=False),
             patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.commands.start.is_port_in_use", return_value=False),
-            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
+            patch("holon_coherence.proxy.lifecycle.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch("subprocess.run", return_value=MagicMock(returncode=0)),
@@ -658,7 +658,7 @@ class TestHostLocalContainerWiring:
             patch("holon_coherence.proxy.lifecycle.check_docker_daemon", return_value=(True, "")),
             patch("os.makedirs"),
             patch("holon_coherence.proxy.lifecycle.generate_root_ca", return_value=("/tmp/ca.pem", "/tmp/ca.key")),
-            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
+            patch("holon_coherence.proxy.lifecycle.ensure_docker_image"),
             patch("subprocess.run") as mock_run,
         ):
             main(["start", "-d"])
@@ -676,7 +676,7 @@ class TestHostLocalContainerWiring:
             patch("holon_coherence.commands.start.is_port_in_use", return_value=False),
             patch("os.makedirs"),
             patch("holon_coherence.proxy.lifecycle.generate_root_ca", return_value=("/tmp/ca.pem", "/tmp/ca.key")),
-            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
+            patch("holon_coherence.proxy.lifecycle.ensure_docker_image"),
             patch("subprocess.run") as mock_run,
         ):
             main(["start", "-d"])
@@ -982,7 +982,7 @@ class TestMitmwebInspectorDefault:
             patch("holon_coherence.proxy.lifecycle.is_port_in_use", side_effect=in_use),
             patch("holon_coherence.commands.start.resolve_web_password", return_value=token) as mock_resolve,
             patch("holon_coherence.commands.start.save_web_token") as mock_save,
-            patch("holon_coherence.commands.docker_ops.ensure_docker_image"),
+            patch("holon_coherence.proxy.lifecycle.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
             patch("subprocess.run") as mock_run,

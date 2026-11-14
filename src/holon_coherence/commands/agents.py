@@ -356,8 +356,12 @@ def run_agent(
 ) -> int:
     """Launch the optimization proxy and execute the requested coding agent with full telemetry.
 
-    ``options`` carries ``ephemeral``, ``port``, ``local_llm_base`` and ``model``.
+    ``options`` carries ``ephemeral``, ``port``, ``local_llm_base`` and ``model``; any other keyword
+    (such as the retired ``resolve_bin_fn`` / ``exec_proc_fn``, now on ``deps``) raises ``TypeError``.
     """
+    unknown = sorted(set(options) - AgentRunOptions.__optional_keys__ - AgentRunOptions.__required_keys__)
+    if unknown:
+        raise TypeError(f"run_agent() got unexpected keyword argument(s): {', '.join(unknown)}")
     deps = deps or AgentRunnerDeps()
     port = _resolve_agent_port(options.get("port"))
     if port is None:

@@ -321,6 +321,10 @@ class TestProxyLifecycleAndStopCommand:
             captured = capsys.readouterr()
             assert "Agent CLI binary 'agy' not found on PATH" in captured.err
 
+    def test_run_agent_rejects_unknown_option(self) -> None:
+        with pytest.raises(TypeError, match="resolve_bin_fn"):
+            run_agent("agy", [], resolve_bin_fn=lambda _name: None)  # type: ignore[call-arg]
+
     def test_run_agent_invalid_port_returns_one(self, capsys: pytest.CaptureFixture[str]) -> None:
         assert run_agent("agy", [], port=0) == 1
         captured = capsys.readouterr()
