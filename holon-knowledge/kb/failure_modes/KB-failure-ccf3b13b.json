@@ -1,0 +1,29 @@
+{
+  "kb_id": "KB-failure-ccf3b13b",
+  "kb_type": "failure_mode",
+  "version": "1.0",
+  "created_ts": "2026-11-14T14:02:33.110596+00:00",
+  "updated_ts": "2026-11-14T14:02:33.110596+00:00",
+  "created_by": "holon-promotion-engine",
+  "status": "active",
+  "evidence": {
+    "ledger_refs": [
+      "ACT-REV-1794663933-3bf6c0fa",
+      "ACT-REV-1794663931-092bf34a"
+    ],
+    "success_count": 0,
+    "failure_count": 2,
+    "ladder_state": "repeated"
+  },
+  "tags": [
+    "code",
+    "veto"
+  ],
+  "human_approved": false,
+  "payload": {
+    "name": "Failure mode in I-1793438378-coherence-proxy-lifecycle-class-for-start/P-1793438393-antigravity-agent-gemini-3.8-flash-medium/E-1794660196-e8e8027b-claude-agent-claude-opus-5-5/_",
+    "description": "Reproduced failure across 2 executions with identical context.",
+    "action": "Review Loop iteration 2 reviewer 2 completed",
+    "symptoms": []
+  }
+}
