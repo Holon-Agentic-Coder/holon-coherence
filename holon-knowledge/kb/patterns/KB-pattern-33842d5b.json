@@ -1,0 +1,33 @@
+{
+  "kb_id": "KB-pattern-33842d5b",
+  "kb_type": "pattern",
+  "version": "1.0",
+  "created_ts": "2026-11-14T14:02:33.107520+00:00",
+  "updated_ts": "2026-11-14T14:02:33.107520+00:00",
+  "created_by": "holon-promotion-engine",
+  "status": "active",
+  "evidence": {
+    "ledger_refs": [
+      "ACT-1793426513-301c34bb",
+      "ACT-1793407518-5de119c7",
+      "ACT-1793350570-f42de37c",
+      "ACT-1793336408-f8e4c39c",
+      "ACT-1793327461-72e90e23"
+    ],
+    "success_count": 9,
+    "failure_count": 0,
+    "wilson_lower": 0.7008549515804675,
+    "posterior_mean": 0.9090909090909091,
+    "ladder_state": "likely-success"
+  },
+  "tags": [
+    "code",
+    "proven"
+  ],
+  "human_approved": false,
+  "payload": {
+    "name": "Proven approach for antigravity-agent:gemini-3.8-flash-medium",
+    "description": "Advisory (likely-success): Historical executions matching this context pattern succeeded in 9/9 (100.0%) trials (Wilson 95% lower bound: 0.70). Consider evaluating proven approach: 'Executed agent antigravity-agent with model gemini-3.8-flash-medium'.",
+    "action": "Executed agent antigravity-agent with model gemini-3.8-flash-medium"
+  }
+}

@@ -7,7 +7,8 @@ import os
 import shutil
 import sys
 from collections.abc import Callable
-from typing import Any, NamedTuple
+from dataclasses import dataclass, field
+from typing import Any, NamedTuple, NoReturn, TypedDict, Unpack
 
 from holon_coherence.commands.ca import CA_ENV_VARS
 from holon_coherence.commands.docker_ops import stop_proxy_container
@@ -44,94 +45,98 @@ class RunnerFlags(NamedTuple):
     model: str | None = None
 
 
-def extract_runner_flags(argv: list[str]) -> RunnerFlags:  # noqa: C901, PLR0912, PLR0915
+@dataclass
+class _RunnerFlagAccumulator:
+    """Mutable state while ``extract_runner_flags`` walks argv."""
+
+    ephemeral: bool = False
+    port: int | None = None
+    help_requested: bool = False
+    local_llm_base: str | None = None
+    model: str | None = None
+    agent_args: list[str] = field(default_factory=list)
+
+    def to_flags(self) -> RunnerFlags:
+        return RunnerFlags(
+            self.ephemeral,
+            self.port,
+            self.agent_args,
+            help_requested=self.help_requested,
+            local_llm_base=self.local_llm_base,
+            model=self.model,
+        )
+
+
+_LOCAL_LLM_FLAGS = ("--local-llm-base", "--local-llm-endpoint")
+
+
+def _usage_error(message: str) -> NoReturn:
+    """Print a runner flag error to stderr and exit with status 1."""
+    print(message, file=sys.stderr)
+    sys.exit(1)
+
+
+def _parse_flag_value(argv: list[str], idx: int, flag_name: str, error: str) -> tuple[str, int]:
+    """Value of the option at ``argv[idx]`` (``--flag value`` or ``--flag=value``) and the next index."""
+    arg = argv[idx]
+    if arg.startswith(f"{flag_name}="):
+        value = arg.split("=", 1)[1]
+        if not value:
+            _usage_error(error)
+        return value, idx + 1
+    if idx + 1 >= len(argv) or argv[idx + 1] == "--":
+        _usage_error(error)
+    return argv[idx + 1], idx + 2
+
+
+def _parse_port_flag(argv: list[str], idx: int) -> tuple[int, int]:
+    """Parse ``--port`` into a TCP port in 1-65535; returns ``(port, next_index)``."""
+    raw, next_idx = _parse_flag_value(argv, idx, "--port", "Error: Option --port requires an argument.")
+    try:
+        port = int(raw)
+    except ValueError:
+        _usage_error(f"Error: Argument to --port must be an integer, got '{raw}'.")
+    if not (1 <= port <= 65535):
+        _usage_error(f"Error: Port must be between 1 and 65535, got {port}.")
+    return port, next_idx
+
+
+def _consume_runner_arg(argv: list[str], idx: int, acc: _RunnerFlagAccumulator) -> int:
+    """Record the runner flag (or agent argument) at ``argv[idx]``; returns the next index."""
+    arg = argv[idx]
+    flag_name = arg.split("=", 1)[0]
+    if arg == "--ephemeral":
+        acc.ephemeral = True
+        return idx + 1
+    if arg in ("--help", "-h"):
+        acc.help_requested = True
+        return idx + 1
+    if flag_name in _LOCAL_LLM_FLAGS:
+        error = f"Error: Option {flag_name} requires an argument, e.g. localhost:8081."
+        acc.local_llm_base, next_idx = _parse_flag_value(argv, idx, flag_name, error)
+        return next_idx
+    if flag_name == "--model":
+        acc.model, next_idx = _parse_flag_value(argv, idx, flag_name, "Error: Option --model requires an argument.")
+        # The agent needs --model too, in the exact form the user typed it.
+        acc.agent_args.extend(argv[idx:next_idx])
+        return next_idx
+    if flag_name == "--port":
+        acc.port, next_idx = _parse_port_flag(argv, idx)
+        return next_idx
+    acc.agent_args.append(arg)
+    return idx + 1
+
+
+def extract_runner_flags(argv: list[str]) -> RunnerFlags:
     """Extract runner flags and ``--help`` from arguments, preserving agent argument order."""
-    ephemeral = False
-    port = None
-    help_requested = False
-    local_llm_base = None
-    model = None
-    agent_args: list[str] = []
-    i = 0
-    while i < len(argv):
-        arg = argv[i]
-        if arg == "--ephemeral":
-            ephemeral = True
-            i += 1
-        elif arg in ("--help", "-h"):
-            help_requested = True
-            i += 1
-        elif arg in ("--local-llm-base", "--local-llm-endpoint"):
-            if i + 1 >= len(argv) or argv[i + 1] == "--":
-                print(f"Error: Option {arg} requires an argument, e.g. localhost:8081.", file=sys.stderr)
-                sys.exit(1)
-            local_llm_base = argv[i + 1]
-            i += 2
-        elif arg.startswith(("--local-llm-base=", "--local-llm-endpoint=")):
-            flag_name = arg.split("=", 1)[0]
-            val = arg.split("=", 1)[1]
-            if not val:
-                print(f"Error: Option {flag_name} requires an argument, e.g. localhost:8081.", file=sys.stderr)
-                sys.exit(1)
-            local_llm_base = val
-            i += 1
-        elif arg == "--model":
-            if i + 1 >= len(argv) or argv[i + 1] == "--":
-                print("Error: Option --model requires an argument.", file=sys.stderr)
-                sys.exit(1)
-            model = argv[i + 1]
-            agent_args.extend([arg, argv[i + 1]])
-            i += 2
-        elif arg.startswith("--model="):
-            val = arg.split("=", 1)[1]
-            if not val:
-                print("Error: Option --model requires an argument.", file=sys.stderr)
-                sys.exit(1)
-            model = val
-            agent_args.append(arg)
-            i += 1
-        elif arg == "--port":
-            if i + 1 < len(argv) and argv[i + 1] != "--":
-                try:
-                    port = int(argv[i + 1])
-                except ValueError:
-                    print(f"Error: Argument to --port must be an integer, got '{argv[i + 1]}'.", file=sys.stderr)
-                    sys.exit(1)
-                if not (1 <= port <= 65535):
-                    print(f"Error: Port must be between 1 and 65535, got {port}.", file=sys.stderr)
-                    sys.exit(1)
-                i += 2
-            else:
-                print("Error: Option --port requires an argument.", file=sys.stderr)
-                sys.exit(1)
-        elif arg.startswith("--port="):
-            val = arg.split("=", 1)[1]
-            if not val:
-                print("Error: Option --port requires an argument.", file=sys.stderr)
-                sys.exit(1)
-            try:
-                port = int(val)
-            except ValueError:
-                print(f"Error: Argument to --port must be an integer, got '{val}'.", file=sys.stderr)
-                sys.exit(1)
-            if not (1 <= port <= 65535):
-                print(f"Error: Port must be between 1 and 65535, got {port}.", file=sys.stderr)
-                sys.exit(1)
-            i += 1
-        elif arg == "--":
-            agent_args.extend(argv[i + 1 :])
+    acc = _RunnerFlagAccumulator()
+    idx = 0
+    while idx < len(argv):
+        if argv[idx] == "--":
+            acc.agent_args.extend(argv[idx + 1 :])
             break
-        else:
-            agent_args.append(arg)
-            i += 1
-    return RunnerFlags(
-        ephemeral,
-        port,
-        agent_args,
-        help_requested=help_requested,
-        local_llm_base=local_llm_base,
-        model=model,
-    )
+        idx = _consume_runner_arg(argv, idx, acc)
+    return acc.to_flags()
 
 
 def resolve_agent_binary(agent_name: str) -> str | None:
@@ -144,180 +149,208 @@ def resolve_agent_binary(agent_name: str) -> str | None:
     return None
 
 
-def build_agent_env(  # noqa: C901, PLR0912, PLR0913
-    agent_name: str,
-    port: int,
-    drop_no_proxy: tuple[str, ...] = (),
-    model: str | None = None,
-    local_llm_base: str | None = None,
-    *,
-    env_builder_fn: Callable[..., dict[str, str]] | None = None,
-) -> dict[str, str]:
-    """Construct environment variables for the child agent subprocess."""
-    env = os.environ.copy()
-    proxy_url = f"http://127.0.0.1:{port}"
-    env_builder = env_builder_fn or build_proxy_env
-    proxy_env = env_builder(proxy_url, drop_no_proxy=drop_no_proxy)
+_AGENT_KEY_ENV_VARS: dict[str, tuple[str, ...]] = {
+    "agy": ("GEMINI_API_KEY", "AGY_USER_TOKEN"),
+    "codex": ("OPENAI_API_KEY",),
+    "opencode": ("OPENCODE_API_KEY",),
+    "pi": ("PI_API_KEY",),
+}
+
+
+def _apply_proxy_and_ca_env(env: dict[str, str], port: int, drop_no_proxy: tuple[str, ...]) -> None:
+    """Route the agent through the proxy; drop CA variables unless the full trust bundle is available."""
+    proxy_env = build_proxy_env(f"http://127.0.0.1:{port}", drop_no_proxy=drop_no_proxy)
     env.update(proxy_env)
     if not all(var in proxy_env for var in CA_ENV_VARS):
         for var in CA_ENV_VARS:
             env.pop(var, None)
 
+
+def _apply_local_llm_env(
+    env: dict[str, str], agent_name: str, port: int, model: str | None, holon_key: str | None
+) -> None:
+    """Point the agent's provider base URL (and model) at the proxy for a host-local model server."""
+    env.setdefault("USER", "holon")
+    if agent_name == "claude":
+        env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{port}"
+        env["ANTHROPIC_AUTH_TOKEN"] = holon_key or "sk-ant-local"
+        env["ANTHROPIC_API_KEY"] = holon_key or "sk-ant-local"
+        if model:
+            env["ANTHROPIC_MODEL"] = model
+        env["ANTHROPIC_DISABLE_TELEMETRY"] = "1"
+        env["CLAUDE_SUPPRESS_FALLBACK"] = "1"
+    elif agent_name == "agy":
+        env["AGY_GATEWAY_URL"] = f"http://127.0.0.1.nip.io:{port}"
+        if model:
+            env["AGY_MODEL"] = model
+        env.setdefault("GEMINI_API_KEY", holon_key or "dummy-local-key")
+        env.setdefault("AGY_USER_TOKEN", holon_key or "dummy-local-key")
+    elif agent_name in ("codex", "opencode", "pi"):
+        env["OPENAI_BASE_URL"] = f"http://127.0.0.1:{port}/v1"
+        if model:
+            env["OPENAI_MODEL"] = model
+
+
+def _apply_auth_key_env(env: dict[str, str], agent_name: str, holon_key: str) -> None:
+    """Map the universal ``HOLON_AGENT_KEY`` onto the agent's own credential variables."""
+    if agent_name == "claude":
+        env.setdefault("ANTHROPIC_API_KEY", holon_key)
+        return
+    for var in _AGENT_KEY_ENV_VARS.get(agent_name, ()):
+        env[var] = holon_key
+
+
+def build_agent_env(
+    agent_name: str,
+    port: int,
+    drop_no_proxy: tuple[str, ...] = (),
+    model: str | None = None,
+    local_llm_base: str | None = None,
+) -> dict[str, str]:
+    """Construct environment variables for the child agent subprocess."""
+    env = os.environ.copy()
+    _apply_proxy_and_ca_env(env, port, drop_no_proxy)
     holon_key = env.get("HOLON_AGENT_KEY")
-    normalized_agent = agent_name
-
-    effective_local_base = local_llm_base or os.getenv("HOLON_LOCAL_LLM_BASE")
-    if effective_local_base:
-        env.setdefault("USER", "holon")
-        if normalized_agent == "claude":
-            env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{port}"
-            env["ANTHROPIC_AUTH_TOKEN"] = holon_key or "sk-ant-local"
-            env["ANTHROPIC_API_KEY"] = holon_key or "sk-ant-local"
-            if model:
-                env["ANTHROPIC_MODEL"] = model
-            env["ANTHROPIC_DISABLE_TELEMETRY"] = "1"
-            env["CLAUDE_SUPPRESS_FALLBACK"] = "1"
-        elif normalized_agent == "agy":
-            env["AGY_GATEWAY_URL"] = f"http://127.0.0.1.nip.io:{port}"
-            if model:
-                env["AGY_MODEL"] = model
-            env.setdefault("GEMINI_API_KEY", holon_key or "dummy-local-key")
-            env.setdefault("AGY_USER_TOKEN", holon_key or "dummy-local-key")
-        elif normalized_agent in ("codex", "opencode", "pi"):
-            env["OPENAI_BASE_URL"] = f"http://127.0.0.1:{port}/v1"
-            if model:
-                env["OPENAI_MODEL"] = model
-
+    if local_llm_base or os.getenv("HOLON_LOCAL_LLM_BASE"):
+        _apply_local_llm_env(env, agent_name, port, model, holon_key)
     if holon_key:
-        if normalized_agent == "agy":
-            env["GEMINI_API_KEY"] = holon_key
-            env["AGY_USER_TOKEN"] = holon_key
-        elif normalized_agent == "claude":
-            if "ANTHROPIC_API_KEY" not in env:
-                env["ANTHROPIC_API_KEY"] = holon_key
-        elif normalized_agent == "codex":
-            env["OPENAI_API_KEY"] = holon_key
-        elif normalized_agent == "opencode":
-            env["OPENCODE_API_KEY"] = holon_key
-        elif normalized_agent == "pi":
-            env["PI_API_KEY"] = holon_key
-
+        _apply_auth_key_env(env, agent_name, holon_key)
     return env
 
 
-def run_agent(  # noqa: C901, PLR0912, PLR0913, PLR0915
-    agent_name: str,
-    agent_args: list[str],
-    ephemeral: bool = False,
-    port: int | None = None,
-    local_llm_base: str | None = None,
-    model: str | None = None,
-    *,
-    resolve_bin_fn: Callable[[str], str | None] | None = None,
-    plan_route_fn: Callable[[str], LocalLlmRoute | None] | None = None,
-    ensure_proxy_fn: Callable[..., bool] | None = None,
-    probe_host_fn: Callable[[int], tuple[bool, str]] | None = None,
-    report_route_fn: Callable[..., tuple[str, ...]] | None = None,
-    build_env_fn: Callable[..., dict[str, str]] | None = None,
-    exec_proc_fn: Callable[[list[str], dict[str, str]], int] | None = None,
-    stop_container_fn: Callable[..., None] | None = None,
-) -> int:
-    """Launch the optimization proxy and execute the requested coding agent with full telemetry."""
-    resolve_bin = resolve_bin_fn or resolve_agent_binary
-    plan_route = plan_route_fn or plan_local_llm_route
-    ensure_proxy = ensure_proxy_fn or ensure_proxy_running
-    probe_host = probe_host_fn or probe_host_local_reachable
-    report_route = report_route_fn or report_local_llm_route
-    build_env = build_env_fn or build_agent_env
-    exec_proc = exec_proc_fn or execute_interactive_process
-    stop_container = stop_container_fn or stop_proxy_container
+class AgentRunOptions(TypedDict, total=False):
+    """Keyword options accepted by :func:`run_agent`."""
 
-    if port is not None and not (1 <= port <= 65535):
-        print(f"Error: Port must be between 1 and 65535, got {port}.", file=sys.stderr)
-        return 1
+    ephemeral: bool
+    port: int | None
+    local_llm_base: str | None
+    model: str | None
 
-    if port is None:
-        env_port = os.getenv("HOLON_PROXY_PORT")
-        if env_port:
-            try:
-                parsed_port = int(env_port)
-                if not (1 <= parsed_port <= 65535):
-                    raise ValueError(f"Port {parsed_port} out of range")
-                port = parsed_port
-            except ValueError:
-                print(
-                    f"⚠️  Invalid HOLON_PROXY_PORT '{env_port}', falling back to {DEFAULT_PROXY_PORT}.", file=sys.stderr
-                )
-                port = DEFAULT_PROXY_PORT
-        else:
-            port = DEFAULT_PROXY_PORT
 
-    binary_path = resolve_bin(agent_name)
-    if not binary_path:
-        primary_bin = AGENT_BINARY_MAP.get(agent_name, [agent_name])[0]
+def _resolve_agent_port(port: int | None) -> int | None:
+    """Validate an explicit ``--port`` or fall back to ``HOLON_PROXY_PORT`` / the default; None if invalid."""
+    if port is not None:
+        if not (1 <= port <= 65535):
+            print(f"Error: Port must be between 1 and 65535, got {port}.", file=sys.stderr)
+            return None
+        return port
+    env_port = os.getenv("HOLON_PROXY_PORT")
+    if not env_port:
+        return DEFAULT_PROXY_PORT
+    try:
+        parsed_port = int(env_port)
+    except ValueError:
+        parsed_port = 0
+    if 1 <= parsed_port <= 65535:
+        return parsed_port
+    print(f"⚠️  Invalid HOLON_PROXY_PORT '{env_port}', falling back to {DEFAULT_PROXY_PORT}.", file=sys.stderr)
+    return DEFAULT_PROXY_PORT
+
+
+def _report_missing_binary(agent_name: str) -> None:
+    """Explain which agent executable is missing from PATH."""
+    primary_bin = AGENT_BINARY_MAP.get(agent_name, [agent_name])[0]
+    print(
+        f"Error: Agent CLI binary '{primary_bin}' not found on PATH.\n"
+        f"Please install '{primary_bin}' and ensure it is accessible in your PATH.",
+        file=sys.stderr,
+    )
+
+
+def _resolve_local_llm_base(local_llm_base: str | None) -> str | None:
+    """Explicit ``--local-llm-base`` wins; otherwise a non-blank ``HOLON_LOCAL_LLM_BASE``."""
+    if local_llm_base is not None:
+        return local_llm_base
+    return (os.getenv("HOLON_LOCAL_LLM_BASE") or "").strip() or None
+
+
+def _plan_agent_route(
+    local_llm_base: str | None, port: int, plan_route: Callable[[str], LocalLlmRoute | None]
+) -> tuple[bool, LocalLlmRoute | None]:
+    """Plan the host-local route; ``(False, None)`` after reporting an unusable endpoint."""
+    if local_llm_base is None:
+        return True, None
+    route = plan_route(local_llm_base)
+    if route is None:
         print(
-            f"Error: Agent CLI binary '{primary_bin}' not found on PATH.\n"
-            f"Please install '{primary_bin}' and ensure it is accessible in your PATH.",
+            f"Error: --local-llm-base '{local_llm_base}' is not a usable endpoint.\n"
+            "Expected host:port or a base URL, e.g. localhost:8081, 127.0.0.1:8081, "
+            "192.168.2.13:8081, http://localhost:11434/v1.",
             file=sys.stderr,
         )
+        return False, None
+    if route.target.port == port:
+        print(
+            f"Error: --local-llm-base port ({route.target.port}) cannot be the same as proxy port ({port}).",
+            file=sys.stderr,
+        )
+        return False, None
+    return True, route
+
+
+def _setup_agent_local_route(route: LocalLlmRoute | None) -> tuple[str, ...]:
+    """Probe the host-local endpoint from the container and return the NO_PROXY entries to drop."""
+    if route is None:
+        return ()
+    if route.target.port is None:
+        print(
+            "⚠️  --local-llm-base without a port skips the container reachability preflight; "
+            "prefer localhost:8081 so the route can be verified before NO_PROXY is changed.",
+            file=sys.stderr,
+        )
+        reachable, detail = True, "preflight skipped (no port given)"
+    else:
+        reachable, detail = probe_host_local_reachable(route.target.port)
+    return report_local_llm_route(route, reachable, detail)
+
+
+def _execute_agent_with_cleanup(cmd: list[str], env: dict[str, str], teardown: bool) -> int:
+    """Run the agent; with ``teardown`` remove the proxy container this run started, even on failure."""
+    try:
+        return execute_interactive_process(cmd, env)
+    finally:
+        if teardown:
+            stop_proxy_container()
+
+
+def run_agent(
+    agent_name: str,
+    agent_args: list[str],
+    **options: Unpack[AgentRunOptions],
+) -> int:
+    """Launch the optimization proxy and execute the requested coding agent with full telemetry.
+
+    ``options`` carries ``ephemeral``, ``port``, ``local_llm_base`` and ``model``; any other keyword
+    (such as the retired ``resolve_bin_fn`` / ``exec_proc_fn``) raises ``TypeError``.
+    """
+    unknown = sorted(set(options) - AgentRunOptions.__optional_keys__ - AgentRunOptions.__required_keys__)
+    if unknown:
+        raise TypeError(f"run_agent() got unexpected keyword argument(s): {', '.join(unknown)}")
+    port = _resolve_agent_port(options.get("port"))
+    if port is None:
         return 1
 
-    if local_llm_base is None:
-        env_base = os.getenv("HOLON_LOCAL_LLM_BASE")
-        if env_base:
-            local_llm_base = env_base.strip() or None
+    binary_path = resolve_agent_binary(agent_name)
+    if not binary_path:
+        _report_missing_binary(agent_name)
+        return 1
 
-    route = None
-    if local_llm_base is not None:
-        route = plan_route(local_llm_base)
-        if route is None:
-            print(
-                f"Error: --local-llm-base '{local_llm_base}' is not a usable endpoint.\n"
-                "Expected host:port or a base URL, e.g. localhost:8081, 127.0.0.1:8081, "
-                "192.168.2.13:8081, http://localhost:11434/v1.",
-                file=sys.stderr,
-            )
-            return 1
-        if route.target.port == port:
-            print(
-                f"Error: --local-llm-base port ({route.target.port}) cannot be the same as proxy port ({port}).",
-                file=sys.stderr,
-            )
-            return 1
+    local_llm_base = _resolve_local_llm_base(options.get("local_llm_base"))
+    route_ok, route = _plan_agent_route(local_llm_base, port, plan_local_llm_route)
+    if not route_ok:
+        return 1
 
-    container_started = ensure_proxy(port=port, host_local_spec=route.container_env_value if route else "")
-
-    drop_no_proxy: tuple[str, ...] = ()
-    if route is not None:
-        if route.target.port is None:
-            print(
-                "⚠️  --local-llm-base without a port skips the container reachability preflight; "
-                "prefer localhost:8081 so the route can be verified before NO_PROXY is changed.",
-                file=sys.stderr,
-            )
-            reachable, detail = True, "preflight skipped (no port given)"
-        else:
-            reachable, detail = probe_host(route.target.port)
-        drop_no_proxy = report_route(route, reachable, detail)
-
-    try:
-        child_env = build_env(
-            agent_name,
-            port,
-            drop_no_proxy=drop_no_proxy,
-            model=model,
-            local_llm_base=local_llm_base,
-        )
-    except TypeError:
-        child_env = build_env(agent_name, port, drop_no_proxy=drop_no_proxy)
-
-    cmd = [binary_path, *agent_args]
-
-    try:
-        return exec_proc(cmd, child_env)
-    finally:
-        if ephemeral and container_started:
-            stop_container()
+    container_started = ensure_proxy_running(port=port, host_local_spec=route.container_env_value if route else "")
+    drop_no_proxy = _setup_agent_local_route(route)
+    child_env = build_agent_env(
+        agent_name,
+        port,
+        drop_no_proxy=drop_no_proxy,
+        model=options.get("model"),
+        local_llm_base=local_llm_base,
+    )
+    teardown = bool(options.get("ephemeral", False) and container_started)
+    return _execute_agent_with_cleanup([binary_path, *agent_args], child_env, teardown)
 
 
 def _print_agent_help(agent_name: str) -> None:
