@@ -227,20 +227,6 @@ class AgentRunOptions(TypedDict, total=False):
     model: str | None
 
 
-@dataclass(frozen=True)
-class AgentRunnerDeps:
-    """Optional collaborators for :func:`run_agent`; ``None`` selects this module's default."""
-
-    resolve_bin_fn: Callable[[str], str | None] | None = None
-    plan_route_fn: Callable[[str], LocalLlmRoute | None] | None = None
-    ensure_proxy_fn: Callable[..., bool] | None = None
-    probe_host_fn: Callable[[int], tuple[bool, str]] | None = None
-    report_route_fn: Callable[..., tuple[str, ...]] | None = None
-    build_env_fn: Callable[..., dict[str, str]] | None = None
-    exec_proc_fn: Callable[[list[str], dict[str, str]], int] | None = None
-    stop_container_fn: Callable[..., None] | None = None
-
-
 def _resolve_agent_port(port: int | None) -> int | None:
     """Validate an explicit ``--port`` or fall back to ``HOLON_PROXY_PORT`` / the default; None if invalid."""
     if port is not None:
@@ -302,7 +288,7 @@ def _plan_agent_route(
     return True, route
 
 
-def _setup_agent_local_route(route: LocalLlmRoute | None, deps: AgentRunnerDeps) -> tuple[str, ...]:
+def _setup_agent_local_route(route: LocalLlmRoute | None) -> tuple[str, ...]:
     """Probe the host-local endpoint from the container and return the NO_PROXY entries to drop."""
     if route is None:
         return ()
@@ -314,81 +300,57 @@ def _setup_agent_local_route(route: LocalLlmRoute | None, deps: AgentRunnerDeps)
         )
         reachable, detail = True, "preflight skipped (no port given)"
     else:
-        reachable, detail = (deps.probe_host_fn or probe_host_local_reachable)(route.target.port)
-    return (deps.report_route_fn or report_local_llm_route)(route, reachable, detail)
+        reachable, detail = probe_host_local_reachable(route.target.port)
+    return report_local_llm_route(route, reachable, detail)
 
 
-def _build_child_env(
-    build_env: Callable[..., dict[str, str]],
-    agent_name: str,
-    port: int,
-    drop_no_proxy: tuple[str, ...],
-    options: AgentRunOptions,
-) -> dict[str, str]:
-    """Build the agent environment, tolerating builders that predate the model/local-LLM keywords."""
-    try:
-        return build_env(
-            agent_name,
-            port,
-            drop_no_proxy=drop_no_proxy,
-            model=options.get("model"),
-            local_llm_base=options.get("local_llm_base"),
-        )
-    except TypeError:
-        return build_env(agent_name, port, drop_no_proxy=drop_no_proxy)
-
-
-def _execute_agent_with_cleanup(cmd: list[str], env: dict[str, str], teardown: bool, deps: AgentRunnerDeps) -> int:
+def _execute_agent_with_cleanup(cmd: list[str], env: dict[str, str], teardown: bool) -> int:
     """Run the agent; with ``teardown`` remove the proxy container this run started, even on failure."""
     try:
-        return (deps.exec_proc_fn or execute_interactive_process)(cmd, env)
+        return execute_interactive_process(cmd, env)
     finally:
         if teardown:
-            (deps.stop_container_fn or stop_proxy_container)()
+            stop_proxy_container()
 
 
 def run_agent(
     agent_name: str,
     agent_args: list[str],
-    *,
-    deps: AgentRunnerDeps | None = None,
     **options: Unpack[AgentRunOptions],
 ) -> int:
     """Launch the optimization proxy and execute the requested coding agent with full telemetry.
 
     ``options`` carries ``ephemeral``, ``port``, ``local_llm_base`` and ``model``; any other keyword
-    (such as the retired ``resolve_bin_fn`` / ``exec_proc_fn``, now on ``deps``) raises ``TypeError``.
+    (such as the retired ``resolve_bin_fn`` / ``exec_proc_fn``) raises ``TypeError``.
     """
     unknown = sorted(set(options) - AgentRunOptions.__optional_keys__ - AgentRunOptions.__required_keys__)
     if unknown:
         raise TypeError(f"run_agent() got unexpected keyword argument(s): {', '.join(unknown)}")
-    deps = deps or AgentRunnerDeps()
     port = _resolve_agent_port(options.get("port"))
     if port is None:
         return 1
 
-    binary_path = (deps.resolve_bin_fn or resolve_agent_binary)(agent_name)
+    binary_path = resolve_agent_binary(agent_name)
     if not binary_path:
         _report_missing_binary(agent_name)
         return 1
 
     local_llm_base = _resolve_local_llm_base(options.get("local_llm_base"))
-    route_ok, route = _plan_agent_route(local_llm_base, port, deps.plan_route_fn or plan_local_llm_route)
+    route_ok, route = _plan_agent_route(local_llm_base, port, plan_local_llm_route)
     if not route_ok:
         return 1
 
-    ensure_proxy = deps.ensure_proxy_fn or ensure_proxy_running
-    container_started = ensure_proxy(port=port, host_local_spec=route.container_env_value if route else "")
-    drop_no_proxy = _setup_agent_local_route(route, deps)
-    child_env = _build_child_env(
-        deps.build_env_fn or build_agent_env,
+    container_started = ensure_proxy_running(port=port, host_local_spec=route.container_env_value if route else "")
+    drop_no_proxy = _setup_agent_local_route(route)
+    child_env = build_agent_env(
         agent_name,
         port,
-        drop_no_proxy,
-        {**options, "local_llm_base": local_llm_base},
+        drop_no_proxy=drop_no_proxy,
+        model=options.get("model"),
+        local_llm_base=local_llm_base,
     )
     teardown = bool(options.get("ephemeral", False) and container_started)
-    return _execute_agent_with_cleanup([binary_path, *agent_args], child_env, teardown, deps)
+    return _execute_agent_with_cleanup([binary_path, *agent_args], child_env, teardown)
 
 
 def _print_agent_help(agent_name: str) -> None:
