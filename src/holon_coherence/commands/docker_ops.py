@@ -13,8 +13,8 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from holon_coherence.commands.stop import handle_stop
-from holon_coherence.proxy.image import DOCKER_BUILD_TIMEOUT_SECONDS, ensure_docker_image
-from holon_coherence.proxy.lifecycle import (
+from holon_coherence.container.image import DOCKER_BUILD_TIMEOUT_SECONDS, ensure_docker_image
+from holon_coherence.container.lifecycle import (
     DEFAULT_CONTAINER_NAME,
     ProxyLifecycle,
     check_docker_daemon,

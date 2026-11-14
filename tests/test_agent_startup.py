@@ -69,7 +69,7 @@ def test_agent_runner_cold_start_help(
     try:
         stop_proxy_container(container_name)
 
-        from holon_coherence.proxy.lifecycle import ProxyLifecycle
+        from holon_coherence.container.lifecycle import ProxyLifecycle
 
         readiness: list[bool] = []
         real_wait = ProxyLifecycle.wait_until_ready

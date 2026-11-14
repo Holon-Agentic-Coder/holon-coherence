@@ -1,8 +1,8 @@
 """Proxy server startup orchestration across host and Docker container.
 
 Container launch, CA material, readiness polling and teardown live in
-:mod:`holon_coherence.proxy.lifecycle`; this module translates ``start`` CLI arguments into a
-:class:`~holon_coherence.proxy.lifecycle.ProxyLifecycle` and keeps the route-planning helpers the
+:mod:`holon_coherence.container.lifecycle`; this module translates ``start`` CLI arguments into a
+:class:`~holon_coherence.container.lifecycle.ProxyLifecycle` and keeps the route-planning helpers the
 agent runners share.
 """
 
@@ -19,19 +19,7 @@ from typing import Any, NamedTuple
 from holon_coherence.commands.endpoints import ExposedEndpoints, print_endpoints, token_recovery_command
 from holon_coherence.commands.runner import merge_no_proxy_values
 from holon_coherence.commands.web_token import resolve_web_password, save_web_token
-from holon_coherence.host_local import (
-    GATEWAY_HOSTNAME,
-    HOST_LOCAL_ENV_VAR,
-    LocalTarget,
-    PruningPlan,
-    decode_targets,
-    detect_host_addresses,
-    encode_targets,
-    expand_equivalence_class,
-    parse_local_target,
-    plan_no_proxy_pruning,
-)
-from holon_coherence.proxy.lifecycle import (
+from holon_coherence.container.lifecycle import (
     DEFAULT_IMAGE,
     DEFAULT_PROXY_PORT,
     DEFAULT_WEB_PORT,
@@ -49,6 +37,18 @@ from holon_coherence.proxy.lifecycle import (
     is_port_in_use,
     is_start_passive,
     require_docker_daemon,
+)
+from holon_coherence.host_local import (
+    GATEWAY_HOSTNAME,
+    HOST_LOCAL_ENV_VAR,
+    LocalTarget,
+    PruningPlan,
+    decode_targets,
+    detect_host_addresses,
+    encode_targets,
+    expand_equivalence_class,
+    parse_local_target,
+    plan_no_proxy_pruning,
 )
 
 __all__ = [

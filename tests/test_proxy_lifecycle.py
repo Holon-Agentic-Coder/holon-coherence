@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import stat
 import subprocess
@@ -11,15 +12,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from holon_coherence.host_local import HOST_LOCAL_ENV_VAR
-from holon_coherence.proxy.lifecycle import (
+from holon_coherence.container.lifecycle import (
     CA_CERT_FILENAME,
     CA_PEM_FILENAME,
     ProxyLifecycle,
     ProxyLifecycleConfig,
 )
+from holon_coherence.host_local import HOST_LOCAL_ENV_VAR
 
-LIFECYCLE = "holon_coherence.proxy.lifecycle"
+LIFECYCLE = "holon_coherence.container.lifecycle"
 
 
 def _config(tmp_path: Path, **overrides: object) -> ProxyLifecycleConfig:
@@ -157,7 +158,7 @@ class TestProxyLifecycleStart:
             patch(f"{LIFECYCLE}.is_port_in_use", return_value=False),
             patch(f"{LIFECYCLE}.is_container_running", return_value=False),
             patch(f"{LIFECYCLE}.generate_root_ca"),
-            patch("holon_coherence.proxy.lifecycle.ensure_docker_image") as mock_image,
+            patch("holon_coherence.container.lifecycle.ensure_docker_image") as mock_image,
             patch("subprocess.run", return_value=MagicMock(returncode=0)) as mock_run,
             patch.object(ProxyLifecycle, "wait_until_ready", return_value=True),
         ):
@@ -214,7 +215,7 @@ class TestProxyLifecycleStart:
             patch(f"{LIFECYCLE}.is_container_bound_to_port", return_value=True),
             patch(f"{LIFECYCLE}.container_host_local_spec", return_value="localhost:11434"),
             patch(f"{LIFECYCLE}.generate_root_ca"),
-            patch("holon_coherence.proxy.lifecycle.ensure_docker_image"),
+            patch("holon_coherence.container.lifecycle.ensure_docker_image"),
             patch.object(ProxyLifecycle, "stop") as mock_stop,
             patch("subprocess.run", return_value=MagicMock(returncode=0)) as mock_run,
             patch.object(ProxyLifecycle, "wait_until_ready", return_value=True),
@@ -243,7 +244,7 @@ class TestProxyLifecycleStart:
             patch(f"{LIFECYCLE}.is_port_in_use", return_value=False),
             patch(f"{LIFECYCLE}.is_container_running", return_value=False),
             patch(f"{LIFECYCLE}.generate_root_ca"),
-            patch("holon_coherence.proxy.lifecycle.ensure_docker_image"),
+            patch("holon_coherence.container.lifecycle.ensure_docker_image"),
             patch("subprocess.run", side_effect=[MagicMock(returncode=0), MagicMock(returncode=125, stderr="boom\n")]),
             pytest.raises(SystemExit) as exc_info,
         ):
@@ -260,7 +261,7 @@ class TestProxyLifecycleStart:
             patch(f"{LIFECYCLE}.is_port_in_use", return_value=False),
             patch(f"{LIFECYCLE}.is_container_running", return_value=False),
             patch(f"{LIFECYCLE}.generate_root_ca"),
-            patch("holon_coherence.proxy.lifecycle.ensure_docker_image"),
+            patch("holon_coherence.container.lifecycle.ensure_docker_image"),
             patch("subprocess.run", side_effect=[MagicMock(returncode=0), MagicMock(returncode=0), logs]),
             patch.object(ProxyLifecycle, "wait_until_ready", return_value=False),
             patch.object(ProxyLifecycle, "stop") as mock_stop,
@@ -343,3 +344,27 @@ class TestProxyLifecycleStop:
     def test_missing_docker_binary(self) -> None:
         with patch("subprocess.run", side_effect=OSError("docker not found")):
             assert ProxyLifecycle().stop() is False
+
+
+def _imported_modules(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            modules.add(node.module)
+        elif isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+    return modules
+
+
+def test_commands_and_container_do_not_import_proxy_engine() -> None:
+    """CLI commands and the container lifecycle must not depend on the ``proxy`` engine package."""
+    src = Path(__file__).resolve().parents[1] / "src" / "holon_coherence"
+    files = [*sorted((src / "commands").glob("*.py")), *sorted((src / "container").glob("*.py")), src / "cli.py"]
+    offenders = {
+        f"{path.relative_to(src)}: {module}"
+        for path in files
+        for module in _imported_modules(path)
+        if module == "holon_coherence.proxy" or module.startswith("holon_coherence.proxy.")
+    }
+    assert not offenders, sorted(offenders)

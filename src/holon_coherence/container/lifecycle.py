@@ -1,7 +1,7 @@
 """Proxy container lifecycle: CA material, container launch, readiness polling and teardown.
 
 This module owns the Docker container primitives the lifecycle needs and depends only on low-level
-helpers (``ca_generator``, ``host_local``, ``proxy.image``); ``holon_coherence.commands`` re-exports
+helpers (``ca_generator``, ``host_local``, ``container.image``); ``holon_coherence.commands`` re-exports
 it through ``commands.start`` and ``commands.docker_ops`` and is never imported from here.
 """
 
@@ -22,6 +22,7 @@ from dataclasses import dataclass, replace
 from typing import Any, NoReturn
 
 from holon_coherence.ca_generator import generate_root_ca
+from holon_coherence.container.image import ensure_docker_image
 from holon_coherence.host_local import (
     GATEWAY_HOSTNAME,
     HOST_LOCAL_ENV_VAR,
@@ -29,7 +30,6 @@ from holon_coherence.host_local import (
     decode_targets,
     encode_targets,
 )
-from holon_coherence.proxy.image import ensure_docker_image
 
 DEFAULT_PROXY_PORT = 8080
 DEFAULT_WEB_PORT = 8081

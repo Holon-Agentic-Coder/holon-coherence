@@ -9,7 +9,7 @@ import pytest
 
 from holon_coherence.cli import main
 from holon_coherence.commands import docker_ops, stop
-from holon_coherence.proxy.lifecycle import ProxyLifecycle
+from holon_coherence.container.lifecycle import ProxyLifecycle
 
 
 class TestStopCommand:

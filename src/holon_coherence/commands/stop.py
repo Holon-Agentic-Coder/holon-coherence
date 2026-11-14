@@ -6,7 +6,7 @@ import argparse
 from collections.abc import Callable
 from typing import Any
 
-from holon_coherence.proxy.lifecycle import ProxyLifecycle, get_container_name
+from holon_coherence.container.lifecycle import ProxyLifecycle, get_container_name
 
 
 def handle_stop(
