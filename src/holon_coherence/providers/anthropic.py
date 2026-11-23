@@ -214,6 +214,95 @@ def merge_consecutive_roles(messages: list[dict[str, Any]]) -> list[dict[str, An
     return merged
 
 
+_TTL_5M_RANK = 300
+_TTL_1H_RANK = 3600
+_VALID_TTLS = ("5m", "1h")
+MAX_CACHE_BREAKPOINTS = 4
+
+
+def _parse_ttl_rank(cc: Any) -> int:
+    if isinstance(cc, dict) and cc.get("ttl") == "1h":
+        return _TTL_1H_RANK
+    return _TTL_5M_RANK
+
+
+def _sanitize_cache_control_block(block: dict[str, Any]) -> bool:
+    if "cache_control" not in block:
+        return False
+    cc = block.get("cache_control")
+    if not isinstance(cc, dict) or cc.get("type") != "ephemeral":
+        block.pop("cache_control", None)
+        return False
+    if "ttl" in cc and cc["ttl"] not in _VALID_TTLS:
+        cc.pop("ttl", None)
+    return True
+
+
+def _iter_message_content_holders(content: Any) -> Iterator[tuple[str, dict[str, Any]]]:
+    if isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict) and "cache_control" in part:
+                yield ("messages", part)
+    elif isinstance(content, dict) and "cache_control" in content:
+        yield ("messages", content)
+
+
+def _iter_section_holders(section_name: str, section_val: Any) -> Iterator[tuple[str, dict[str, Any]]]:
+    if isinstance(section_val, dict):
+        if "cache_control" in section_val:
+            yield (section_name, section_val)
+        return
+    if not isinstance(section_val, list):
+        return
+    for item in section_val:
+        if not isinstance(item, dict):
+            continue
+        if "cache_control" in item:
+            yield (section_name, item)
+        if section_name == "messages":
+            yield from _iter_message_content_holders(item.get("content"))
+
+
+def _iter_cache_control_holders(
+    payload: dict[str, Any],
+    order: tuple[str, str, str] = ("tools", "system", "messages"),
+) -> Iterator[tuple[str, dict[str, Any]]]:
+    for section_name in order:
+        yield from _iter_section_holders(section_name, payload.get(section_name))
+
+
+def _downgrade_to_5m(block: dict[str, Any]) -> None:
+    cc = block.get("cache_control")
+    if isinstance(cc, dict) and cc.get("ttl") == "1h":
+        cc.pop("ttl", None)
+
+
+def _enforce_monotonic_ttls(holders: list[tuple[str, dict[str, Any]]]) -> None:
+    max_allowed_rank = _TTL_1H_RANK
+    for _section, block in holders:
+        rank = _parse_ttl_rank(block.get("cache_control"))
+        if rank > max_allowed_rank:
+            _downgrade_to_5m(block)
+        elif rank < max_allowed_rank:
+            max_allowed_rank = rank
+
+
+def sanitize_and_normalize_cache_controls(payload: dict[str, Any]) -> dict[str, Any]:
+    """Sanitizes cache_control blocks, caps total breakpoints at 4, and enforces non-increasing TTL ordering."""
+    valid_holders: list[tuple[str, dict[str, Any]]] = []
+    for section, block in list(_iter_cache_control_holders(payload, ("tools", "system", "messages"))):
+        if _sanitize_cache_control_block(block):
+            valid_holders.append((section, block))
+
+    if len(valid_holders) > MAX_CACHE_BREAKPOINTS:
+        for _section, excess_block in valid_holders[MAX_CACHE_BREAKPOINTS:]:
+            excess_block.pop("cache_control", None)
+        valid_holders = valid_holders[:MAX_CACHE_BREAKPOINTS]
+
+    _enforce_monotonic_ttls(valid_holders)
+    return payload
+
+
 def _count_system_cache_controls(system: Any) -> int:
     if isinstance(system, list):
         return sum(1 for b in system if isinstance(b, dict) and "cache_control" in b)
@@ -254,15 +343,54 @@ def count_existing_cache_controls(payload: dict[str, Any]) -> int:
     )
 
 
+def _build_injected_cache_control(required_min_rank: int = _TTL_5M_RANK) -> dict[str, Any]:
+    if required_min_rank >= _TTL_1H_RANK:
+        return {"type": "ephemeral", "ttl": "1h"}
+    return {"type": "ephemeral"}
+
+
+def _section_has_1h(payload: dict[str, Any], sections: tuple[str, ...]) -> bool:
+    for sec in sections:
+        for _s, block in _iter_section_holders(sec, payload.get(sec)):
+            if _parse_ttl_rank(block.get("cache_control")) >= _TTL_1H_RANK:
+                return True
+    return False
+
+
+def _section_has_5m(payload: dict[str, Any], sections: tuple[str, ...]) -> bool:
+    for sec in sections:
+        for _s, block in _iter_section_holders(sec, payload.get(sec)):
+            if _parse_ttl_rank(block.get("cache_control")) == _TTL_5M_RANK:
+                return True
+    return False
+
+
+def _required_rank_for_system(payload: dict[str, Any]) -> int:
+    if _section_has_5m(payload, ("tools", "system")):
+        return _TTL_5M_RANK
+    if _section_has_1h(payload, ("messages",)):
+        return _TTL_1H_RANK
+    return _TTL_5M_RANK
+
+
+def _required_rank_for_tools(payload: dict[str, Any]) -> int:
+    if _section_has_5m(payload, ("tools",)):
+        return _TTL_5M_RANK
+    if _section_has_1h(payload, ("system", "messages")):
+        return _TTL_1H_RANK
+    return _TTL_5M_RANK
+
+
 def _inject_system_cache(payload: dict[str, Any]) -> bool:
     system = payload.get("system")
+    cc = _build_injected_cache_control(_required_rank_for_system(payload))
     if isinstance(system, list) and system:
         last_sys = system[-1]
         if isinstance(last_sys, dict) and "cache_control" not in last_sys:
-            last_sys["cache_control"] = {"type": "ephemeral"}
+            last_sys["cache_control"] = cc
             return True
     elif isinstance(system, str):
-        payload["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+        payload["system"] = [{"type": "text", "text": system, "cache_control": cc}]
         return True
     return False
 
@@ -272,32 +400,50 @@ def _inject_tools_cache(payload: dict[str, Any]) -> bool:
     if isinstance(tools, list) and tools:
         last_tool = tools[-1]
         if isinstance(last_tool, dict) and "cache_control" not in last_tool:
-            last_tool["cache_control"] = {"type": "ephemeral"}
+            last_tool["cache_control"] = _build_injected_cache_control(_required_rank_for_tools(payload))
             return True
     return False
+
+
+def _required_rank_for_messages_target(payload: dict[str, Any]) -> int:
+    if _section_has_5m(payload, ("tools", "system")):
+        return _TTL_5M_RANK
+    messages = payload.get("messages", [])
+    if not isinstance(messages, list) or len(messages) < 2:
+        return _TTL_5M_RANK
+    for msg in messages[:-1]:
+        for _s, block in _iter_section_holders("messages", [msg]):
+            if _parse_ttl_rank(block.get("cache_control")) == _TTL_5M_RANK:
+                return _TTL_5M_RANK
+    for _s, block in _iter_section_holders("messages", [messages[-1]]):
+        if _parse_ttl_rank(block.get("cache_control")) >= _TTL_1H_RANK:
+            return _TTL_1H_RANK
+    return _TTL_5M_RANK
 
 
 def _inject_messages_cache(payload: dict[str, Any]) -> bool:
     messages = payload.get("messages", [])
     if isinstance(messages, list) and len(messages) >= 2:
         target_msg = messages[-2]
-        if isinstance(target_msg, dict):
+        if isinstance(target_msg, dict) and "cache_control" not in target_msg:
+            cc = _build_injected_cache_control(_required_rank_for_messages_target(payload))
             content = target_msg.get("content")
             if isinstance(content, list) and content:
                 last_block = content[-1]
                 if isinstance(last_block, dict) and "cache_control" not in last_block:
-                    last_block["cache_control"] = {"type": "ephemeral"}
+                    last_block["cache_control"] = cc
                     return True
             elif isinstance(content, str):
-                target_msg["content"] = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
+                target_msg["content"] = [{"type": "text", "text": content, "cache_control": cc}]
                 return True
     return False
 
 
 def inject_anthropic_cache_control(payload: dict[str, Any], stats: dict[str, int] | None = None) -> dict[str, Any]:
     """Injects ephemeral prompt cache controls into Anthropic payload within budget."""
+    sanitize_and_normalize_cache_controls(payload)
     existing_count = count_existing_cache_controls(payload)
-    budget = 4 - existing_count
+    budget = MAX_CACHE_BREAKPOINTS - existing_count
     if budget <= 0:
         return payload
 
@@ -313,6 +459,8 @@ def inject_anthropic_cache_control(payload: dict[str, Any], stats: dict[str, int
     if budget > 0 and _inject_messages_cache(payload):
         budget -= 1
         injected += 1
+
+    sanitize_and_normalize_cache_controls(payload)
 
     if stats is not None:
         stats["cache_control_injected"] += injected
@@ -492,6 +640,8 @@ class AnthropicProvider(ProviderFormat):
 
         if getattr(cleaner, "enable_prompt_caching", True):
             payload = inject_anthropic_cache_control(payload, stats=stats)
+        else:
+            payload = sanitize_and_normalize_cache_controls(payload)
 
         return payload
 

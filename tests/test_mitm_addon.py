@@ -917,3 +917,69 @@ def test_wire_log_directory_env_override_wins(tmp_path: Path, monkeypatch: pytes
     dump_wire_transaction({"turn_id": 2, "flow_id": "override"}).result(timeout=10)
     assert (tmp_path / "custom" / "transactions.jsonl").is_file()
     assert not (tmp_path / ".holon").exists()
+
+
+def test_mitm_addon_anthropic_multi_block_system_cache_control_ttl_ordering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression test: MitmproxyAddon.request() enforces valid non-increasing cache_control.ttl ordering."""
+    monkeypatch.delenv("HOLON_PASSIVE_MONITORING", raising=False)
+    monkeypatch.delenv("COHERENCE_TOKEN_REDUCTION", raising=False)
+    addon = MitmproxyAddon(cache_dir=str(tmp_path / "cache"), wire_log_dir=str(tmp_path / "logs"))
+
+    dup_output = "duplicate tool result payload " * 10
+    req_payload = {
+        "model": "claude-sonnet-4-5",
+        "system": [
+            {"type": "text", "text": "System block 0", "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": "System block 1"},
+            {"type": "text", "text": "System block 2", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+        ],
+        "tools": [
+            {"name": "bash", "description": "Execute bash command"},
+        ],
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": dup_output}],
+            },
+            {"role": "assistant", "content": [{"type": "text", "text": "First step done"}]},
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "tu_2", "content": dup_output}],
+            },
+            {"role": "assistant", "content": [{"type": "text", "text": "Second step done"}]},
+            {"role": "user", "content": [{"type": "text", "text": "Third step prompt"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Third step done"}]},
+            {"role": "user", "content": [{"type": "text", "text": "Continue"}]},
+        ],
+    }
+
+    flow = DummyFlow(
+        request=DummyRequest(
+            url="https://api.anthropic.com/v1/messages",
+            host="api.anthropic.com",
+            port=443,
+            path="/v1/messages",
+            headers={"Content-Type": "application/json"},
+            text=json.dumps(req_payload),
+        )
+    )
+    addon.request(flow)
+
+    forwarded = json.loads(flow.request.get_text())
+    assert "[Tool output omitted:" in forwarded["messages"][2]["content"][0]["content"]
+
+    from holon_coherence.providers.anthropic import (
+        _iter_cache_control_holders,
+        _parse_ttl_rank,
+        count_existing_cache_controls,
+    )
+
+    total_cc = count_existing_cache_controls(forwarded)
+    assert 1 <= total_cc <= 4
+    ranks = [
+        _parse_ttl_rank(block.get("cache_control"))
+        for _, block in _iter_cache_control_holders(forwarded, ("tools", "system", "messages"))
+    ]
+    assert ranks == sorted(ranks, reverse=True), f"Expected non-increasing TTL order, got {ranks}"

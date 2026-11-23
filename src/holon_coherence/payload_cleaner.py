@@ -14,6 +14,7 @@ from holon_coherence.providers.anthropic import (
     deduplicate_anthropic_tool_outputs,
     inject_anthropic_cache_control,
     merge_consecutive_roles,
+    sanitize_and_normalize_cache_controls,
     summarize_anthropic_history,
 )
 
@@ -154,3 +155,6 @@ class JSONContextCleaner:
         self, payload: dict[str, Any], stats: dict[str, int] | None = None
     ) -> dict[str, Any]:
         return inject_anthropic_cache_control(payload, stats=stats)
+
+    def _sanitize_and_normalize_cache_controls(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return sanitize_and_normalize_cache_controls(payload)

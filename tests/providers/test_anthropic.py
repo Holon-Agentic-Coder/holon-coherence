@@ -5,7 +5,14 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from holon_coherence.providers.anthropic import AnthropicProvider
+from holon_coherence.providers.anthropic import (
+    AnthropicProvider,
+    _iter_cache_control_holders,
+    _parse_ttl_rank,
+    count_existing_cache_controls,
+    inject_anthropic_cache_control,
+    sanitize_and_normalize_cache_controls,
+)
 
 
 def test_anthropic_payload_cleaning_dedup_and_cache_control() -> None:
@@ -155,3 +162,115 @@ def test_anthropic_extract_cache_key_parts() -> None:
     assert "Question 1" in user_content
     assert "Question 2" in user_content
     assert system_prompt == "System prompt text"
+
+
+def _assert_non_increasing_ttl_and_max_4(payload: dict) -> None:
+    assert count_existing_cache_controls(payload) <= 4
+    ranks = [
+        _parse_ttl_rank(block.get("cache_control"))
+        for _, block in _iter_cache_control_holders(payload, ("tools", "system", "messages"))
+    ]
+    assert ranks == sorted(ranks, reverse=True), f"TTL ranks not non-increasing: {ranks}"
+
+
+def test_system_multi_block_cache_control_ttl_ordering() -> None:
+    provider = AnthropicProvider()
+    cleaner = SimpleNamespace(
+        enable_deduplication=True,
+        enable_prompt_caching=True,
+        max_turns=50,
+        recent_turns_to_keep=2,
+    )
+    payload = {
+        "system": [
+            {"type": "text", "text": "Block 0", "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": "Block 1", "cache_control": {"type": "ephemeral", "ttl": "5m"}},
+            {"type": "text", "text": "Block 2", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+        ],
+        "messages": [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+            {"role": "user", "content": "Next"},
+        ],
+    }
+    stats = {"tool_outputs_omitted": 0, "turns_summarized": 0, "cache_control_injected": 0}
+    cleaned = provider.clean(cleaner, payload, {}, stats=stats)
+    _assert_non_increasing_ttl_and_max_4(cleaned)
+    assert cleaned["system"][2]["cache_control"].get("ttl") != "1h"
+
+
+def test_tools_and_system_ttl_ordering_prevents_5m_before_1h() -> None:
+    payload = {
+        "system": [
+            {"type": "text", "text": "System instructions", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+        ],
+        "tools": [
+            {"name": "read_file", "description": "Read a file"},
+        ],
+        "messages": [
+            {"role": "user", "content": "First question"},
+            {"role": "assistant", "content": "First answer"},
+        ],
+    }
+    stats = {"cache_control_injected": 0}
+    cleaned = inject_anthropic_cache_control(payload, stats=stats)
+    _assert_non_increasing_ttl_and_max_4(cleaned)
+    assert cleaned["tools"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert cleaned["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+
+
+def test_existing_valid_1h_then_5m_ttl_preserved_within_4_breakpoint_limit() -> None:
+    payload = {
+        "system": [
+            {"type": "text", "text": "Sys 0", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+            {"type": "text", "text": "Sys 1", "cache_control": {"type": "ephemeral", "ttl": "5m"}},
+        ],
+        "tools": [
+            {"name": "tool_a", "description": "Tool A", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+        ],
+        "messages": [
+            {"role": "user", "content": "Turn 1"},
+            {"role": "assistant", "content": "Turn 2"},
+            {"role": "user", "content": "Turn 3"},
+        ],
+    }
+    stats = {"cache_control_injected": 0}
+    cleaned = inject_anthropic_cache_control(payload, stats=stats)
+    _assert_non_increasing_ttl_and_max_4(cleaned)
+    assert cleaned["system"][0]["cache_control"]["ttl"] == "1h"
+    assert cleaned["system"][1]["cache_control"]["ttl"] == "5m"
+    assert cleaned["tools"][0]["cache_control"]["ttl"] == "1h"
+    assert cleaned["messages"][-2]["content"][0]["cache_control"] == {"type": "ephemeral"}
+    assert stats["cache_control_injected"] == 1
+
+
+def test_invalid_ttl_values_and_excess_breakpoints_sanitized() -> None:
+    payload = {
+        "system": [
+            {"type": "text", "text": "S0", "cache_control": {"type": "ephemeral", "ttl": "10m"}},
+            {"type": "text", "text": "S1", "cache_control": {"type": "ephemeral", "ttl": None}},
+            {"type": "text", "text": "S2", "cache_control": {"type": "ephemeral", "ttl": 3600}},
+        ],
+        "tools": [
+            {"name": "t1", "cache_control": {"type": "ephemeral", "ttl": "5m"}},
+            {"name": "t2", "cache_control": {"type": "invalid_type"}},
+        ],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "M0", "cache_control": {"type": "ephemeral"}},
+                    {"type": "text", "text": "M1", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+                ],
+            }
+        ],
+    }
+    sanitize_and_normalize_cache_controls(payload)
+    _assert_non_increasing_ttl_and_max_4(payload)
+    assert count_existing_cache_controls(payload) == 4
+    assert "cache_control" not in payload["tools"][1]
+    for _sec, block in _iter_cache_control_holders(payload):
+        cc = block["cache_control"]
+        assert cc["type"] == "ephemeral"
+        if "ttl" in cc:
+            assert cc["ttl"] in ("5m", "1h")
