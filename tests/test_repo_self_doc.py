@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import ast
 import io
+import os
 import tokenize
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -21,6 +23,16 @@ EXCLUDED_DIRS = frozenset(
         "docs",
         "holon-knowledge",
         "holon-config",
+        "tmp",
+        "scratch",
+        "build",
+        "dist",
+        "venv",
+        "env",
+        "ENV",
+        ".sandbox",
+        ".holon",
+        ".holon-cache",
     }
 )
 
@@ -30,7 +42,6 @@ ALLOWED_PYTHON_COMMENT_PREFIXES = (
     "# pragma: no cover",
     "# pyright:",
     "# mypy:",
-    "#!",
     "# -*-",
     "# vim:",
     "# SPDX-License-Identifier:",
@@ -49,19 +60,18 @@ ALLOWED_BUILD_DIRECTIVE_PREFIXES = (
 YAML_BLOCK_SCALAR_MARKERS = frozenset({"|", "|-", "|+", ">", ">-", ">+"})
 
 
-def _is_excluded(rel_path: Path) -> bool:
-    return any(part in EXCLUDED_DIRS for part in rel_path.parts)
+def _walk_repo_files() -> Iterator[tuple[Path, str]]:
+    for dirpath, dirnames, filenames in os.walk(REPO_ROOT):
+        dirnames[:] = sorted(d for d in dirnames if d not in EXCLUDED_DIRS)
+        base = Path(dirpath)
+        for filename in sorted(filenames):
+            path = base / filename
+            if path.is_file():
+                yield path, path.relative_to(REPO_ROOT).as_posix()
 
 
 def _discover_python_files() -> tuple[str, ...]:
-    discovered: list[str] = []
-    for path in REPO_ROOT.rglob("*.py"):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(REPO_ROOT)
-        if not _is_excluded(rel):
-            discovered.append(rel.as_posix())
-    return tuple(sorted(discovered))
+    return tuple(sorted(rel for path, rel in _walk_repo_files() if path.suffix == ".py"))
 
 
 def _is_build_or_shell_file(path: Path) -> bool:
@@ -75,14 +85,7 @@ def _is_build_or_shell_file(path: Path) -> bool:
 
 
 def _discover_build_and_shell_files() -> tuple[str, ...]:
-    discovered: list[str] = []
-    for path in REPO_ROOT.rglob("*"):
-        if not path.is_file() or not _is_build_or_shell_file(path):
-            continue
-        rel = path.relative_to(REPO_ROOT)
-        if not _is_excluded(rel):
-            discovered.append(rel.as_posix())
-    return tuple(sorted(discovered))
+    return tuple(sorted(rel for path, rel in _walk_repo_files() if _is_build_or_shell_file(path)))
 
 
 def _discover_github_yaml_files() -> tuple[str, ...]:
@@ -109,13 +112,19 @@ def _find_python_docstring_violations(source: str, rel_path: str) -> list[str]:
     return violations
 
 
+def _is_allowed_python_comment(comment: str, line_no: int) -> bool:
+    if line_no == 1 and comment.startswith("#!"):
+        return True
+    return comment.startswith(ALLOWED_PYTHON_COMMENT_PREFIXES)
+
+
 def _find_python_comment_violations(source: str, rel_path: str) -> list[str]:
     violations: list[str] = []
     tokens = tokenize.generate_tokens(io.StringIO(source).readline)
     for token in tokens:
         if token.type != tokenize.COMMENT:
             continue
-        if not token.string.startswith(ALLOWED_PYTHON_COMMENT_PREFIXES):
+        if not _is_allowed_python_comment(token.string, token.start[0]):
             violations.append(f"{rel_path}:{token.start[0]}: disallowed comment: {token.string}")
     return violations
 
@@ -225,9 +234,9 @@ def test_github_yaml_file_has_no_disallowed_comments(rel_path: str) -> None:
 
 
 def test_self_doc_classifiers_detect_violations_and_allow_pragmas() -> None:
-    py_bad = '"""module doc"""\ndef f():\n    """fn doc"""\n    x = 1  # explanatory\n    return x\n'
+    py_bad = '"""module doc"""\ndef f():\n    """fn doc"""\n    x = 1  # explanatory\n    #! not line 1\n    return x\n'
     assert len(_find_python_docstring_violations(py_bad, "sample.py")) == 2
-    assert len(_find_python_comment_violations(py_bad, "sample.py")) == 1
+    assert len(_find_python_comment_violations(py_bad, "sample.py")) == 2
 
     py_good = (
         "#!/usr/bin/env python3\n"
