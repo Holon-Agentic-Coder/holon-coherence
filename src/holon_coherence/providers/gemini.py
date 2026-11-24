@@ -1,5 +1,3 @@
-"""Gemini wire format implementation."""
-
 from __future__ import annotations
 
 import copy
@@ -17,6 +15,16 @@ if TYPE_CHECKING:
     from holon_coherence.payload_cleaner import JSONContextCleaner
 
 logger = logging.getLogger(__name__)
+
+MIN_PART_DEDUP_CHARS = 100
+RECENT_UNTOUCHED_TURNS = 2
+CHARS_PER_ESTIMATED_TOKEN = 4
+DEFAULT_MAX_TURNS = 40
+DEFAULT_RECENT_TURNS_TO_KEEP = 10
+
+
+def _estimate_tokens_from_chars(char_count: int) -> int:
+    return max(1, char_count // CHARS_PER_ESTIMATED_TOKEN) if char_count > 0 else 0
 
 
 def _iter_sse_chunks(resp_text: str) -> Iterator[dict[str, Any]]:
@@ -46,7 +54,7 @@ def _dedup_func_response(
     resp_data = func_resp.get("response", {})
     func_name = func_resp.get("name", f"func_{turn_idx}")
     serialized = json.dumps(resp_data, sort_keys=True) if isinstance(resp_data, dict) else str(resp_data)
-    if len(serialized) > 100:
+    if len(serialized) > MIN_PART_DEDUP_CHARS:
         content_hash = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
         if content_hash in seen_content_hashes and is_older:
             prev_turn, _ = seen_content_hashes[content_hash]
@@ -65,7 +73,7 @@ def _dedup_text_part(
     stats: dict[str, int] | None,
 ) -> None:
     text = part_copy.get("text", "")
-    if isinstance(text, str) and len(text) > 100:
+    if isinstance(text, str) and len(text) > MIN_PART_DEDUP_CHARS:
         text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
         if text_hash in seen_content_hashes and is_older:
             prev_turn, _ = seen_content_hashes[text_hash]
@@ -99,7 +107,6 @@ def deduplicate_gemini_contents(
     seen_content_hashes: dict[str, tuple[int, str]],
     stats: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
-    """Deduplicates function responses and repeated text in Gemini contents history."""
     if not enable_dedup:
         return [copy.deepcopy(t) if isinstance(t, dict) else t for t in contents]
     cleaned: list[dict[str, Any]] = []
@@ -109,7 +116,7 @@ def deduplicate_gemini_contents(
             cleaned.append(turn)
             continue
         turn_copy = copy.deepcopy(turn)
-        is_older = turn_idx < (turn_count - 2)
+        is_older = turn_idx < (turn_count - RECENT_UNTOUCHED_TURNS)
         parts = turn_copy.get("parts", [])
         if isinstance(parts, list):
             turn_copy["parts"] = [_dedup_gemini_part(p, turn_idx, is_older, seen_content_hashes, stats) for p in parts]
@@ -140,7 +147,6 @@ def summarize_gemini_history(
     recent_turns_to_keep: int,
     stats: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
-    """Summarizes intermediate history turns in Gemini content sequence."""
     suffix_idx = _find_gemini_suffix_idx(contents, recent_turns_to_keep)
     if suffix_idx is None or suffix_idx <= 1:
         return contents
@@ -272,8 +278,6 @@ def _extract_gemini_system_prompt(payload: dict[str, Any]) -> str:
 
 
 class GeminiProvider(ProviderFormat):
-    """Wire format implementation for Google Gemini API."""
-
     def clean(
         self,
         cleaner: JSONContextCleaner,
@@ -281,7 +285,6 @@ class GeminiProvider(ProviderFormat):
         seen_content_hashes: dict[str, tuple[int, str]],
         stats: dict[str, int] | None = None,
     ) -> dict[str, Any]:
-        """Cleans Gemini request payloads (function response deduplication and turn summarization)."""
         contents = payload.get("contents")
         if contents is None or not isinstance(contents, list):
             return payload
@@ -289,8 +292,8 @@ class GeminiProvider(ProviderFormat):
         enable_dedup = getattr(cleaner, "enable_deduplication", True)
         cleaned_contents = deduplicate_gemini_contents(contents, enable_dedup, seen_content_hashes, stats=stats)
 
-        max_turns = getattr(cleaner, "max_turns", 40)
-        recent_turns_to_keep = getattr(cleaner, "recent_turns_to_keep", 10)
+        max_turns = getattr(cleaner, "max_turns", DEFAULT_MAX_TURNS)
+        recent_turns_to_keep = getattr(cleaner, "recent_turns_to_keep", DEFAULT_RECENT_TURNS_TO_KEEP)
         if len(cleaned_contents) > max_turns:
             cleaned_contents = summarize_gemini_history(cleaned_contents, recent_turns_to_keep, stats=stats)
 
@@ -298,7 +301,6 @@ class GeminiProvider(ProviderFormat):
         return payload
 
     def extract_sse_content(self, resp_text: str) -> str:
-        """Extracts text and function calls from Gemini SSE stream chunks."""
         accumulated: list[str] = []
         for chunk in _iter_sse_chunks(resp_text):
             candidates = chunk.get("candidates")
@@ -307,7 +309,6 @@ class GeminiProvider(ProviderFormat):
         return "".join(accumulated)
 
     def token_counts_from_sse(self, resp_text: str, req_data: dict[str, Any]) -> TokenCounts:
-        """Extracts token counts from Gemini SSE stream chunks or falls back to char counts."""
         inp_tok: int | None = None
         out_tok: int | None = None
         cached_tok: int | None = None
@@ -323,14 +324,8 @@ class GeminiProvider(ProviderFormat):
             if isinstance(candidates, list):
                 acc_len += sum(_process_gemini_candidate_len(c) for c in candidates)
 
-        input_tokens = (
-            inp_tok
-            if inp_tok is not None
-            else max(1, estimate_chars(req_data) // 4)
-            if estimate_chars(req_data) > 0
-            else 0
-        )
-        output_tokens = out_tok if out_tok is not None else max(1, acc_len // 4) if acc_len > 0 else 0
+        input_tokens = inp_tok if inp_tok is not None else _estimate_tokens_from_chars(estimate_chars(req_data))
+        output_tokens = out_tok if out_tok is not None else _estimate_tokens_from_chars(acc_len)
 
         return TokenCounts(
             input_tokens,
@@ -341,7 +336,6 @@ class GeminiProvider(ProviderFormat):
         )
 
     def token_counts_from_dict(self, req_data: dict[str, Any], resp_data: dict[str, Any]) -> TokenCounts:
-        """Extracts token counts from Gemini dictionary response."""
         input_tokens = 0
         output_tokens = 0
         cache_read = 0
@@ -359,10 +353,8 @@ class GeminiProvider(ProviderFormat):
                 "Provider usage dictionary missing or invalid for %s; estimating token counts from payload characters",
                 "gemini",
             )
-            in_chars = estimate_chars(req_data)
-            out_chars = estimate_chars(resp_data)
-            input_tokens = max(1, in_chars // 4) if in_chars > 0 else 0
-            output_tokens = max(1, out_chars // 4) if out_chars > 0 else 0
+            input_tokens = _estimate_tokens_from_chars(estimate_chars(req_data))
+            output_tokens = _estimate_tokens_from_chars(estimate_chars(resp_data))
 
         return TokenCounts(
             input_tokens,
@@ -372,8 +364,11 @@ class GeminiProvider(ProviderFormat):
             reasoning_tokens=reasoning,
         )
 
-    def extract_cache_key_parts(self, payload: dict[str, Any], max_recent_turns: int = 2) -> tuple[str, str]:
-        """Extracts (user_content, system_prompt) for Gemini requests."""
+    def extract_cache_key_parts(
+        self,
+        payload: dict[str, Any],
+        max_recent_turns: int = RECENT_UNTOUCHED_TURNS,
+    ) -> tuple[str, str]:
         if not isinstance(payload, dict):
             return str(payload) if payload else "", ""
         user_content = _extract_gemini_user_content(payload.get("contents"), payload.get("prompt"), max_recent_turns)

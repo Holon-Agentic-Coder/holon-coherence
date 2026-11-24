@@ -1,5 +1,3 @@
-"""Streaming and token payload parsers for Holon Coherence."""
-
 from holon_coherence.parsers.sse import (
     extract_sse_cache_read_tokens,
     extract_sse_content,

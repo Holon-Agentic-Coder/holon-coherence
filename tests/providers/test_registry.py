@@ -1,5 +1,3 @@
-"""Unit tests for provider registry and resolution."""
-
 from __future__ import annotations
 
 from holon_coherence.providers import (

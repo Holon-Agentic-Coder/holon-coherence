@@ -1,5 +1,3 @@
-"""OpenAI wire format implementation."""
-
 from __future__ import annotations
 
 import copy
@@ -17,6 +15,17 @@ if TYPE_CHECKING:
     from holon_coherence.payload_cleaner import JSONContextCleaner
 
 logger = logging.getLogger(__name__)
+
+MIN_TOOL_OUTPUT_DEDUP_CHARS = 100
+MIN_MESSAGE_CONTENT_DEDUP_CHARS = 200
+RECENT_UNTOUCHED_TURNS = 2
+CHARS_PER_ESTIMATED_TOKEN = 4
+DEFAULT_MAX_TURNS = 40
+DEFAULT_RECENT_TURNS_TO_KEEP = 10
+
+
+def _estimate_tokens_from_chars(char_count: int) -> int:
+    return max(1, char_count // CHARS_PER_ESTIMATED_TOKEN) if char_count > 0 else 0
 
 
 def _iter_sse_chunks(resp_text: str) -> Iterator[dict[str, Any]]:
@@ -82,9 +91,9 @@ def _dedup_single_openai_message(
     msg_copy = copy.deepcopy(msg)
     role = msg_copy.get("role")
     content = msg_copy.get("content", "")
-    if role == "tool" and isinstance(content, str) and len(content) > 100:
+    if role == "tool" and isinstance(content, str) and len(content) > MIN_TOOL_OUTPUT_DEDUP_CHARS:
         _dedup_tool_output(msg_copy, turn_idx, is_older_turn, seen_content_hashes, stats)
-    elif isinstance(content, str) and len(content) > 200:
+    elif isinstance(content, str) and len(content) > MIN_MESSAGE_CONTENT_DEDUP_CHARS:
         _dedup_message_content(msg_copy, turn_idx, is_older_turn, seen_content_hashes, stats)
     return msg_copy
 
@@ -95,7 +104,6 @@ def deduplicate_openai_messages(
     seen_content_hashes: dict[str, tuple[int, str]],
     stats: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
-    """Deduplicates repeated tool outputs and long message contents in OpenAI history."""
     if not enable_dedup:
         return [copy.deepcopy(m) if isinstance(m, dict) else m for m in messages]
     cleaned: list[dict[str, Any]] = []
@@ -104,7 +112,7 @@ def deduplicate_openai_messages(
         if not isinstance(msg, dict):
             cleaned.append(msg)
             continue
-        is_older = turn_idx < (turn_count - 2)
+        is_older = turn_idx < (turn_count - RECENT_UNTOUCHED_TURNS)
         cleaned.append(_dedup_single_openai_message(msg, turn_idx, is_older, seen_content_hashes, stats))
     return cleaned
 
@@ -141,7 +149,6 @@ def summarize_openai_history(
     recent_turns_to_keep: int,
     stats: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
-    """Summarizes intermediate history turns in OpenAI message sequence."""
     prefix_len = _calculate_openai_prefix_len(messages)
     target_idx = max(prefix_len + 1, len(messages) - recent_turns_to_keep)
     suffix_idx = _find_openai_suffix_idx(messages, prefix_len, target_idx)
@@ -335,8 +342,6 @@ def _parse_openai_delta_len(delta: dict[str, Any]) -> int:
 
 
 class OpenAIProvider(ProviderFormat):
-    """Wire format implementation for OpenAI Chat Completions API."""
-
     def clean(
         self,
         cleaner: JSONContextCleaner,
@@ -344,7 +349,6 @@ class OpenAIProvider(ProviderFormat):
         seen_content_hashes: dict[str, tuple[int, str]],
         stats: dict[str, int] | None = None,
     ) -> dict[str, Any]:
-        """Cleans OpenAI request payloads (tool deduplication and turn summarization)."""
         messages = payload.get("messages", [])
         if not isinstance(messages, list):
             return payload
@@ -352,8 +356,8 @@ class OpenAIProvider(ProviderFormat):
         enable_dedup = getattr(cleaner, "enable_deduplication", True)
         cleaned_messages = deduplicate_openai_messages(messages, enable_dedup, seen_content_hashes, stats=stats)
 
-        max_turns = getattr(cleaner, "max_turns", 40)
-        recent_turns_to_keep = getattr(cleaner, "recent_turns_to_keep", 10)
+        max_turns = getattr(cleaner, "max_turns", DEFAULT_MAX_TURNS)
+        recent_turns_to_keep = getattr(cleaner, "recent_turns_to_keep", DEFAULT_RECENT_TURNS_TO_KEEP)
         if len(cleaned_messages) > max_turns:
             cleaned_messages = summarize_openai_history(cleaned_messages, recent_turns_to_keep, stats=stats)
 
@@ -361,7 +365,6 @@ class OpenAIProvider(ProviderFormat):
         return payload
 
     def extract_sse_content(self, resp_text: str) -> str:
-        """Extracts text and tool call invocations from OpenAI SSE stream lines."""
         accumulated: list[str] = []
         in_tool = False
         for chunk in _iter_sse_chunks(resp_text):
@@ -375,7 +378,6 @@ class OpenAIProvider(ProviderFormat):
         return "".join(accumulated)
 
     def token_counts_from_sse(self, resp_text: str, req_data: dict[str, Any]) -> TokenCounts:
-        """Extracts token counts from OpenAI SSE stream chunks or falls back to char counts."""
         inp_tok: int | None = None
         out_tok: int | None = None
         cached_tok: int | None = None
@@ -393,14 +395,8 @@ class OpenAIProvider(ProviderFormat):
                     if isinstance(ch, dict) and isinstance(ch.get("delta"), dict):
                         acc_len += _parse_openai_delta_len(ch["delta"])
 
-        input_tokens = (
-            inp_tok
-            if inp_tok is not None
-            else max(1, estimate_chars(req_data) // 4)
-            if estimate_chars(req_data) > 0
-            else 0
-        )
-        output_tokens = out_tok if out_tok is not None else max(1, acc_len // 4) if acc_len > 0 else 0
+        input_tokens = inp_tok if inp_tok is not None else _estimate_tokens_from_chars(estimate_chars(req_data))
+        output_tokens = out_tok if out_tok is not None else _estimate_tokens_from_chars(acc_len)
 
         return TokenCounts(
             input_tokens,
@@ -411,7 +407,6 @@ class OpenAIProvider(ProviderFormat):
         )
 
     def token_counts_from_dict(self, req_data: dict[str, Any], resp_data: dict[str, Any]) -> TokenCounts:
-        """Extracts token counts from OpenAI dictionary response."""
         input_tokens = 0
         output_tokens = 0
         cache_read = 0
@@ -429,10 +424,8 @@ class OpenAIProvider(ProviderFormat):
                 "Provider usage dictionary missing or invalid for %s; estimating token counts from payload characters",
                 "openai",
             )
-            in_chars = estimate_chars(req_data)
-            out_chars = estimate_chars(resp_data)
-            input_tokens = max(1, in_chars // 4) if in_chars > 0 else 0
-            output_tokens = max(1, out_chars // 4) if out_chars > 0 else 0
+            input_tokens = _estimate_tokens_from_chars(estimate_chars(req_data))
+            output_tokens = _estimate_tokens_from_chars(estimate_chars(resp_data))
 
         return TokenCounts(
             input_tokens,
@@ -442,8 +435,11 @@ class OpenAIProvider(ProviderFormat):
             reasoning_tokens=reasoning,
         )
 
-    def extract_cache_key_parts(self, payload: dict[str, Any], max_recent_turns: int = 2) -> tuple[str, str]:
-        """Extracts (user_content, system_prompt) for OpenAI requests."""
+    def extract_cache_key_parts(
+        self,
+        payload: dict[str, Any],
+        max_recent_turns: int = RECENT_UNTOUCHED_TURNS,
+    ) -> tuple[str, str]:
         if not isinstance(payload, dict):
             return str(payload) if payload else "", ""
         user_content = _extract_openai_user_content(payload.get("messages"), payload.get("prompt"), max_recent_turns)

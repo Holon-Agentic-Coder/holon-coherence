@@ -1,5 +1,3 @@
-"""Anthropic wire format implementation."""
-
 from __future__ import annotations
 
 import copy
@@ -17,13 +15,26 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+MIN_BLOCK_DEDUP_CHARS = 100
+MIN_STRING_MESSAGE_DEDUP_CHARS = 200
+RECENT_UNTOUCHED_TURNS = 2
+CHARS_PER_ESTIMATED_TOKEN = 4
+DEFAULT_MAX_TURNS = 40
+DEFAULT_RECENT_TURNS_TO_KEEP = 10
+SSE_DATA_PREFIX = "data:"
+SSE_DONE_SENTINEL = "[DONE]"
+
+
+def _estimate_tokens_from_chars(char_count: int) -> int:
+    return max(1, char_count // CHARS_PER_ESTIMATED_TOKEN) if char_count > 0 else 0
+
 
 def _hash_content(content: str | list[Any]) -> str | None:
-    if isinstance(content, str) and len(content) > 100:
+    if isinstance(content, str) and len(content) > MIN_BLOCK_DEDUP_CHARS:
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
     if isinstance(content, list):
         serialized = json.dumps(content, sort_keys=True)
-        if len(serialized) > 100:
+        if len(serialized) > MIN_BLOCK_DEDUP_CHARS:
             return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
     return None
 
@@ -61,7 +72,7 @@ def _dedup_text_item(
 ) -> dict[str, Any]:
     item_copy = copy.deepcopy(item)
     text_out = item_copy.get("text", "")
-    if isinstance(text_out, str) and len(text_out) > 100:
+    if isinstance(text_out, str) and len(text_out) > MIN_BLOCK_DEDUP_CHARS:
         content_hash = hashlib.sha256(text_out.encode("utf-8")).hexdigest()
         if content_hash in seen_content_hashes and is_older_turn:
             prev_turn, prev_res = seen_content_hashes[content_hash]
@@ -103,7 +114,7 @@ def _dedup_single_message(
         msg_copy["content"] = [
             _dedup_content_block(block, turn_idx, is_older_turn, seen_content_hashes, stats) for block in content
         ]
-    elif isinstance(content, str) and len(content) > 200:
+    elif isinstance(content, str) and len(content) > MIN_STRING_MESSAGE_DEDUP_CHARS:
         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
         if content_hash in seen_content_hashes and is_older_turn:
             prev_turn, prev_res = seen_content_hashes[content_hash]
@@ -120,14 +131,13 @@ def deduplicate_anthropic_tool_outputs(
     seen_content_hashes: dict[str, tuple[int, str]],
     stats: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
-    """Deduplicates repeated tool outputs across previous turns in Anthropic messages."""
     cleaned_messages: list[dict[str, Any]] = []
     turn_count = len(messages)
     for turn_idx, msg in enumerate(messages):
         if not isinstance(msg, dict):
             cleaned_messages.append(msg)
             continue
-        is_older_turn = turn_idx < (turn_count - 2)
+        is_older_turn = turn_idx < (turn_count - RECENT_UNTOUCHED_TURNS)
         cleaned_messages.append(_dedup_single_message(msg, turn_idx, is_older_turn, seen_content_hashes, stats))
     return cleaned_messages
 
@@ -157,7 +167,6 @@ def summarize_anthropic_history(
     recent_turns_to_keep: int,
     stats: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
-    """Summarizes intermediate history turns in Anthropic message sequence."""
     suffix_idx = _find_anthropic_suffix_idx(messages, recent_turns_to_keep)
     if suffix_idx is None or suffix_idx <= 1:
         return messages
@@ -199,7 +208,6 @@ def _merge_two_messages(prev: dict[str, Any], curr: dict[str, Any]) -> None:
 
 
 def merge_consecutive_roles(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Merges adjacent messages sharing identical role names."""
     if not messages:
         return []
     merged: list[dict[str, Any]] = []
@@ -273,14 +281,12 @@ def _iter_messages_holders(messages: Any) -> Iterator[dict[str, Any]]:
 
 
 def _iter_cache_control_holders(payload: dict[str, Any]) -> Iterator[dict[str, Any]]:
-    """Yields dicts carrying cache_control in Anthropic prefix order (tools -> system -> messages)."""
     yield from _iter_tools_holders(payload.get("tools"))
     yield from _iter_system_holders(payload.get("system"))
     yield from _iter_messages_holders(payload.get("messages"))
 
 
 def sanitize_and_normalize_cache_controls(payload: dict[str, Any]) -> dict[str, Any]:
-    """Sanitizes cache_control blocks, enforces <= 4 breakpoints, and normalizes non-increasing TTL order."""
     raw_holders = list(_iter_cache_control_holders(payload))
     valid_holders = [h for h in raw_holders if _sanitize_cache_control_block(h)]
 
@@ -315,7 +321,6 @@ def _count_message_cache_controls(messages: Any) -> int:
 
 
 def count_existing_cache_controls(payload: dict[str, Any]) -> int:
-    """Counts existing cache_control markers in Anthropic request payload."""
     return (
         _count_system_cache_controls(payload.get("system"))
         + _count_tools_cache_controls(payload.get("tools"))
@@ -380,7 +385,6 @@ def _inject_messages_cache(payload: dict[str, Any]) -> bool:
 
 
 def inject_anthropic_cache_control(payload: dict[str, Any], stats: dict[str, int] | None = None) -> dict[str, Any]:
-    """Injects ephemeral prompt cache controls into Anthropic payload within budget."""
     sanitize_and_normalize_cache_controls(payload)
     existing_count = count_existing_cache_controls(payload)
     budget = MAX_CACHE_BREAKPOINTS - existing_count
@@ -409,10 +413,10 @@ def inject_anthropic_cache_control(payload: dict[str, Any], stats: dict[str, int
 def _iter_sse_chunks(resp_text: str) -> Iterator[dict[str, Any]]:
     for line in resp_text.splitlines():
         line = line.strip()
-        if not line.startswith("data:"):
+        if not line.startswith(SSE_DATA_PREFIX):
             continue
-        json_str = line[5:].strip()
-        if not json_str or json_str == "[DONE]":
+        json_str = line[len(SSE_DATA_PREFIX) :].strip()
+        if not json_str or json_str == SSE_DONE_SENTINEL:
             continue
         try:
             chunk = json.loads(json_str)
@@ -552,8 +556,6 @@ def _extract_anthropic_system_prompt(system_val: Any) -> str:
 
 
 class AnthropicProvider(ProviderFormat):
-    """Wire format implementation for Anthropic Messages API."""
-
     def clean(
         self,
         cleaner: JSONContextCleaner,
@@ -561,7 +563,6 @@ class AnthropicProvider(ProviderFormat):
         seen_content_hashes: dict[str, tuple[int, str]],
         stats: dict[str, int] | None = None,
     ) -> dict[str, Any]:
-        """Cleans Anthropic request payloads (tool dedup, summarization, prompt cache breakpoints)."""
         messages = payload.get("messages", [])
         if not isinstance(messages, list):
             return sanitize_and_normalize_cache_controls(payload)
@@ -569,8 +570,8 @@ class AnthropicProvider(ProviderFormat):
         if getattr(cleaner, "enable_deduplication", True):
             messages = deduplicate_anthropic_tool_outputs(messages, seen_content_hashes, stats=stats)
 
-        max_turns = getattr(cleaner, "max_turns", 40)
-        recent_turns_to_keep = getattr(cleaner, "recent_turns_to_keep", 10)
+        max_turns = getattr(cleaner, "max_turns", DEFAULT_MAX_TURNS)
+        recent_turns_to_keep = getattr(cleaner, "recent_turns_to_keep", DEFAULT_RECENT_TURNS_TO_KEEP)
         if len(messages) > max_turns:
             messages = summarize_anthropic_history(messages, recent_turns_to_keep, stats=stats)
             messages = merge_consecutive_roles(messages)
@@ -585,7 +586,6 @@ class AnthropicProvider(ProviderFormat):
         return payload
 
     def extract_sse_content(self, resp_text: str) -> str:
-        """Extracts text and tool use invocations from Anthropic SSE stream lines."""
         accumulated: list[str] = []
         in_tool = False
         for chunk in _iter_sse_chunks(resp_text):
@@ -595,7 +595,6 @@ class AnthropicProvider(ProviderFormat):
         return "".join(accumulated)
 
     def token_counts_from_sse(self, resp_text: str, req_data: dict[str, Any]) -> TokenCounts:
-        """Extracts token counts and cache stats from Anthropic SSE stream."""
         inp_tok: int | None = None
         out_tok: int | None = None
         cache_read: int | None = None
@@ -621,15 +620,9 @@ class AnthropicProvider(ProviderFormat):
                 acc_len += clen
                 acc_thinking += tlen
 
-        input_tokens = (
-            inp_tok
-            if inp_tok is not None
-            else max(1, estimate_chars(req_data) // 4)
-            if estimate_chars(req_data) > 0
-            else 0
-        )
-        output_tokens = out_tok if out_tok is not None else max(1, acc_len // 4) if acc_len > 0 else 0
-        reasoning_tokens = reasoning or (max(1, acc_thinking // 4) if acc_thinking > 0 else 0)
+        input_tokens = inp_tok if inp_tok is not None else _estimate_tokens_from_chars(estimate_chars(req_data))
+        output_tokens = out_tok if out_tok is not None else _estimate_tokens_from_chars(acc_len)
+        reasoning_tokens = reasoning or _estimate_tokens_from_chars(acc_thinking)
 
         return TokenCounts(
             input_tokens,
@@ -640,7 +633,6 @@ class AnthropicProvider(ProviderFormat):
         )
 
     def token_counts_from_dict(self, req_data: dict[str, Any], resp_data: dict[str, Any]) -> TokenCounts:
-        """Extracts token counts from Anthropic dictionary response."""
         input_tokens = 0
         output_tokens = 0
         cache_read = 0
@@ -663,10 +655,8 @@ class AnthropicProvider(ProviderFormat):
                 "Provider usage dictionary missing or invalid for %s; estimating token counts from payload characters",
                 "anthropic",
             )
-            in_chars = estimate_chars(req_data)
-            out_chars = estimate_chars(resp_data)
-            input_tokens = max(1, in_chars // 4) if in_chars > 0 else 0
-            output_tokens = max(1, out_chars // 4) if out_chars > 0 else 0
+            input_tokens = _estimate_tokens_from_chars(estimate_chars(req_data))
+            output_tokens = _estimate_tokens_from_chars(estimate_chars(resp_data))
 
         return TokenCounts(
             input_tokens,
@@ -676,8 +666,11 @@ class AnthropicProvider(ProviderFormat):
             reasoning_tokens=reasoning,
         )
 
-    def extract_cache_key_parts(self, payload: dict[str, Any], max_recent_turns: int = 2) -> tuple[str, str]:
-        """Extracts (user_content, system_prompt) for Anthropic requests."""
+    def extract_cache_key_parts(
+        self,
+        payload: dict[str, Any],
+        max_recent_turns: int = RECENT_UNTOUCHED_TURNS,
+    ) -> tuple[str, str]:
         if not isinstance(payload, dict):
             return str(payload) if payload else "", ""
         user_content = _extract_anthropic_user_content(payload.get("messages"), payload.get("prompt"), max_recent_turns)

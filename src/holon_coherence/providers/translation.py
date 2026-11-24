@@ -1,5 +1,3 @@
-"""Bidirectional translation between Gemini v1beta and OpenAI protocols."""
-
 from __future__ import annotations
 
 import copy
@@ -11,6 +9,12 @@ __all__ = [
     "translate_openai_sse_chunk_to_gemini",
     "translate_openai_to_gemini_response",
 ]
+
+DEFAULT_TRANSLATED_MODEL = "default"
+GEMINI_STOP_FINISH_REASON = "STOP"
+GEMINI_MAX_TOKENS_FINISH_REASON = "MAX_TOKENS"
+SSE_DONE_LINE = "data: [DONE]"
+SSE_DATA_PREFIX = "data:"
 
 
 def _translate_system_instruction(gemini_req: dict[str, Any]) -> dict[str, Any] | None:
@@ -185,7 +189,6 @@ def translate_gemini_to_openai_request(
     gemini_req: dict[str, Any],
     model: str | None = None,
 ) -> dict[str, Any]:
-    """Translates a Gemini v1beta generateContent/streamGenerateContent request to OpenAI format."""
     openai_messages: list[dict[str, Any]] = []
     pending_tool_call_ids: dict[str, list[str]] = {}
     tool_call_counts: dict[str, int] = {}
@@ -198,7 +201,7 @@ def translate_gemini_to_openai_request(
     if isinstance(contents, list):
         openai_messages.extend(_translate_contents(contents, pending_tool_call_ids, tool_call_counts))
 
-    resolved_model = model or gemini_req.get("model") or "default"
+    resolved_model = model or gemini_req.get("model") or DEFAULT_TRANSLATED_MODEL
     openai_req: dict[str, Any] = {"messages": openai_messages, "model": resolved_model}
 
     tools = gemini_req.get("tools")
@@ -248,8 +251,8 @@ def _translate_choice_parts(message: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _map_finish_reason(finish_reason: Any) -> str:
     if finish_reason == "length":
-        return "MAX_TOKENS"
-    return "STOP"
+        return GEMINI_MAX_TOKENS_FINISH_REASON
+    return GEMINI_STOP_FINISH_REASON
 
 
 def _translate_choices(choices: list[Any]) -> list[dict[str, Any]]:
@@ -282,12 +285,17 @@ def _translate_usage_to_gemini(usage: Any) -> dict[str, Any]:
 
 
 def translate_openai_to_gemini_response(openai_resp: dict[str, Any]) -> dict[str, Any]:
-    """Translates an OpenAI chat completion response to Gemini v1beta candidate structure."""
     choices = openai_resp.get("choices", [])
     if isinstance(choices, list) and choices:
         candidates = _translate_choices(choices)
     else:
-        candidates = [{"index": 0, "content": {"role": "model", "parts": [{"text": ""}]}, "finishReason": "STOP"}]
+        candidates = [
+            {
+                "index": 0,
+                "content": {"role": "model", "parts": [{"text": ""}]},
+                "finishReason": GEMINI_STOP_FINISH_REASON,
+            }
+        ]
 
     return {
         "candidates": candidates,
@@ -369,7 +377,9 @@ def _build_gemini_candidate_chunk(
     if parts:
         cand["content"] = {"role": "model", "parts": parts}
     if finish_reason:
-        cand["finishReason"] = "STOP" if finish_reason in ("stop", "tool_calls") else "MAX_TOKENS"
+        cand["finishReason"] = (
+            GEMINI_STOP_FINISH_REASON if finish_reason in ("stop", "tool_calls") else GEMINI_MAX_TOKENS_FINISH_REASON
+        )
     return cand
 
 
@@ -417,14 +427,13 @@ def translate_openai_sse_chunk_to_gemini(
     chunk_str: str,
     stream_state: dict[str, Any] | None = None,
 ) -> str:
-    """Translates OpenAI SSE streaming chunk(s) to Gemini v1beta candidate SSE chunks."""
     output_lines: list[str] = []
     for line in chunk_str.split("\n"):
         stripped = line.strip()
-        if not stripped or stripped == "data: [DONE]":
+        if not stripped or stripped == SSE_DONE_LINE:
             continue
-        if stripped.startswith("data:"):
-            payload_str = stripped[len("data:") :].strip()
+        if stripped.startswith(SSE_DATA_PREFIX):
+            payload_str = stripped[len(SSE_DATA_PREFIX) :].strip()
             if payload_str:
                 _process_single_sse_payload(payload_str, stream_state, output_lines)
 

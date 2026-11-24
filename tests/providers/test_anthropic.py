@@ -1,5 +1,3 @@
-"""Unit tests for AnthropicProvider."""
-
 from __future__ import annotations
 
 import json
@@ -178,7 +176,6 @@ def _assert_non_increasing_ttl_and_budget(payload: dict[str, Any]) -> None:
 
 
 def test_system_multi_block_cache_control_ttl_ordering() -> None:
-    """Replays the 3-block system.2.cache_control.ttl failure shape where 1h follows 5m."""
     cleaner = JSONContextCleaner(enable_deduplication=True, enable_prompt_caching=True)
     payload: dict[str, Any] = {
         "system": [
@@ -197,18 +194,16 @@ def test_system_multi_block_cache_control_ttl_ordering() -> None:
 
     _assert_non_increasing_ttl_and_budget(cleaned)
     assert cleaned["system"][2]["cache_control"] == {"type": "ephemeral"}
-    # Only messages[-2] was newly injected (system[0..2] were pre-existing)
-    assert result.cache_control_injected == 1
+    newly_injected_messages_breakpoint_count = 1
+    assert result.cache_control_injected == newly_injected_messages_breakpoint_count
 
-    # Also verify normalization runs when prompt caching injection is disabled
-    cleaner_no_inject = JSONContextCleaner(enable_deduplication=True, enable_prompt_caching=False)
-    cleaned_no_inject = cleaner_no_inject.process_payload(payload, provider="anthropic")
+    cleaner_with_injection_disabled = JSONContextCleaner(enable_deduplication=True, enable_prompt_caching=False)
+    cleaned_no_inject = cleaner_with_injection_disabled.process_payload(payload, provider="anthropic")
     _assert_non_increasing_ttl_and_budget(cleaned_no_inject)
     assert cleaned_no_inject["system"][2]["cache_control"] == {"type": "ephemeral"}
 
 
 def test_tools_and_system_ttl_ordering_prevents_5m_before_1h() -> None:
-    """Ensures injecting tools[-1] cache_control before a 1h system block preserves 1h >= 1h >= 5m ordering."""
     payload: dict[str, Any] = {
         "tools": [
             {"name": "read_file", "description": "Read a file"},
@@ -232,8 +227,7 @@ def test_tools_and_system_ttl_ordering_prevents_5m_before_1h() -> None:
     assert cleaned["messages"][-2]["content"][0]["cache_control"] == {"type": "ephemeral"}
     assert stats["cache_control_injected"] == 2
 
-    # When tools already carries a 5m breakpoint and system carries a conflicting 1h breakpoint
-    conflicting_payload: dict[str, Any] = {
+    payload_with_5m_tool_before_1h_system: dict[str, Any] = {
         "tools": [
             {"name": "read_file", "description": "Read", "cache_control": {"type": "ephemeral"}},
         ],
@@ -242,13 +236,12 @@ def test_tools_and_system_ttl_ordering_prevents_5m_before_1h() -> None:
         ],
         "messages": [{"role": "user", "content": "Ping"}],
     }
-    normalized = inject_anthropic_cache_control(conflicting_payload)
+    normalized = inject_anthropic_cache_control(payload_with_5m_tool_before_1h_system)
     _assert_non_increasing_ttl_and_budget(normalized)
     assert normalized["system"][0]["cache_control"] == {"type": "ephemeral"}
 
 
 def test_existing_valid_1h_then_5m_ttl_preserved_within_4_breakpoint_limit() -> None:
-    """Preserves valid 1h followed by 5m on system while injecting 1h on tools and 5m on messages."""
     payload: dict[str, Any] = {
         "tools": [{"name": "bash", "description": "Run command"}],
         "system": [
@@ -275,7 +268,6 @@ def test_existing_valid_1h_then_5m_ttl_preserved_within_4_breakpoint_limit() -> 
 
 
 def test_invalid_ttl_values_and_excess_breakpoints_sanitized() -> None:
-    """Strips malformed cache_control/ttl values and caps total breakpoints at 4."""
     payload: dict[str, Any] = {
         "tools": [
             {"name": "t1", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
