@@ -1,10 +1,14 @@
+import os
 import shutil
 import subprocess
+import sys
 import time
 import unittest
 import urllib.request
 
 import pytest
+
+from holon_coherence.cli import main
 
 
 def docker_available() -> bool:
@@ -14,6 +18,35 @@ def docker_available() -> bool:
     return res.returncode == 0
 
 
+def _remove_container_if_present(container_name: str) -> None:
+    subprocess.run(["docker", "rm", "-f", container_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _wait_for_http_proxy_forwarding(port: int, attempts: int = 20, delay_seconds: float = 0.5) -> bool:
+    for _ in range(attempts):
+        time.sleep(delay_seconds)
+        try:
+            proxy_handler = urllib.request.ProxyHandler({"http": f"http://127.0.0.1:{port}"})
+            opener = urllib.request.build_opener(proxy_handler)
+            req = urllib.request.Request("http://example.com", headers={"User-Agent": "coherence-test/1.0"})
+            with opener.open(req, timeout=3) as resp:
+                if resp.status == 200:
+                    return True
+        except Exception:
+            continue
+    return False
+
+
+def _is_container_running_exact(container_name: str) -> bool:
+    ps_res = subprocess.run(
+        ["docker", "ps", "-q", "--filter", f"name=^{container_name}$"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return len(ps_res.stdout.strip()) > 0
+
+
 @pytest.mark.integration_test
 class TestDockerIntegration(unittest.TestCase):
     def setUp(self):
@@ -21,7 +54,6 @@ class TestDockerIntegration(unittest.TestCase):
             self.skipTest("Docker is not installed or daemon is not running.")
 
     def test_docker_image_cli_help(self):
-        """Verify that running the Docker image directly executes holon-coherence --help."""
         cmd = ["docker", "run", "--rm", "holon-coherence:latest", "--help"]
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         self.assertEqual(res.returncode, 0)
@@ -29,14 +61,11 @@ class TestDockerIntegration(unittest.TestCase):
         self.assertIn("start", res.stdout)
 
     def test_docker_proxy_container_lifecycle_and_traffic(self):
-        """Verify container launches, binds proxy port, forwards HTTP traffic, and stops cleanly."""
         container_name = "test-coherence-integration"
         port = 18092
 
-        # Clean any preexisting container
-        subprocess.run(["docker", "rm", "-f", container_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        _remove_container_if_present(container_name)
 
-        # Run container
         cmd = [
             "docker",
             "run",
@@ -56,77 +85,43 @@ class TestDockerIntegration(unittest.TestCase):
         self.assertEqual(start_res.returncode, 0)
 
         try:
-            # Wait for proxy port to become ready (up to 10 seconds)
-            ready = False
-            for _ in range(20):
-                time.sleep(0.5)
-                try:
-                    proxy_handler = urllib.request.ProxyHandler({"http": f"http://127.0.0.1:{port}"})
-                    opener = urllib.request.build_opener(proxy_handler)
-                    req = urllib.request.Request("http://example.com", headers={"User-Agent": "coherence-test/1.0"})
-                    with opener.open(req, timeout=3) as resp:
-                        if resp.status == 200:
-                            ready = True
-                            break
-                except Exception:
-                    continue
-
+            ready = _wait_for_http_proxy_forwarding(port)
             self.assertTrue(ready, "Proxy container failed to service HTTP requests within 10 seconds.")
         finally:
-            subprocess.run(["docker", "rm", "-f", container_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            _remove_container_if_present(container_name)
 
     def test_cli_docker_wrapper_start_and_stop(self):
-        """Verify holon-coherence start -d and stop manage the container correctly."""
-        import os
-        import sys
-
-        from holon_coherence.cli import main
-
         sandbox_container = "test-holon-coherence-sandbox"
         orig_argv = sys.argv
         orig_container_env = os.environ.get("HOLON_CONTAINER_NAME")
         os.environ["HOLON_CONTAINER_NAME"] = sandbox_container
 
-        # Clean any preexisting sandbox container
-        subprocess.run(["docker", "rm", "-f", sandbox_container], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        _remove_container_if_present(sandbox_container)
 
         try:
-            # Test start -d on custom port 18095 using sandbox container
             sys.argv = ["holon-coherence", "start", "-d", "--port", "18095", "--name", sandbox_container]
             main()
 
-            # Verify sandbox container is running (exact match)
-            ps_res = subprocess.run(
-                ["docker", "ps", "-q", "--filter", f"name=^{sandbox_container}$"],
-                capture_output=True,
-                text=True,
-                check=True,
+            self.assertTrue(
+                _is_container_running_exact(sandbox_container),
+                "Sandbox container was not detected running.",
             )
-            self.assertTrue(len(ps_res.stdout.strip()) > 0, "Sandbox container was not detected running.")
 
-            # Stop sandbox container
             sys.argv = ["holon-coherence", "stop", "--name", sandbox_container]
             main()
 
             time.sleep(1)
-            ps_after = subprocess.run(
-                ["docker", "ps", "-q", "--filter", f"name=^{sandbox_container}$"],
-                capture_output=True,
-                text=True,
-                check=True,
+            self.assertFalse(
+                _is_container_running_exact(sandbox_container),
+                "Sandbox container should not be running after stop.",
             )
-            self.assertEqual(len(ps_after.stdout.strip()), 0, "Sandbox container should not be running after stop.")
         finally:
             sys.argv = orig_argv
             if orig_container_env is not None:
                 os.environ["HOLON_CONTAINER_NAME"] = orig_container_env
             else:
                 os.environ.pop("HOLON_CONTAINER_NAME", None)
-            subprocess.run(
-                ["docker", "rm", "-f", sandbox_container],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            _remove_container_if_present(sandbox_container)
 
 
 if __name__ == "__main__":
