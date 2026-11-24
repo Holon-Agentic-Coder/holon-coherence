@@ -1,5 +1,3 @@
-"""Unit tests for CumulativeMetrics tracking and aggregation."""
-
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -23,7 +21,6 @@ def test_cumulative_metrics_record_flow() -> None:
     metrics.record_request()
     assert metrics.total_requests == 2
 
-    # Cleaner record
     clean_mock = MagicMock()
     clean_mock.tool_outputs_omitted = 3
     clean_mock.chars_saved = 400
@@ -37,12 +34,10 @@ def test_cumulative_metrics_record_flow() -> None:
     assert metrics.turns_summarized == 1
     assert metrics.cache_control_injected == 2
 
-    # Cache hit
     metrics.record_cache_hit()
     assert metrics.cache_hits == 1
     assert metrics.total_turns == 1
 
-    # Response record
     metrics.record_response(
         input_tokens=1000,
         output_tokens=200,
@@ -55,9 +50,11 @@ def test_cumulative_metrics_record_flow() -> None:
     )
 
     data = metrics.to_dict()
+    expected_hit_rate_one_of_two = 0.5
+    expected_provider_kv_hit_rate = 0.4
     assert data["total_turns"] == 2
-    assert data["cache_hit_rate"] == 0.5  # 1 hit / 2 requests
-    assert data["provider_cache_hit_rate"] == 0.4  # 400 / 1000
+    assert data["cache_hit_rate"] == expected_hit_rate_one_of_two
+    assert data["provider_cache_hit_rate"] == expected_provider_kv_hit_rate
     assert data["avg_ttft_ms"] == 200.0
     assert data["avg_decode_throughput_tps"] == 50.0
     assert data["avg_prefill_throughput_tps"] == 5000.0

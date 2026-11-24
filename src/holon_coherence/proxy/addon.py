@@ -1,5 +1,3 @@
-"""Core interceptor and mitmproxy addon engine."""
-
 from __future__ import annotations
 
 import contextlib
@@ -55,16 +53,23 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 DEFAULT_PROXY_LISTEN_PORT = 8080
+DEFAULT_CACHE_DIR = "~/.holon/cache"
+WIRE_LOG_SHUTDOWN_TIMEOUT_SEC = 5.0
+MIN_VALID_TCP_PORT = 1
+MAX_VALID_TCP_PORT = 65535
+
+
+def _is_streaming_request(endpoint: str, request_json: dict[str, Any]) -> bool:
+    endpoint_lower = endpoint.lower()
+    return (
+        request_json.get("stream") is True or "streamgeneratecontent" in endpoint_lower or "alt=sse" in endpoint_lower
+    )
 
 
 class MITMProxyInterceptor:
-    """Interceptor for LLM requests that performs context cleaning,
-    deduplication, prompt cache optimization, and local response caching.
-    """
-
     def __init__(self, cache_dir: str | None = None, enable_caching: bool = True):
         self.cleaner = JSONContextCleaner()
-        self.cache_dir = cache_dir or os.getenv("CACHE_DIR", os.path.expanduser("~/.holon/cache"))
+        self.cache_dir = cache_dir or os.getenv("CACHE_DIR", os.path.expanduser(DEFAULT_CACHE_DIR))
         self.enable_caching = enable_caching
         self._cache_store: HybridCacheStore | None = None
 
@@ -75,9 +80,6 @@ class MITMProxyInterceptor:
         return self._cache_store
 
     def detect_provider(self, url_or_path: str, payload: dict[str, Any] | None = None) -> str:  # noqa: PLR0911
-        """Determines the provider protocol family (anthropic, openai, gemini)
-        based on target URL, path, or payload structure.
-        """
         url_lower = url_or_path.lower()
         parse_target = url_lower if "://" in url_lower else f"https://{url_lower}"
         parsed = urlparse(parse_target)
@@ -123,50 +125,29 @@ class MITMProxyInterceptor:
 
         return "unknown"
 
+    def _has_custom_intercept_request_override(self) -> bool:
+        custom_intercept = getattr(self, "intercept_request", None)
+        if custom_intercept is None:
+            return False
+        func = getattr(custom_intercept, "__func__", custom_intercept)
+        return func is not MITMProxyInterceptor.intercept_request
+
     def intercept_request_with_stats(
         self, endpoint: str, request_json: dict[str, Any]
     ) -> tuple[dict[str, Any], dict[str, Any] | None, CleaningResult | None]:
-        """Intercepts and optimizes an outgoing JSON API request payload, returning per-request stats cleanly.
-
-        Tuple Return Design:
-            1. First Element (cleaned_request_json): The cleaned request body (with deduplicated tool
-               outputs and cache control breakpoints).
-            2. Second Element (cached_response_or_none): The pre-cached LLM response payload served from the
-               local SQLite database (llm_cache.db), or None on a cache miss.
-            3. Third Element (cleaner_result_or_none): The CleaningResult dataclass capturing cleaner metrics,
-               or None if provider is unknown.
-
-        Args:
-            endpoint: The API endpoint URL or path.
-            request_json: Incoming JSON body from agent.
-
-        Returns:
-            tuple[dict[str, Any], dict[str, Any] | None, CleaningResult | None]:
-                (cleaned_request_json, cached_response_or_none, cleaner_result_or_none)
-        """
-        # Backward compatibility if intercept_request was overridden on class or monkeypatched on instance
-        custom_intercept = getattr(self, "intercept_request", None)
-        if custom_intercept is not None:
-            func = getattr(custom_intercept, "__func__", custom_intercept)
-            if func is not MITMProxyInterceptor.intercept_request:
-                cleaned_req, cached_resp = self.intercept_request(endpoint, request_json)
-                return cleaned_req, cached_resp, None
+        if self._has_custom_intercept_request_override():
+            cleaned_req, cached_resp = self.intercept_request(endpoint, request_json)
+            return cleaned_req, cached_resp, None
 
         provider = self.detect_provider(endpoint, request_json)
         if provider == "unknown":
             logger.warning("Unknown LLM provider for endpoint: %s. Bypassing payload cleaning.", endpoint)
             return request_json, None, None
 
-        # Step 1: Clean and optimize request payload
         clean_res = self.cleaner.process_payload_with_stats(request_json, provider=provider)
         cleaned_request = clean_res.payload
 
-        # Step 2: Check local cache if enabled (bypassed for streaming requests)
-        is_streaming = (
-            request_json.get("stream") is True
-            or "streamgeneratecontent" in endpoint.lower()
-            or "alt=sse" in endpoint.lower()
-        )
+        is_streaming = _is_streaming_request(endpoint, request_json)
         if self.enable_caching and not is_streaming:
             try:
                 cached_response = self.cache_store.get(cleaned_request, provider=provider)
@@ -181,7 +162,6 @@ class MITMProxyInterceptor:
     def intercept_request(
         self, endpoint: str, request_json: dict[str, Any]
     ) -> tuple[dict[str, Any], dict[str, Any] | None]:
-        """Intercepts and optimizes an outgoing JSON API request payload (backward-compatible 2-tuple)."""
         cleaned_request, cached_response, _ = self.intercept_request_with_stats(endpoint, request_json)
         return cleaned_request, cached_response
 
@@ -192,22 +172,10 @@ class MITMProxyInterceptor:
         response_json: dict[str, Any],
         status_code: int = 200,
     ) -> None:
-        """Records an LLM response into the local cache.
-
-        Args:
-            endpoint: The API endpoint URL or path.
-            request_json: Cleaned request JSON payload.
-            response_json: Received response JSON from provider API.
-            status_code: HTTP status code of the response.
-        """
         if not self.enable_caching:
             return
 
-        if (
-            request_json.get("stream") is True
-            or "streamgeneratecontent" in endpoint.lower()
-            or "alt=sse" in endpoint.lower()
-        ):
+        if _is_streaming_request(endpoint, request_json):
             return
 
         if status_code != 200:
@@ -226,10 +194,7 @@ class MITMProxyInterceptor:
                 logger.exception("Cache store put failed for endpoint %s.", endpoint)
 
 
-# mitmproxy addon entrypoint compatible function
 class MitmproxyAddon:
-    """Addon for mitmproxy command line tool."""
-
     def __init__(self, cache_dir: str | None = None, wire_log_dir: str | None = None):
         self.interceptor = MITMProxyInterceptor(cache_dir=cache_dir)
         self.wire_log_dir = wire_log_dir or os.getenv("WIRE_LOG_DIR", WIRE_LOG_DIR)
@@ -241,24 +206,15 @@ class MitmproxyAddon:
         self._warned_gateway = False
 
     def done(self) -> None:
-        """Called when mitmproxy is shutting down to flush in-flight logs."""
-        shutdown_wire_logs(wait=True, timeout=5.0)
+        shutdown_wire_logs(wait=True, timeout=WIRE_LOG_SHUTDOWN_TIMEOUT_SEC)
 
     def _proxy_own_ports(self) -> tuple[int, ...]:
-        """Ports the proxy itself listens on, which must never be rewritten onto the gateway.
-
-        Rewriting them would dial the proxy's own published mapping and loop. In container mode,
-        dialing the host gateway reaches the host, so only the host-published port
-        (HOLON_PROXY_PORT, defaulting to DEFAULT_PROXY_LISTEN_PORT) constitutes a self-loop hazard.
-        Internal container listen ports (e.g. 8080 inside the container) must not be treated as
-        host-published ports.
-        """
         ports: list[int] = []
         env_port = os.getenv("HOLON_PROXY_PORT")
         if env_port:
             with contextlib.suppress(ValueError):
                 parsed = int(env_port)
-                if 1 <= parsed <= 65535:
+                if MIN_VALID_TCP_PORT <= parsed <= MAX_VALID_TCP_PORT:
                     ports.append(parsed)
 
         if _get_in_container()():
@@ -274,11 +230,6 @@ class MitmproxyAddon:
         return tuple(dict.fromkeys(ports)) or (DEFAULT_PROXY_LISTEN_PORT,)
 
     def _resolve_gateway(self) -> str | None:
-        """Resolve the Docker host gateway and cache successful resolutions.
-
-        If resolution fails (e.g. transient container DNS hiccup), do not permanently
-        latch None so subsequent requests can retry.
-        """
         if self._gateway_ip is not None:
             return self._gateway_ip
         ip = _get_resolve_gateway_address()()
@@ -287,18 +238,6 @@ class MitmproxyAddon:
         return ip
 
     def server_connect(self, data: Any) -> None:
-        """Route host-local LLM endpoints through the Docker host gateway.
-
-        Inside the container ``localhost`` / ``127.0.0.1`` resolve to the container itself
-        and the host's LAN address is unroutable from the Docker Desktop VM, so a
-        request the agent addressed at its own machine (Ollama, vMLX, LM Studio, vLLM)
-        would die with 502 or a timeout. Only loopback and authorities explicitly declared
-        via ``HOLON_HOST_LOCAL_HOSTS`` are rewritten; anything else is left alone so a
-        genuinely remote peer on the LAN is never hijacked onto the host.
-
-        Rewriting the dial address leaves ``flow.request`` -- and therefore the wire logs
-        and token telemetry -- reporting the authority the agent actually asked for.
-        """
         if not _get_in_container()():
             return
         targets = targets_from_env()
@@ -338,7 +277,6 @@ class MitmproxyAddon:
             )
 
     def _dump_flow_transaction(self, flow: Any, resp_data: Any, status_code: int = 200, **fields: Any) -> None:
-        """Queue the scrubbed wire record for one transaction; ``fields`` are ``WireTransaction`` facts."""
         if not is_wire_logging_enabled():
             return
         try:
@@ -348,7 +286,6 @@ class MitmproxyAddon:
             logger.debug("Failed to record flow wire transaction: %s", exc)
 
     def request(self, flow: Any) -> None:
-        """Mitmproxy request callback: run the ordered request pipeline."""
         if getattr(flow, "request", None) is None:
             return
         ctx = RequestContext.from_flow(self, flow)
@@ -357,19 +294,17 @@ class MitmproxyAddon:
         run_guarded(REQUEST_GUARDED, ctx, REQUEST_POLICY)
 
     def responseheaders(self, flow: Any) -> None:
-        """Mitmproxy response headers callback: stamp timing and tap event streams."""
         if getattr(flow, "provider", "unknown") == "unknown":
             return
-        flow.response_headers_time = time.perf_counter()  # float: timestamp from time.perf_counter()
+        flow.response_headers_time = time.perf_counter()
         flow.first_chunk_time = None
         response = getattr(flow, "response", None)
         if response is not None and "text/event-stream" in response_content_type(response).lower():
             install_sse_tap(flow, response)
 
     def response(self, flow: Any) -> None:
-        """Mitmproxy response callback: run the ordered response pipeline."""
         ctx = ResponseContext.from_flow(self, flow)
-        if ctx is None:  # no request/response, unknown provider, or served from cache
+        if ctx is None:
             return
         if ctx.status_code == 200:
             run_guarded(RESPONSE_SUCCESS, ctx, SUCCESS_POLICY)

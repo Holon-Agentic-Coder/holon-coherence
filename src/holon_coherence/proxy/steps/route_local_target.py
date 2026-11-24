@@ -1,5 +1,3 @@
-"""Routing and protocol adaptation for host-local inference engines."""
-
 from __future__ import annotations
 
 import json
@@ -19,7 +17,6 @@ _SELF_HOSTS = ("127.0.0.1", "localhost", "127.0.0.1.nip.io", "localhost.nip.io")
 
 
 def route_local_target(ctx: RequestContext) -> Outcome:
-    """Reverse-proxy rewrite when the agent addresses the proxy's own port directly."""
     request = ctx.flow.request
     req_host = (getattr(request, "pretty_host", "") or getattr(request, "host", "")).lower()
     req_port = getattr(request, "port", None)
@@ -51,7 +48,6 @@ def _bridge_target_model(flow: Any, url: str) -> str | None:
 
 
 def _bridge_gemini(ctx: RequestContext) -> None:
-    """Gemini v1beta bridge to OpenAI /v1/chat/completions for host-local engines."""
     flow, url = ctx.flow, ctx.url
     flow.is_gemini_bridged = True
     target_model = _bridge_target_model(flow, url)
@@ -64,11 +60,9 @@ def _bridge_gemini(ctx: RequestContext) -> None:
 
 
 def adapt_local_protocol(ctx: RequestContext) -> Outcome:
-    """Translate or normalise request payloads bound for host-local engines."""
     if ctx.provider == "gemini" and ctx.is_local and ctx.data is not None:
         _bridge_gemini(ctx)
 
-    # Strict Anthropic normaliser for host-local engines
     if ctx.provider == "anthropic" and ctx.is_local and ctx.data is not None:
         ctx.data, _ = normalize_anthropic_request(ctx.flow, ctx.data, is_local=True)
         ctx.flow.request.set_text(json.dumps(ctx.data))

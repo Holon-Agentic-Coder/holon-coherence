@@ -1,10 +1,3 @@
-"""Builder for the ``transactions.jsonl`` wire record.
-
-The record is the system of record for A/B telemetry, so its schema, key order, rounding and
-scrubbing must not drift. Helpers compute the sections; ``build_wire_record`` assembles them in one
-place so the key order stays visible.
-"""
-
 from __future__ import annotations
 
 import json
@@ -24,8 +17,6 @@ __all__ = ["WireTransaction", "build_wire_record"]
 
 @dataclass(frozen=True)
 class WireTransaction:
-    """Per-transaction facts the hooks know but the flow does not carry."""
-
     is_hit: bool = False
     is_sse: bool = False
     ttft: float | None = None
@@ -120,7 +111,6 @@ def _mode(addon: Any, flow: Any) -> str:
 
 
 def build_wire_record(addon: Any, flow: Any, resp_data: Any, status_code: int, tx: WireTransaction) -> dict[str, Any]:
-    """Assemble the scrubbed wire record for one transaction."""
     url = getattr(flow.request, "pretty_url", "")
     flow_headers = getattr(flow.request, "headers", {})
     provider = getattr(flow, "provider", "unknown")

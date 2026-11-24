@@ -1,5 +1,3 @@
-"""Load the request/response payload pair a successful provider response is accounted against."""
-
 from __future__ import annotations
 
 import json
@@ -12,7 +10,6 @@ __all__ = ["load_request", "load_response", "require_payloads"]
 
 
 def load_request(ctx: ResponseContext) -> Outcome:
-    """The cleaned request recorded by the request hook, else the parsed wire body."""
     req_data = getattr(ctx.flow, "req_data", None)
     if req_data is None:
         req_text = ctx.flow.request.get_text()
@@ -33,7 +30,6 @@ def _translate_bridged(flow: Any, resp_data: dict[str, Any]) -> Any:
 
 
 def load_response(ctx: ResponseContext) -> Outcome:
-    """Joined SSE text for streams, else the JSON body (translated back to Gemini when bridged)."""
     flow = ctx.flow
     sse_chunks = getattr(flow, "sse_chunks", None)
     ctx.is_sse = sse_chunks is not None
@@ -49,7 +45,6 @@ def load_response(ctx: ResponseContext) -> Outcome:
 
 
 def require_payloads(ctx: ResponseContext) -> Outcome:
-    """Stop unless both a request payload and a non-empty response were loaded."""
     if ctx.req_data is not None and ctx.resp_data:
         return Outcome.CONTINUE
     return Outcome.HALT

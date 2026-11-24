@@ -1,10 +1,3 @@
-"""Pipeline primitives: per-flow contexts, step specs, error policies and the runner.
-
-A pipeline is an ordered tuple of ``StepSpec``. ``run_steps`` is the only place that branches on
-passive (baseline) monitoring, and ``run_guarded`` is the only place that applies a pipeline's error
-policy, so individual steps stay single-purpose and free of mode or error plumbing.
-"""
-
 from __future__ import annotations
 
 import json
@@ -29,8 +22,8 @@ __all__ = [
     "run_steps",
 ]
 
-# Steps log under the addon's logger name so operators and log-capturing tests see identical records.
-logger = logging.getLogger("holon_coherence.proxy.addon")
+ADDON_LOGGER_NAME = "holon_coherence.proxy.addon"
+logger = logging.getLogger(ADDON_LOGGER_NAME)
 
 
 class Outcome(Enum):
@@ -39,7 +32,6 @@ class Outcome(Enum):
 
 
 def hit_rate(addon: Any) -> float:
-    """Local cache hit rate of the addon, 0.0 before the first request."""
     return addon.cache_hits / addon.total_requests if addon.total_requests > 0 else 0.0
 
 
@@ -52,7 +44,6 @@ class _FlowContext:
 
     @property
     def passive(self) -> bool:
-        """Whether the flow runs in passive (baseline) mode, evaluated once on first access."""
         if self._passive is None:
             self._passive = is_flow_passive(self.flow, default_passive=getattr(self.addon, "default_passive", None))
         return self._passive
@@ -89,7 +80,6 @@ class ResponseContext(_FlowContext):
 
     @classmethod
     def from_flow(cls, addon: Any, flow: Any) -> ResponseContext | None:
-        """Context for a provider response that still needs processing, else ``None``."""
         if getattr(flow, "request", None) is None or getattr(flow, "response", None) is None:
             return None
         url = getattr(flow.request, "pretty_url", "")
@@ -105,8 +95,6 @@ StepMode = Literal["always", "active", "passive"]
 
 @dataclass(frozen=True)
 class StepSpec:
-    """One named pipeline step; ``mode`` restricts it to active or passive flows."""
-
     name: str
     fn: Callable[[Any], Outcome]
     mode: StepMode = "always"
@@ -114,13 +102,6 @@ class StepSpec:
 
 @dataclass(frozen=True)
 class ErrorPolicy:
-    """How ``run_guarded`` logs a failure.
-
-    ``json_message`` (formatted with url and exception) handles ``json.JSONDecodeError``; when it is
-    ``None`` the decode error is treated like any other exception. ``exception_message`` is formatted
-    with the url or the exception, per ``exception_arg``, and logged at ``exception_level``.
-    """
-
     json_message: str | None
     exception_message: str
     exception_level: Literal["exception", "debug"]
@@ -128,7 +109,6 @@ class ErrorPolicy:
 
 
 def run_steps(steps: Iterable[StepSpec], ctx: Any) -> Outcome:
-    """Run steps in order, skipping steps whose mode does not match the flow, until one halts."""
     for step in steps:
         if step.mode != "always" and ctx.passive != (step.mode == "passive"):
             continue
@@ -146,7 +126,6 @@ def _log_failure(policy: ErrorPolicy, ctx: Any, exc: Exception) -> None:
 
 
 def run_guarded(steps: Iterable[StepSpec], ctx: Any, policy: ErrorPolicy) -> None:
-    """Run steps under ``policy``: failures are logged and swallowed, never raised to mitmproxy."""
     try:
         run_steps(steps, ctx)
     except json.JSONDecodeError as exc:

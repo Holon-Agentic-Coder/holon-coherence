@@ -1,5 +1,3 @@
-"""Request payload snapshot, passive passthrough and active context cleaning."""
-
 from __future__ import annotations
 
 import copy
@@ -14,7 +12,6 @@ __all__ = ["clean_payload", "passthrough_payload", "snapshot_request"]
 
 
 def snapshot_request(ctx: RequestContext) -> Outcome:
-    """Keep a pristine copy of the request for wire logging; bodiless requests stop here."""
     if ctx.data is None:
         return Outcome.HALT
     ctx.flow.raw_request_data = copy.deepcopy(ctx.data)
@@ -22,7 +19,6 @@ def snapshot_request(ctx: RequestContext) -> Outcome:
 
 
 def passthrough_payload(ctx: RequestContext) -> Outcome:
-    """Passive mode: bypass cleaning and cache lookup, preserving raw payload for baseline logging."""
     ctx.flow.cleaner_result = None
     ctx.flow.req_data = ctx.data
     return Outcome.HALT
@@ -52,7 +48,6 @@ def _log_cleaner(clean_res: Any) -> None:
 
 
 def clean_payload(ctx: RequestContext) -> Outcome:
-    """Active mode: clean the payload, rewrite the request body and record cleaner metrics."""
     flow = ctx.flow
     cleaned_data, cached_resp, clean_res = _intercept(ctx.addon.interceptor, ctx.url, ctx.data)
 

@@ -1,10 +1,3 @@
-"""Late-bound test seams shared by the addon and its pipeline steps.
-
-Tests monkeypatch symbols on the ``holon_coherence.mitm_addon`` facade, so every lookup here resolves
-through that module at call time and only falls back to the real implementation when the facade has
-not been imported.
-"""
-
 from __future__ import annotations
 
 import sys
@@ -69,7 +62,6 @@ def _get_is_local_target() -> Any:
 
 
 def resolve_response_cls(flow: Any) -> Any:
-    """Response class used for cache hits: live mitmproxy first, then the flow's, then the addon module's."""
     addon_mod = sys.modules.get(_ADDON_MODULE)
     addon_globals = vars(addon_mod) if addon_mod is not None else {}
     return getattr(http, "Response", None) or getattr(flow, "Response", None) or addon_globals.get("Response")
