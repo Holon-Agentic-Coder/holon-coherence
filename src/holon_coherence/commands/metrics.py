@@ -1,5 +1,3 @@
-"""Terminal metrics display and CLI dispatcher for holon-coherence."""
-
 from __future__ import annotations
 
 import argparse
@@ -30,7 +28,12 @@ from holon_coherence.metrics_math import (
     DEFAULT_WIRE_LOG_DIR,
 )
 
+METRICS_TABLE_WIDTH = 64
+LIVE_METRICS_TIMEOUT_SECONDS = 1.5
+
 __all__ = [
+    "LIVE_METRICS_TIMEOUT_SECONDS",
+    "METRICS_TABLE_WIDTH",
     "OfflineMetricsAccumulator",
     "_read_offline_metrics",
     "handle",
@@ -41,12 +44,10 @@ __all__ = [
 
 
 def _read_offline_metrics(wire_log_dir: str) -> dict[str, Any] | None:
-    """Calculates cumulative metrics from persisted transactions.jsonl when proxy is offline."""
     return read_offline_metrics(wire_log_dir)
 
 
 def _resolve_target_port(args: Any, port: int | None, container: str) -> int:
-    """Resolve target proxy port from args, explicit argument, env, or container mapping."""
     target_port = getattr(args, "port", None) if args is not None else None
     if target_port is not None:
         return target_port
@@ -63,11 +64,10 @@ def _resolve_target_port(args: Any, port: int | None, container: str) -> int:
 
 
 def _query_live_proxy_metrics(port: int) -> dict[str, Any] | None:
-    """Query live proxy endpoint for current metrics."""
     endpoint_url = f"http://127.0.0.1:{port}/holon/api/metrics"
     try:
         req = urllib.request.Request(endpoint_url, headers={"User-Agent": "holon-coherence-cli"})
-        with urllib.request.urlopen(req, timeout=1.5) as resp:
+        with urllib.request.urlopen(req, timeout=LIVE_METRICS_TIMEOUT_SECONDS) as resp:
             if resp.status == 200:
                 body = resp.read().decode("utf-8")
                 data = json.loads(body)
@@ -79,7 +79,6 @@ def _query_live_proxy_metrics(port: int) -> dict[str, Any] | None:
 
 
 def _find_and_read_offline_metrics() -> dict[str, Any] | None:
-    """Locate and aggregate offline wire logs across candidate directories."""
     candidate_dirs: list[str] = []
     env_wire_log = os.getenv("WIRE_LOG_DIR")
     if env_wire_log:
@@ -96,21 +95,19 @@ def _find_and_read_offline_metrics() -> dict[str, Any] | None:
 
 
 def _render_unreachable_proxy_notice(port: int, endpoint_url: str) -> None:
-    """Print error banner when live proxy is unreachable and offline mode is disallowed."""
-    print("================================================================")
+    print("=" * METRICS_TABLE_WIDTH)
     print("           HOLON COHERENCE OPTIMIZATION METRICS")
     print(f"  🔴 PROXY STATUS: DOWN / UNREACHABLE (Port: {port})")
-    print("================================================================")
+    print("=" * METRICS_TABLE_WIDTH)
     print(f"  ⚠️  Could not connect to live proxy at {endpoint_url}")
     print("  The holon-coherence proxy container is not running.")
     print("  Start it with 'holon-coherence start' or run an agent.")
     print("  (To view historical metrics from wire logs, pass --offline)")
     print("  mitmweb inspector: not running")
-    print("================================================================")
+    print("=" * METRICS_TABLE_WIDTH)
 
 
 def _render_missing_metrics_notice(is_json: bool, port: int, endpoint_url: str) -> None:
-    """Print notice when neither live proxy nor offline logs are available."""
     if is_json:
         print(json.dumps({"error": "Proxy not reachable and no offline wire logs found", "port": port}))
     else:
@@ -126,7 +123,6 @@ def _render_missing_metrics_notice(is_json: bool, port: int, endpoint_url: str) 
 
 
 def _render_overview_rows(metrics: dict[str, Any]) -> None:
-    """Render terminal table rows for optimization overview and throughput."""
     hit_rate_pct = metrics.get("cache_hit_rate", 0.0) * 100.0
     tool_calls_pruned = metrics.get("tool_calls_pruned", 0)
     tokens_reduced = metrics.get("tokens_reduced", 0)
@@ -156,7 +152,6 @@ def _render_overview_rows(metrics: dict[str, Any]) -> None:
 
 
 def _render_accounting_rows(metrics: dict[str, Any]) -> None:
-    """Render terminal table rows for request and token accounting."""
     total_turns = metrics.get("total_turns", 0)
     total_requests = metrics.get("total_requests", 0)
     cache_hits = metrics.get("cache_hits", 0)
@@ -190,24 +185,23 @@ def _render_metrics_terminal(
     container: str,
     resolve_fn: Callable[..., ExposedEndpoints] | None,
 ) -> None:
-    """Render full terminal layout with optimization, accounting, and endpoint blocks."""
     source_label = "Live Proxy (In-Memory)" if is_live else "Offline (Wire Log File)"
     resolve_endpoints = resolve_fn or resolve_container_endpoints
     endpoints = resolve_endpoints(container, fallback_proxy_port=port)
     if is_live:
         endpoints = ExposedEndpoints(proxy_port=port, web_port=endpoints.web_port, web_token=endpoints.web_token)
 
-    print("=" * 64)
+    print("=" * METRICS_TABLE_WIDTH)
     print("              HOLON COHERENCE OPTIMIZATION METRICS")
     print(f"  Source: {source_label}  |  Port: {port}")
-    print("=" * 64)
+    print("=" * METRICS_TABLE_WIDTH)
     _render_overview_rows(metrics)
-    print("-" * 64)
+    print("-" * METRICS_TABLE_WIDTH)
     _render_accounting_rows(metrics)
-    print("-" * 64)
+    print("-" * METRICS_TABLE_WIDTH)
     for row in format_endpoint_rows(endpoints, container_name=container):
         print(row)
-    print("=" * 64)
+    print("=" * METRICS_TABLE_WIDTH)
 
 
 def handle_metrics(
@@ -218,7 +212,6 @@ def handle_metrics(
     *,
     resolve_endpoints_fn: Callable[..., ExposedEndpoints] | None = None,
 ) -> int:
-    """Fetch and display cumulative optimization metrics via terminal or JSON."""
     container = (getattr(args, "name", None) if args is not None else None) or get_container_name()
     target_port = _resolve_target_port(args, port, container)
     is_json = json_output or (getattr(args, "json", False) if args is not None else False)
@@ -250,12 +243,10 @@ def handle_metrics(
 
 
 def handle(args: Any) -> int:
-    """Handle metrics command."""
     return handle_metrics(args)
 
 
 def register(subparsers: Any) -> argparse.ArgumentParser:
-    """Register metrics subparser."""
     metrics_parser = subparsers.add_parser("metrics", help="Display cumulative optimization metrics")
     metrics_parser.add_argument(
         "--port",

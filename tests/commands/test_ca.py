@@ -1,5 +1,3 @@
-"""Unit tests for CA certificate initialization, discovery, and merged bundle management."""
-
 from __future__ import annotations
 
 import argparse
@@ -18,8 +16,6 @@ from holon_coherence.commands.ca import (
 
 
 class TestFindSystemCABundle:
-    """Tests for locating host system or certifi CA certificate bundle."""
-
     def test_find_system_ca_bundle_env_vars(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         cert_file = tmp_path / "custom-cert.pem"
         cert_file.write_text("custom")
@@ -70,8 +66,6 @@ class TestFindSystemCABundle:
 
 
 class TestGetOrCreateMergedCABundle:
-    """Tests for creating and caching merged root CA bundles."""
-
     def test_merged_ca_bundle_generation(self, tmp_path: Path) -> None:
         holon_ca = tmp_path / "mitmproxy-ca-cert.pem"
         holon_ca.write_text("-----BEGIN CERTIFICATE-----\nHOLON_ROOT_CA\n-----END CERTIFICATE-----")
@@ -125,7 +119,6 @@ class TestGetOrCreateMergedCABundle:
             assert result == str(merged_path)
             assert merged_path.read_text() == "CACHED_CONTENT"
 
-        # When source ca_cert is newer than merged bundle, it should regenerate
         os.utime(holon_ca, (t0 + 200, t0 + 200))
         with patch("holon_coherence.commands.ca.find_system_ca_bundle", return_value=str(sys_ca)):
             result = get_or_create_merged_ca_bundle(str(holon_ca))
@@ -152,8 +145,6 @@ class TestGetOrCreateMergedCABundle:
 
 
 class TestCACommandRegistrationAndDispatch:
-    """Tests for init-ca subparser registration and command handling."""
-
     def test_register_and_defaults(self) -> None:
         parser = argparse.ArgumentParser()
         subparsers = parser.add_subparsers(dest="command")

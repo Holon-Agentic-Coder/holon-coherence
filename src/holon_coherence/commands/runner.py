@@ -1,5 +1,3 @@
-"""Runner command and subprocess execution environment forwarding."""
-
 from __future__ import annotations
 
 import argparse
@@ -18,7 +16,6 @@ NO_PROXY_HOSTS = "localhost,127.0.0.1,::1,169.254.169.254,api.github.com,github.
 
 
 def merge_no_proxy_values(env: dict[str, str] | None = None) -> str:
-    """Combine the built-in ``NO_PROXY`` defaults with whatever the caller's environment sets."""
     environ = os.environ if env is None else env
     entries = [entry.strip() for entry in NO_PROXY_HOSTS.split(",") if entry.strip()]
     for var in ("NO_PROXY", "no_proxy"):
@@ -26,6 +23,26 @@ def merge_no_proxy_values(env: dict[str, str] | None = None) -> str:
         if value:
             entries.extend(entry.strip() for entry in value.split(",") if entry.strip())
     return ",".join(dict.fromkeys(entries))
+
+
+def _resolve_ca_certificate_path(ca_cert_path: str | None) -> str:
+    if ca_cert_path is None:
+        env_ca = os.environ.get("HOLON_CA_CERT")
+        if env_ca and os.path.exists(os.path.expanduser(env_ca)):
+            return os.path.expanduser(env_ca)
+        ca_cert = os.path.expanduser("~/.holon/proxy-ca/mitmproxy-ca-cert.pem")
+        if not os.path.exists(ca_cert):
+            alt_ca = os.path.expanduser("~/.holon/certs/holon-root-ca.crt")
+            if os.path.exists(alt_ca):
+                return alt_ca
+        return ca_cert
+
+    ca_cert = os.path.expanduser(ca_cert_path)
+    if not os.path.exists(ca_cert):
+        alt_ca = os.path.join(os.path.dirname(ca_cert), "holon-root-ca.crt")
+        if os.path.exists(alt_ca):
+            return alt_ca
+    return ca_cert
 
 
 def build_proxy_env(
@@ -36,11 +53,6 @@ def build_proxy_env(
     merge_no_proxy_fn: Callable[[dict[str, str] | None], str] | None = None,
     bundle_getter_fn: Callable[[str], str] | None = None,
 ) -> dict[str, str]:
-    """Construct environment variables for proxy routing and CA bundle trust.
-
-    ``drop_no_proxy`` removes entries that would keep a declared host-local LLM endpoint
-    away from the proxy (see ``plan_no_proxy_pruning``).
-    """
     merge_no_proxy = merge_no_proxy_fn or merge_no_proxy_values
     bundle_getter = bundle_getter_fn or get_or_create_merged_ca_bundle
     env: dict[str, str] = {
@@ -61,24 +73,7 @@ def build_proxy_env(
     env["COHERENCE_TOKEN_REDUCTION"] = os.environ.get("COHERENCE_TOKEN_REDUCTION", "1")
     env["HOLON_PASSIVE_MONITORING"] = os.environ.get("HOLON_PASSIVE_MONITORING", "0")
 
-    # Certificate bundle resolution
-    if ca_cert_path is None:
-        env_ca = os.environ.get("HOLON_CA_CERT")
-        if env_ca and os.path.exists(os.path.expanduser(env_ca)):
-            ca_cert = os.path.expanduser(env_ca)
-        else:
-            ca_cert = os.path.expanduser("~/.holon/proxy-ca/mitmproxy-ca-cert.pem")
-            if not os.path.exists(ca_cert):
-                alt_ca = os.path.expanduser("~/.holon/certs/holon-root-ca.crt")
-                if os.path.exists(alt_ca):
-                    ca_cert = alt_ca
-    else:
-        ca_cert = os.path.expanduser(ca_cert_path)
-        if not os.path.exists(ca_cert):
-            alt_ca = os.path.join(os.path.dirname(ca_cert), "holon-root-ca.crt")
-            if os.path.exists(alt_ca):
-                ca_cert = alt_ca
-
+    ca_cert = _resolve_ca_certificate_path(ca_cert_path)
     if os.path.exists(ca_cert):
         merged_bundle = bundle_getter(ca_cert)
         for var in CA_ENV_VARS:
@@ -96,8 +91,6 @@ def build_proxy_env(
 
 
 def execute_interactive_process(cmd: list[str], env: dict[str, str]) -> int:  # noqa: C901
-    """Execute child process with interactive stdio passthrough, signal forwarding, and exit code propagation."""
-
     def _real_fd(stream: Any, default: int) -> Any:
         try:
             return stream if (stream and stream.fileno() >= 0) else default
@@ -156,7 +149,6 @@ def handle_run(
     env_builder_fn: Callable[..., dict[str, str]] | None = None,
     exec_proc_fn: Callable[[list[str], dict[str, str]], int] | None = None,
 ) -> int:
-    """Run a command with inline proxy properties."""
     env_builder = env_builder_fn or build_proxy_env
     exec_proc = exec_proc_fn or execute_interactive_process
     if not args.cmd:
@@ -176,12 +168,10 @@ def handle_run(
 
 
 def handle(args: Any) -> int:
-    """Handle run command."""
     return handle_run(args)
 
 
 def register(subparsers: Any) -> argparse.ArgumentParser:
-    """Register the run subparser."""
     run_parser = subparsers.add_parser(
         "run",
         help="Run a command with inline proxy properties (avoids terminal session contamination)",

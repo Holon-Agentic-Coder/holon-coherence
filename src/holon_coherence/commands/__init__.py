@@ -1,5 +1,3 @@
-"""CLI command implementations and dispatchers for Holon Coherence."""
-
 from holon_coherence.commands.ab_test import (
     ABComparisonScorecard,
     ABRunConfig,

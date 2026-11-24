@@ -1,5 +1,3 @@
-"""CA certificate management and initialization commands."""
-
 from __future__ import annotations
 
 import argparse
@@ -19,25 +17,25 @@ CA_ENV_VARS = (
     "GIT_SSL_CAINFO",
 )
 
+MERGED_CA_BUNDLE_FILENAME = "holon-merged-ca-bundle.crt"
+HOLON_CA_FILENAMES = (MERGED_CA_BUNDLE_FILENAME, "mitmproxy-ca-cert.pem", "holon-root-ca.crt")
+SYSTEM_CA_BUNDLE_CANDIDATE_PATHS = (
+    "/etc/ssl/cert.pem",
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/ssl/ca-bundle.pem",
+)
+
 
 def find_system_ca_bundle() -> str | None:
-    """Locate host system or certifi CA certificate bundle."""
     for env_var in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"):
         val = os.environ.get(env_var)
-        if (
-            val
-            and not val.endswith(("holon-merged-ca-bundle.crt", "mitmproxy-ca-cert.pem", "holon-root-ca.crt"))
-            and os.path.isfile(val)
-        ):
+        if val and not val.endswith(HOLON_CA_FILENAMES) and os.path.isfile(val):
             return os.path.abspath(val)
 
     try:
         cafile = ssl.get_default_verify_paths().cafile
-        if (
-            cafile
-            and not cafile.endswith(("holon-merged-ca-bundle.crt", "mitmproxy-ca-cert.pem", "holon-root-ca.crt"))
-            and os.path.isfile(cafile)
-        ):
+        if cafile and not cafile.endswith(HOLON_CA_FILENAMES) and os.path.isfile(cafile):
             return cafile
     except Exception:
         pass
@@ -51,20 +49,13 @@ def find_system_ca_bundle() -> str | None:
     except ImportError:
         pass
 
-    common_paths = [
-        "/etc/ssl/cert.pem",  # macOS / FreeBSD
-        "/etc/ssl/certs/ca-certificates.crt",  # Debian / Ubuntu
-        "/etc/pki/tls/certs/ca-bundle.crt",  # Fedora / RHEL
-        "/etc/ssl/ca-bundle.pem",  # OpenSUSE
-    ]
-    for path in common_paths:
+    for path in SYSTEM_CA_BUNDLE_CANDIDATE_PATHS:
         if os.path.isfile(path):
             return path
     return None
 
 
 def _merged_bundle_is_fresh(merged_path: str, ca_cert_path: str, system_ca: str | None) -> bool:
-    """True when the merged bundle on disk is at least as new as its source certificates."""
     if not os.path.isfile(merged_path):
         return False
     try:
@@ -78,7 +69,6 @@ def _merged_bundle_is_fresh(merged_path: str, ca_cert_path: str, system_ca: str 
 
 
 def _read_cert_text(path: str) -> str:
-    """Read a certificate file's text, returning an empty string when unreadable."""
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             return f.read().strip()
@@ -87,7 +77,6 @@ def _read_cert_text(path: str) -> str:
 
 
 def _compose_merged_content(holon_cert: str, system_certs: str) -> str:
-    """Combine the system CA roots and the Holon CA, deduplicating an already-included Holon cert."""
     if not system_certs:
         return f"{holon_cert}\n"
     if holon_cert in system_certs:
@@ -99,15 +88,10 @@ def get_or_create_merged_ca_bundle(
     ca_cert_path: str,
     find_bundle_fn: Callable[[], str | None] | None = None,
 ) -> str:
-    """Create or return a merged CA certificate bundle combining system/certifi CA roots and the Holon CA.
-
-    This ensures direct connections via NO_PROXY succeed without TLS failures while still trusting
-    the Holon proxy for intercepted endpoints.
-    """
     find_bundle = find_bundle_fn or find_system_ca_bundle
     ca_cert_path = os.path.abspath(ca_cert_path)
     target_dir = os.path.dirname(ca_cert_path)
-    merged_path = os.path.join(target_dir, "holon-merged-ca-bundle.crt")
+    merged_path = os.path.join(target_dir, MERGED_CA_BUNDLE_FILENAME)
 
     if not os.path.isfile(ca_cert_path):
         return ca_cert_path
@@ -139,19 +123,16 @@ def get_or_create_merged_ca_bundle(
 
 
 def handle_init_ca(args: Any) -> int:
-    """Bootstrap self-signed Root CA certificates."""
     ca_cert, ca_key = generate_root_ca(output_dir=args.output_dir)
     print(f"✅ Root CA generated successfully:\n  Certificate: {ca_cert}\n  Key: {ca_key}")
     return 0
 
 
 def handle(args: Any) -> int:
-    """Handle init-ca command."""
     return handle_init_ca(args)
 
 
 def register(subparsers: Any) -> argparse.ArgumentParser:
-    """Register the init-ca subparser."""
     ca_parser = subparsers.add_parser("init-ca", help="Bootstrap self-signed Root CA certificates")
     ca_parser.add_argument("--output-dir", default=os.path.expanduser("~/.holon/proxy-ca"), help="Target CA directory")
     ca_parser.set_defaults(handler=handle)

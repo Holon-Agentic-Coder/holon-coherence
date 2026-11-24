@@ -1,11 +1,3 @@
-"""Proxy server startup orchestration across host and Docker container.
-
-Container launch, CA material, readiness polling and teardown live in
-:mod:`holon_coherence.container.lifecycle`; this module translates ``start`` CLI arguments into a
-:class:`~holon_coherence.container.lifecycle.ProxyLifecycle` and keeps the route-planning helpers the
-agent runners share.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -51,11 +43,14 @@ from holon_coherence.host_local import (
     plan_no_proxy_pruning,
 )
 
+TRUTHY_WEB_ENV_VALUES = ("1", "true", "yes", "on")
+
 __all__ = [
     "DEFAULT_PROXY_PORT",
     "DEFAULT_WEB_PORT",
     "PROXY_POLL_INTERVAL_SECONDS",
     "PROXY_READY_TIMEOUT_SECONDS",
+    "TRUTHY_WEB_ENV_VALUES",
     "WEB_INSPECTOR_ENV_VAR",
     "_CONTAINER_GATEWAY_PROBE",
     "LocalLlmRoute",
@@ -81,8 +76,6 @@ __all__ = [
 _CONTAINER_GATEWAY_PROBE = (
     "import socket,sys\n"
     "try:\n"
-    # SECURITY: GATEWAY_HOSTNAME is a module constant (never user input); !r escaping is safe here.
-    # If GATEWAY_HOSTNAME ever becomes configurable, replace this with env/argv to prevent injection.
     f"    infos = socket.getaddrinfo({GATEWAY_HOSTNAME!r}, None, type=socket.SOCK_STREAM)\n"
     "except OSError:\n"
     "    infos = []\n"
@@ -118,8 +111,6 @@ _CONTAINER_GATEWAY_PROBE = (
 
 
 class LocalLlmRoute(NamedTuple):
-    """A validated ``--local-llm-base`` declaration, ready to be applied to a session."""
-
     target: LocalTarget
     targets: tuple[LocalTarget, ...]
     container_env_value: str
@@ -128,7 +119,6 @@ class LocalLlmRoute(NamedTuple):
 
     @property
     def prunes_no_proxy(self) -> tuple[str, ...]:
-        """``NO_PROXY`` entries that must go for the proxy to see this endpoint."""
         return self.no_proxy_plan.remove
 
 
@@ -136,24 +126,6 @@ WEB_INSPECTOR_ENV_VAR = "HOLON_COHERENCE_WEB"
 
 
 def is_web_inspector_enabled(args: Any, in_container: bool) -> bool:
-    """Decide whether ``start`` launches the mitmweb inspector.
-
-    The inspector is opt-in: mitmweb keeps every captured flow (request and response bodies
-    included) in memory for the life of the process and mitmproxy offers no option to cap that, so
-    a long-running ``start -d`` proxy would grow without bound if it ran by default.
-
-    An explicit ``--web`` / ``--no-web`` always wins. Without either, a host start enables the
-    inspector only when ``HOLON_COHERENCE_WEB`` is truthy (``1``/``true``/``yes``/``on``), so it can
-    be switched on once in a shell profile. The in-container entrypoint ignores that variable and
-    stays headless (mitmdump only) unless ``--web`` is passed: the Dockerfile ``CMD`` and the
-    background ``run`` / ``run-agent`` containers publish no inspector port. The host ``start``
-    always passes ``--web`` explicitly when it wants the inspector.
-
-    An explicit ``--web-password`` without ``--web`` / ``--no-web`` implies the inspector, since a
-    password only protects mitmweb and silently dropping it would surprise the operator. With
-    ``--no-web`` the flag still wins and a warning (never the password itself) is printed to stderr.
-    The ``HOLON_COHERENCE_WEB_PASSWORD`` variable implies nothing: a shell profile may export it.
-    """
     flag = getattr(args, "web", None)
     password_given = getattr(args, "web_password", None) is not None
     if flag is not None:
@@ -167,11 +139,10 @@ def is_web_inspector_enabled(args: Any, in_container: bool) -> bool:
         return True
     if in_container:
         return False
-    return os.getenv(WEB_INSPECTOR_ENV_VAR, "").lower().strip() in ("1", "true", "yes", "on")
+    return os.getenv(WEB_INSPECTOR_ENV_VAR, "").lower().strip() in TRUTHY_WEB_ENV_VALUES
 
 
 def probe_host_local_reachable(port: int, timeout: float = 15.0, container_name: str | None = None) -> tuple[bool, str]:
-    """Check from inside the container that the Docker host gateway answers on ``port``."""
     name = container_name or get_container_name()
     for interpreter in ("python3", "python"):
         try:
@@ -204,7 +175,6 @@ def plan_local_llm_route(
     merge_no_proxy_fn: Callable[[dict[str, str] | None], str] | None = None,
     detect_addrs_fn: Callable[[], tuple[str, ...]] | None = None,
 ) -> LocalLlmRoute | None:
-    """Turn a ``--local-llm-base`` value into the route a runner session applies."""
     merge_no_proxy = merge_no_proxy_fn or merge_no_proxy_values
     detect_addrs = detect_addrs_fn or detect_host_addresses
     target = parse_local_target(raw_base)
@@ -222,7 +192,6 @@ def plan_local_llm_route(
 
 
 def report_local_llm_route(route: LocalLlmRoute, reachable: bool, detail: str) -> tuple[str, ...]:
-    """Print what interception means for this session and return entries to drop from ``NO_PROXY``."""
     plan = route.no_proxy_plan
     print(
         f"🔌 Local LLM endpoint {route.target.canonical}: proxy-side allow list "
@@ -276,11 +245,6 @@ def report_local_llm_route(route: LocalLlmRoute, reachable: bool, detail: str) -
 def wait_for_proxy_ready(
     port: int, timeout: float = PROXY_READY_TIMEOUT_SECONDS, container_name: str | None = None
 ) -> bool:
-    """Poll the proxy HTTP metrics endpoint until it returns HTTP 200 or timeout occurs.
-
-    Delegates to :meth:`ProxyLifecycle.wait_until_ready`; ``timeout`` is a duration on the
-    monotonic clock.
-    """
     config = ProxyLifecycleConfig(port=port, container_name=container_name)
     return ProxyLifecycle(config).wait_until_ready(timeout_seconds=timeout)
 
@@ -291,10 +255,6 @@ def ensure_proxy_running(
     host_local_spec: str = "",
     container_name: str | None = None,
 ) -> bool:
-    """Ensure the holon-coherence optimization proxy is running in the background and healthy.
-
-    Returns True only when a new container was launched (so an ``--ephemeral`` runner owns it).
-    """
     config = ProxyLifecycleConfig(
         port=port,
         image=image,
@@ -306,7 +266,6 @@ def ensure_proxy_running(
 
 
 def _resolve_start_local_llm(args: Any, initial_spec: str) -> tuple[str, LocalLlmRoute | None]:
-    """Validate ``--local-llm-base`` and merge its targets into the host-local allow list."""
     raw_base = getattr(args, "local_llm_base", None)
     if not raw_base:
         return initial_spec, None
@@ -329,7 +288,6 @@ def _resolve_start_local_llm(args: Any, initial_spec: str) -> tuple[str, LocalLl
 
 
 def _in_container_inspector_banner(web_port: int) -> str:
-    """Inspector notice for ``docker logs``: never the token itself, only how to recover it."""
     return (
         f"🌐 mitmweb inspector listening on container port {web_port} (token hidden; run "
         "'holon-coherence web-token --name <container>' on the host for the full URL, or recover the "
@@ -338,7 +296,6 @@ def _in_container_inspector_banner(web_port: int) -> str:
 
 
 def _serve_in_container(args: Any, host_local_spec: str) -> None:
-    """Run mitmproxy in the foreground inside the proxy container."""
     web_port: int | None = None
     web_password: str | None = None
     if is_web_inspector_enabled(args, in_container=True):
@@ -348,14 +305,11 @@ def _serve_in_container(args: Any, host_local_spec: str) -> None:
     config = ProxyLifecycleConfig(
         port=args.port, web_port=web_port, web_password=web_password, host_local_spec=host_local_spec
     )
-    # This stdout is kept by `docker logs`, so the token is never printed here; the host-side
-    # `start`, `status` and `web-token` commands show the full URL on the user's terminal.
     banner = _in_container_inspector_banner(web_port) if web_port is not None else None
     ProxyLifecycle(config).serve_in_container(banner=banner)
 
 
 def _resolve_start_proxy_port(requested_port: int) -> int:
-    """Publish the proxy on ``requested_port`` or, when it is taken, on the next free host port."""
     if not is_port_in_use(requested_port):
         return requested_port
     actual_port = find_available_port(requested_port + 1)
@@ -364,7 +318,6 @@ def _resolve_start_proxy_port(requested_port: int) -> int:
 
 
 def _resolve_start_web_port(requested_port: int, reserved_ports: set[int]) -> int:
-    """Pick the inspector host port, never one the proxy or a host-local model server already owns."""
     actual_port = requested_port
     if actual_port in reserved_ports or is_port_in_use(actual_port):
         actual_port = find_available_port(actual_port + 1)
@@ -380,7 +333,6 @@ def _resolve_start_web_port(requested_port: int, reserved_ports: set[int]) -> in
 def _resolve_start_web_inspector(
     args: Any, proxy_port: int, route: LocalLlmRoute | None
 ) -> tuple[int | None, str | None]:
-    """Resolve the mitmweb inspector host port and token (``(None, None)`` when headless)."""
     if not is_web_inspector_enabled(args, in_container=False):
         return None, None
     web_password = resolve_web_password(getattr(args, "web_password", None))
@@ -392,16 +344,13 @@ def _resolve_start_web_inspector(
 
 
 def _dispatch_proxy_lifecycle(lifecycle: ProxyLifecycle) -> None:
-    """Announce the published endpoints on the host terminal and launch the container."""
     config = lifecycle.config
     print(f"🐳 Starting holon-coherence proxy via Docker container on port {config.port}...")
-    # Host terminal only: this process is not captured by `docker logs` or the wire logs.
     print_endpoints(ExposedEndpoints(proxy_port=config.port, web_port=config.web_port, web_token=config.web_password))
     lifecycle.launch()
 
 
 def _start_on_host(args: Any, route: LocalLlmRoute | None, host_local_spec: str) -> None:
-    """Run the proxy container on the Docker host for ``holon-coherence start``."""
     require_docker_daemon()
     config = ProxyLifecycleConfig(
         port=_resolve_start_proxy_port(args.port),
@@ -413,13 +362,11 @@ def _start_on_host(args: Any, route: LocalLlmRoute | None, host_local_spec: str)
         rebuild=args.build,
     )
     ProxyLifecycle(config).prepare()
-    # The inspector port is probed only after the stale container is gone, so its old mapping is free.
     web_port, web_password = _resolve_start_web_inspector(args, config.port, route)
     _dispatch_proxy_lifecycle(ProxyLifecycle(replace(config, web_port=web_port, web_password=web_password)))
 
 
 def handle_start(args: Any) -> None:
-    """Execute proxy start command in container or on host."""
     host_local_spec, route = _resolve_start_local_llm(args, os.environ.get(HOST_LOCAL_ENV_VAR, "").strip())
     if is_in_container():
         _serve_in_container(args, host_local_spec)
@@ -428,13 +375,11 @@ def handle_start(args: Any) -> None:
 
 
 def handle(args: Any) -> int:
-    """Handle start command."""
     handle_start(args)
     return 0
 
 
 def register(subparsers: Any) -> argparse.ArgumentParser:
-    """Register start subparser."""
     start_parser = subparsers.add_parser("start", help="Start the optimization proxy sidecar (via Docker by default)")
     default_start_port = DEFAULT_PROXY_PORT
     env_proxy_port = os.getenv("HOLON_PROXY_PORT")

@@ -1,5 +1,3 @@
-"""Docker operations and container lifecycle management."""
-
 from __future__ import annotations
 
 import argparse
@@ -51,12 +49,10 @@ CONTAINER_NAME = DEFAULT_CONTAINER_NAME
 
 
 def stop_proxy_container(container_name: str | None = None) -> None:
-    """Stop and remove the holon-coherence background Docker container on demand."""
     ProxyLifecycle().stop(container_name)
 
 
 def handle_build(args: Any) -> int:
-    """Build the holon-coherence Docker image."""
     repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     dockerfile = os.path.join(repo_root, "Dockerfile")
     if not os.path.exists(dockerfile):
@@ -69,7 +65,6 @@ def handle_build(args: Any) -> int:
 
 
 def get_container_mapped_port(container_name: str | None = None, container_port: int = 8080) -> int | None:
-    """Return the host port mapped to the specified container TCP port."""
     name = container_name or get_container_name()
     try:
         res = subprocess.run(
@@ -92,12 +87,6 @@ WEB_PASSWORD_ENV_VAR = "HOLON_COHERENCE_WEB_PASSWORD"
 
 
 def get_container_web_token(container_name: str | None = None) -> str | None:
-    """Return the mitmweb inspector token a container was started with, read from its own environment.
-
-    ``~/.holon/web-token`` holds only the token of the most recent host ``start``, whatever its
-    ``--name``; the container's ``HOLON_COHERENCE_WEB_PASSWORD`` is the token its mitmweb actually
-    accepts. The value is returned to the caller only, never printed or logged here.
-    """
     name = container_name or get_container_name()
     try:
         res = subprocess.run(
@@ -130,9 +119,6 @@ def handle_status(
     is_running_fn: Callable[[str], bool] | None = None,
     resolve_endpoints_fn: Callable[..., ExposedEndpoints] | None = None,
 ) -> int:
-    """Check status of holon-coherence Docker container."""
-    # Imported inside the function: the endpoints helper imports this module at the top level,
-    # so a module-level import here would be circular.
     from holon_coherence.commands.endpoints import print_endpoints, resolve_container_endpoints
 
     is_running = is_running_fn or is_container_running
@@ -149,7 +135,6 @@ def handle_status(
 
     if not is_running(target_container):
         print(f"\n🔴 {display_name} is down (not running).")
-        # Never echo ~/.holon/web-token here: it outlives the container and would be a stale URL.
         print("   mitmweb inspector: not running")
         return retcode
 
@@ -187,7 +172,6 @@ def handle_status(
 
 
 def handle_logs(args: Any) -> int:
-    """View logs of holon-coherence Docker container."""
     target_container = getattr(args, "name", None) or get_container_name()
     cmd = ["docker", "logs"]
     if getattr(args, "follow", False):
@@ -198,7 +182,6 @@ def handle_logs(args: Any) -> int:
 
 
 def handle(args: Any) -> int:
-    """Dispatch Docker operation command."""
     cmd = getattr(args, "command", None)
     if cmd == "build":
         return handle_build(args)
@@ -212,7 +195,6 @@ def handle(args: Any) -> int:
 
 
 def register(subparsers: Any) -> list[argparse.ArgumentParser]:
-    """Register Docker operations subparsers (status, logs, build); ``stop`` lives in ``commands.stop``."""
     status_parser = subparsers.add_parser("status", help="Check status of holon-coherence Docker container")
     status_parser.add_argument(
         "--name",

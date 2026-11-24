@@ -1,5 +1,3 @@
-"""Unit tests for mitmweb inspector token resolution, persistence, and CLI command."""
-
 from __future__ import annotations
 
 import argparse
@@ -22,17 +20,12 @@ from holon_coherence.commands.web_token import (
 
 
 class TestWebTokenHelpers:
-    """Tests for token password resolution and file storage."""
-
     def test_resolve_web_password_priority(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # 1. CLI explicit argument takes highest priority
         monkeypatch.setenv("HOLON_COHERENCE_WEB_PASSWORD", "env-pwd-123")
         assert resolve_web_password("cli-pwd-abc") == "cli-pwd-abc"
 
-        # 2. Environment variable fallback
         assert resolve_web_password(None) == "env-pwd-123"
 
-        # 3. Auto-generation fallback
         monkeypatch.delenv("HOLON_COHERENCE_WEB_PASSWORD", raising=False)
         auto_token = resolve_web_password(None)
         assert isinstance(auto_token, str)
@@ -44,12 +37,10 @@ class TestWebTokenHelpers:
         assert saved == str(target_path)
         assert target_path.read_text().strip() == "super-secret-token"
 
-        # POSIX file permissions must be 0600
         mode = target_path.stat().st_mode
         assert (mode & 0o777) == (stat.S_IRUSR | stat.S_IWUSR)
         assert (mode & 0o077) == 0
 
-        # Retrieval helper
         retrieved = get_active_web_token(token_path=str(target_path))
         assert retrieved == "super-secret-token"
 
@@ -67,8 +58,6 @@ class TestWebTokenHelpers:
 
 
 class TestWebTokenRegistrationAndDispatch:
-    """Tests for web-token and web-key subparsers registration and handle execution."""
-
     def test_register_and_defaults(self) -> None:
         parser = argparse.ArgumentParser()
         subparsers = parser.add_subparsers(dest="command")
@@ -125,17 +114,12 @@ class TestWebTokenRegistrationAndDispatch:
 
 
 class TestWebTokenAndDashboardAuth:
-    """Tests for web dashboard token management and password protection."""
-
     def test_web_token_resolution_and_generation(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # 1. Explicit CLI argument
         assert resolve_web_password("explicit-cli-pwd") == "explicit-cli-pwd"
 
-        # 2. Environment variable fallback
         monkeypatch.setenv("HOLON_COHERENCE_WEB_PASSWORD", "env-secret-password")
         assert resolve_web_password(None) == "env-secret-password"
 
-        # 3. Auto-generation fallback
         monkeypatch.delenv("HOLON_COHERENCE_WEB_PASSWORD", raising=False)
         auto_token = resolve_web_password(None)
         assert isinstance(auto_token, str)
@@ -147,25 +131,20 @@ class TestWebTokenAndDashboardAuth:
         assert saved == str(target_path)
         assert target_path.read_text().strip() == "super-secret-token"
 
-        # POSIX file permissions must be 0600
         mode = target_path.stat().st_mode
         assert (mode & 0o777) == (stat.S_IRUSR | stat.S_IWUSR)
         assert (mode & 0o077) == 0
 
-        # Retrieval helper
         retrieved = get_active_web_token(token_path=str(target_path))
         assert retrieved == "super-secret-token"
 
     def test_get_active_web_token_edge_cases(self, tmp_path: Path) -> None:
-        # Non-existent file
         assert get_active_web_token(token_path=str(tmp_path / "nonexistent")) is None
 
-        # Empty or whitespace-only file
         empty_token = tmp_path / "empty"
         empty_token.write_text("   \n")
         assert get_active_web_token(token_path=str(empty_token)) is None
 
-        # Unreadable file / OSError handling
         unreadable = tmp_path / "unreadable"
         unreadable.write_text("valid-token")
         with patch("builtins.open", side_effect=OSError("Disk error")):
@@ -206,7 +185,6 @@ class TestWebTokenAndDashboardAuth:
             docker_cmd = mock_run.call_args_list[1][0][0]
             assert "-e" in docker_cmd
             assert "HOLON_COHERENCE_WEB_PASSWORD=host-custom-pwd" in docker_cmd
-            # Plaintext password must NOT be in container CLI tail arguments (SEC-01)
             tail_args = docker_cmd[docker_cmd.index("holon-coherence:latest") :]
             assert "--web-password" not in tail_args
 
@@ -243,7 +221,6 @@ class TestWebTokenAndDashboardAuth:
             assert "🔴 holon-coherence is down (not running)" in captured.out
 
     def test_web_token_and_web_key_commands(self, capsys: pytest.CaptureFixture[str]) -> None:
-        # Token exists: web-token
         with (
             patch("holon_coherence.commands.web_token.get_active_web_token", return_value="existing-key-999"),
             patch("holon_coherence.commands.web_token.is_container_running", return_value=False),
@@ -258,7 +235,6 @@ class TestWebTokenAndDashboardAuth:
         assert "mitmweb inspector: not running" in captured.out
         assert "?token=" not in captured.out
 
-        # Token exists: web-key alias
         with (
             patch("holon_coherence.commands.web_token.get_active_web_token", return_value="existing-key-999"),
             patch("holon_coherence.commands.web_token.is_container_running", return_value=False),
@@ -273,7 +249,6 @@ class TestWebTokenAndDashboardAuth:
         assert "mitmweb inspector: not running" in captured.out
         assert "?token=" not in captured.out
 
-        # Token missing
         with (
             patch("holon_coherence.commands.web_token.get_active_web_token", return_value=None),
             patch("holon_coherence.commands.web_token.is_container_running", return_value=False),

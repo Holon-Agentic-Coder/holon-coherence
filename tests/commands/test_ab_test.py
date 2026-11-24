@@ -1,5 +1,3 @@
-"""Unit tests for holon_coherence.commands.ab_test registration and dispatch."""
-
 from __future__ import annotations
 
 import argparse
