@@ -1,5 +1,3 @@
-"""Proxy image provisioning: reuse a local image, build it from the repository Dockerfile or pull it."""
-
 from __future__ import annotations
 
 import os
@@ -7,10 +5,11 @@ import subprocess
 import sys
 
 DOCKER_BUILD_TIMEOUT_SECONDS = 600
+DOCKER_TAG_TIMEOUT_SECONDS = 30
+GHCR_IMAGE_PREFIX = "ghcr.io/holon-agentic-coder"
 
 
 def ensure_docker_image(image: str, rebuild: bool = False) -> None:  # noqa: C901, PLR0912
-    """Ensure the Docker image exists locally, building or pulling from registry/GHCR if needed."""
     if not rebuild:
         img_check = subprocess.run(
             ["docker", "image", "inspect", image],
@@ -56,7 +55,7 @@ def ensure_docker_image(image: str, rebuild: bool = False) -> None:  # noqa: C90
             sys.exit(1)
         if pull_res.returncode != 0:
             if "/" not in image:
-                ghcr_img = f"ghcr.io/holon-agentic-coder/{image}"
+                ghcr_img = f"{GHCR_IMAGE_PREFIX}/{image}"
                 print(f"📥 Attempting pull from {ghcr_img}...")
                 try:
                     ghcr_res = subprocess.run(
@@ -79,11 +78,11 @@ def ensure_docker_image(image: str, rebuild: bool = False) -> None:  # noqa: C90
                 try:
                     tag_res = subprocess.run(
                         ["docker", "tag", ghcr_img, image],
-                        timeout=30,
+                        timeout=DOCKER_TAG_TIMEOUT_SECONDS,
                     )
                 except subprocess.TimeoutExpired:
                     print(
-                        "Error: Docker tag timed out after 30s.",
+                        f"Error: Docker tag timed out after {DOCKER_TAG_TIMEOUT_SECONDS}s.",
                         file=sys.stderr,
                     )
                     sys.exit(1)
