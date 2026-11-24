@@ -1,5 +1,3 @@
-"""Unit and integration tests for holon-coherence CLI and coding agent runners."""
-
 from __future__ import annotations
 
 import os
@@ -18,11 +16,7 @@ from holon_coherence.host_local import HOST_LOCAL_ENV_VAR, decode_targets
 
 
 @pytest.fixture(autouse=True)
-def _never_persist_real_web_token() -> Iterator[MagicMock]:
-    """A ``start --web`` resolves an inspector token; keep it out of the real ~/.holon/web-token.
-
-    ``HOLON_COHERENCE_WEB`` is cleared so a developer's shell opt-in cannot flip the headless default under test.
-    """
+def _isolate_web_token_and_headless_default() -> Iterator[MagicMock]:
     with (
         patch.dict(os.environ, {}, clear=False),
         patch("holon_coherence.commands.start.save_web_token") as mock_save,
@@ -32,8 +26,6 @@ def _never_persist_real_web_token() -> Iterator[MagicMock]:
 
 
 class TestCLIDispatchAndMain:
-    """Tests for direct aliases and run-agent CLI dispatch."""
-
     def test_direct_alias_dispatch(self) -> None:
         with patch("holon_coherence.cli.run_agent", return_value=0) as mock_run_agent, pytest.raises(SystemExit) as exc:
             main(["agy", "--ephemeral", "--port", "9090", "-p", "fix issue"])
@@ -226,7 +218,6 @@ class TestCLIDispatchAndMain:
         assert captured_env["GIT_SSL_CAINFO"] == "/mock/merged.crt"
 
     def test_run_command_uses_execute_interactive_process(self) -> None:
-        """run subcommand delegates to execute_interactive_process, not subprocess.run."""
         with (
             patch("os.path.exists", return_value=False),
             patch("holon_coherence.commands.runner.execute_interactive_process", return_value=42) as mock_exec,
@@ -288,18 +279,12 @@ class TestCLIDispatchAndMain:
             assert "--rm" in docker_cmd
 
     def test_start_command_rejects_removed_native_flag(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """The host-mitmproxy escape hatch was removed; it must not be silently accepted."""
         with pytest.raises(SystemExit) as exc_info:
             main(["start", "--native"])
         assert exc_info.value.code == 2
         assert "--native" in capsys.readouterr().err
 
     def test_in_container_start_still_launches_mitmproxy_directly(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The Dockerfile ENTRYPOINT runs `holon-coherence start --port 8080` inside the container.
-
-        That is the only reason the direct-mitmproxy branch exists now that --native is gone, so it
-        must keep working without touching Docker.
-        """
         launched: list[list[str]] = []
 
         def fake_run(cmd, *args, **kwargs):
@@ -331,11 +316,9 @@ class TestCLIDispatchAndMain:
             main(["start", "-d", "--web"])
             assert mock_run.call_count == 2
             docker_cmd = mock_run.call_args_list[1][0][0]
-            # Verify port mapping for web dashboard
             assert "-p" in docker_cmd
-            web_port_mapping = "127.0.0.1:8081:8081"
-            assert web_port_mapping in docker_cmd
-            # Verify internal start args
+            expected_web_port_mapping = "127.0.0.1:8081:8081"
+            assert expected_web_port_mapping in docker_cmd
             assert "--web" in docker_cmd
             web_port_idx = docker_cmd.index("--web-port") + 1
             assert docker_cmd[web_port_idx] == "8081"
@@ -396,10 +379,10 @@ class TestCLIDispatchAndMain:
         ):
             main(["start", "-d", "--web"])
             docker_cmd = mock_run.call_args_list[1][0][0]
-            # Proxy was 8080 (in use) -> falls back to 8082
-            assert "127.0.0.1:8082:8080" in docker_cmd
-            # Web was 8081 (in use) -> candidate 8082 collides with proxy -> falls back to 8083
-            assert "127.0.0.1:8083:8081" in docker_cmd
+            expected_proxy_fallback_mapping = "127.0.0.1:8082:8080"
+            expected_web_fallback_mapping = "127.0.0.1:8083:8081"
+            assert expected_proxy_fallback_mapping in docker_cmd
+            assert expected_web_fallback_mapping in docker_cmd
 
     def test_start_command_with_custom_web_port(self) -> None:
         with (
@@ -463,10 +446,7 @@ class TestCLIDispatchAndMain:
 
 
 class TestEndToEndDispatch:
-    """End-to-end integration tests for CLI dispatch paths through main()."""
-
     def test_main_agent_missing_binary_exits_one(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """main(['agy']) with no agy binary on PATH should print an error and exit 1."""
         with (
             patch("shutil.which", return_value=None),
             pytest.raises(SystemExit) as exc_info,
@@ -477,7 +457,6 @@ class TestEndToEndDispatch:
         assert "not found on PATH" in captured.err
 
     def test_main_run_agent_missing_binary_exits_one(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """main(['run-agent', 'claude']) with no claude binary should print an error and exit 1."""
         with (
             patch("shutil.which", return_value=None),
             pytest.raises(SystemExit) as exc_info,
@@ -489,8 +468,6 @@ class TestEndToEndDispatch:
 
 
 class TestLocalLlmRunnerFlag:
-    """`--local-llm-base` must intercept a host-local model server instead of bypassing the proxy."""
-
     HOST_IPS = ("192.168.2.13",)
 
     def test_flag_extraction_equals_form(self) -> None:
@@ -573,7 +550,6 @@ class TestLocalLlmRunnerFlag:
     def test_unreachable_host_keeps_the_bypass(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Pruning a working direct route into a broken proxied one is worse than bypassing."""
         monkeypatch.delenv("NO_PROXY", raising=False)
         monkeypatch.delenv("no_proxy", raising=False)
         monkeypatch.delenv("HOLON_PROXY_PORT", raising=False)
@@ -635,7 +611,6 @@ class TestLocalLlmRunnerFlag:
     def test_unreachable_lan_ip_reports_warning_not_success(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """When reaching a LAN IP fails, report failure even if it wasn't in NO_PROXY."""
         monkeypatch.delenv("NO_PROXY", raising=False)
         monkeypatch.delenv("no_proxy", raising=False)
         monkeypatch.delenv("HOLON_PROXY_PORT", raising=False)
