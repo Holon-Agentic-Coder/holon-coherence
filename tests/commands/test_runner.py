@@ -1,5 +1,3 @@
-"""Unit tests for runner command, proxy environment preparation, and interactive process execution."""
-
 from __future__ import annotations
 
 import argparse
@@ -25,8 +23,6 @@ from holon_coherence.commands.runner import (
 
 
 class TestBuildProxyEnv:
-    """Tests for build_proxy_env and NO_PROXY resolution."""
-
     def test_build_proxy_env_sets_all_proxy_vars_and_node_extra_ca_certs(self) -> None:
         with (
             patch("os.path.exists", return_value=True),
@@ -111,8 +107,6 @@ class TestBuildProxyEnv:
 
 
 class TestExecuteInteractiveProcess:
-    """Tests for child process exit code propagation, stdio passthrough, and signal handling."""
-
     def test_exit_code_propagation_success(self) -> None:
         mock_proc = MagicMock()
         mock_proc.poll.side_effect = [None, 0]
@@ -153,8 +147,6 @@ class TestExecuteInteractiveProcess:
 
 
 class TestRunnerRegistrationAndDispatch:
-    """Tests for run subparser registration and argument handling."""
-
     def test_register_and_defaults(self) -> None:
         parser = argparse.ArgumentParser()
         subparsers = parser.add_subparsers(dest="command")
@@ -182,8 +174,6 @@ class TestRunnerRegistrationAndDispatch:
 
 
 class TestProxyEnvironmentInjectionAndMergedCA:
-    """Tests for proxy environment routing and merged CA bundle generation."""
-
     def test_proxy_routing_variables_injected(self) -> None:
         with (
             patch("os.path.exists", return_value=True),
@@ -227,14 +217,6 @@ class TestProxyEnvironmentInjectionAndMergedCA:
     def test_inherited_ca_vars_are_cleared_when_bundle_is_missing(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """A missing bundle must not leave an inherited CA path pointing at nothing.
-
-        This is the case the assertion above only catches by accident: it passes on a clean CI
-        machine because nothing set the variables, and fails on a developer or agent shell that
-        exports them. Either way the child would be told to trust a bundle that does not exist,
-        and then git, curl, requests or Node report a certificate error instead of the stale
-        environment an earlier setup left behind.
-        """
         for var in CA_ENV_VARS:
             monkeypatch.setenv(var, "/nonexistent/stale-bundle.crt")
 
@@ -246,7 +228,6 @@ class TestProxyEnvironmentInjectionAndMergedCA:
         assert "Warning: CA certificate not found" in capsys.readouterr().err
 
     def test_resolved_bundle_overrides_inherited_ca_vars(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        """When a bundle does resolve, it must win over whatever the shell already exported."""
         ca = tmp_path / "mitmproxy-ca-cert.pem"
         ca.write_text("-----BEGIN CERTIFICATE-----\n")
         merged = tmp_path / "holon-merged-ca-bundle.crt"
@@ -322,7 +303,6 @@ class TestProxyEnvironmentInjectionAndMergedCA:
             assert "Warning: CA certificate not found at '/nonexistent/ca.pem'" in captured.err
 
     def test_build_proxy_env_holon_ca_cert_env_var(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """HOLON_CA_CERT env var is consulted before falling back to default path."""
         ca_cert = tmp_path / "custom-ca.pem"
         ca_cert.write_text("custom cert")
         monkeypatch.setenv("HOLON_CA_CERT", str(ca_cert))
@@ -338,7 +318,6 @@ class TestProxyEnvironmentInjectionAndMergedCA:
     def test_build_proxy_env_holon_ca_cert_env_var_not_found_falls_back(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """If HOLON_CA_CERT points to a non-existent file, build_proxy_env falls back to default path."""
         monkeypatch.setenv("HOLON_CA_CERT", "/nonexistent/env-ca.pem")
         default_ca = os.path.expanduser("~/.holon/proxy-ca/mitmproxy-ca-cert.pem")
 
@@ -408,7 +387,6 @@ class TestProxyEnvironmentInjectionAndMergedCA:
             assert result == str(merged_path)
             assert merged_path.read_text() == "CACHED_CONTENT"
 
-        # When source ca_cert is newer than merged bundle, it should regenerate
         os.utime(holon_ca, (t0 + 200, t0 + 200))
         with patch("holon_coherence.commands.ca.find_system_ca_bundle", return_value=str(sys_ca)):
             result = get_or_create_merged_ca_bundle(str(holon_ca))
@@ -438,7 +416,6 @@ class TestProxyEnvironmentInjectionAndMergedCA:
     def test_find_system_ca_bundle_env_var_returns_abspath(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """find_system_ca_bundle normalizes env var paths to absolute paths."""
         cert_file = tmp_path / "custom-cert.pem"
         cert_file.write_text("custom")
         monkeypatch.setenv("SSL_CERT_FILE", str(cert_file))
@@ -539,8 +516,6 @@ class TestProxyEnvironmentInjectionAndMergedCA:
 
 
 class TestChildProcessExecutionAndExitCodes:
-    """Tests for child process exit code propagation, stdio passthrough, and signal handling."""
-
     def test_exit_code_propagation_success(self) -> None:
         mock_proc = MagicMock()
         mock_proc.poll.side_effect = [None, 0]
@@ -549,21 +524,18 @@ class TestChildProcessExecutionAndExitCodes:
         with patch("subprocess.Popen", return_value=mock_proc) as mock_popen:
             code = execute_interactive_process(["test-cmd"], {"ENV": "val"})
             assert code == 0
-            # stdin arg is sys.stdin when fileno() succeeds; use ANY to be resilient
-            # to CI/test environments where stdin may be a pseudofile
             call_kwargs = mock_popen.call_args[1]
             assert call_kwargs["stdout"] is sys.stdout
             assert call_kwargs["stderr"] is sys.stderr
             assert call_kwargs["env"] == {"ENV": "val"}
 
     def test_execute_interactive_process_pseudofile_stdin_uses_pipe(self) -> None:
-        """When sys.stdin is a pseudofile (no fileno), Popen falls back to subprocess.PIPE."""
         import io
 
         mock_proc = MagicMock()
         mock_proc.poll.side_effect = [None, 0]
         mock_proc.returncode = 0
-        pseudo_stdin = io.StringIO("fake stdin")  # StringIO has no real fileno()
+        pseudo_stdin = io.StringIO("fake stdin")
 
         with (
             patch("subprocess.Popen", return_value=mock_proc) as mock_popen,

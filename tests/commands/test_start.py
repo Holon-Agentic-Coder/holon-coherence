@@ -1,5 +1,3 @@
-"""Unit tests for start command, container orchestration, route planning, and readiness checks."""
-
 from __future__ import annotations
 
 import argparse
@@ -40,8 +38,6 @@ from holon_coherence.host_local import HOST_LOCAL_ENV_VAR
 
 
 class TestWaitForProxyReadySuite:
-    """Tests for wait_for_proxy_ready HTTP polling."""
-
     def test_wait_for_proxy_ready_immediate_success(self) -> None:
         mock_resp = MagicMock(status=200)
         with (
@@ -61,8 +57,6 @@ class TestWaitForProxyReadySuite:
 
 
 class TestPlanAndReportLocalLlmRouteSuite:
-    """Tests for local LLM routing plan and reachability reporting."""
-
     def test_plan_local_llm_route_valid(self) -> None:
         with patch("holon_coherence.commands.start.detect_host_addresses", return_value=("192.168.2.13",)):
             route = plan_local_llm_route("localhost:8081")
@@ -85,8 +79,6 @@ class TestPlanAndReportLocalLlmRouteSuite:
 
 
 class TestEnsureProxyRunningSuite:
-    """Tests for ensure_proxy_running background sidecar launch."""
-
     def test_reuse_existing_healthy_container(self) -> None:
         with (
             patch("holon_coherence.container.lifecycle.check_docker_daemon", return_value=(True, "")),
@@ -114,8 +106,6 @@ class TestEnsureProxyRunningSuite:
 
 
 class TestStartCommandRegistrationAndDispatch:
-    """Tests for start subparser registration and argument dispatch."""
-
     def test_register_and_defaults(self) -> None:
         parser = argparse.ArgumentParser()
         subparsers = parser.add_subparsers(dest="command")
@@ -154,8 +144,6 @@ class TestStartCommandRegistrationAndDispatch:
 
 
 class TestDockerDiagnosticsAndPortConflicts:
-    """Tests for Docker daemon diagnostic handling and port conflict detection."""
-
     def test_docker_cli_missing(self) -> None:
         with patch("shutil.which", return_value=None):
             ok, err = check_docker_daemon()
@@ -215,10 +203,12 @@ class TestDockerDiagnosticsAndPortConflicts:
         ):
             started = ensure_proxy_running(port=8080)
             assert started is False
-            # Should return immediately without docker run
             mock_run.assert_not_called()
 
     def test_ensure_proxy_running_launches_new_container_returns_true(self) -> None:
+        succeeded_inspect = MagicMock(returncode=0)
+        succeeded_rm = MagicMock(returncode=0)
+        succeeded_run = MagicMock(returncode=0)
         with (
             patch("holon_coherence.container.lifecycle.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.container.lifecycle.is_port_in_use", return_value=False),
@@ -228,9 +218,9 @@ class TestDockerDiagnosticsAndPortConflicts:
             patch(
                 "subprocess.run",
                 side_effect=[
-                    MagicMock(returncode=0),  # inspect image
-                    MagicMock(returncode=0),  # rm -f
-                    MagicMock(returncode=0),  # docker run
+                    succeeded_inspect,
+                    succeeded_rm,
+                    succeeded_run,
                 ],
             ) as mock_run,
             patch("holon_coherence.container.lifecycle.ProxyLifecycle.wait_until_ready", return_value=True),
@@ -315,22 +305,18 @@ class TestDockerDiagnosticsAndPortConflicts:
             assert is_container_bound_to_port(8080) is False
 
     def test_is_container_running_timeout_returns_false(self) -> None:
-        """is_container_running returns False when docker inspect times out."""
         with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd=["docker"], timeout=5.0)):
             assert is_container_running() is False
 
     def test_is_container_running_oserror_returns_false(self) -> None:
-        """is_container_running returns False when docker binary is missing (OSError)."""
         with patch("subprocess.run", side_effect=OSError("docker not found")):
             assert is_container_running() is False
 
     def test_is_container_bound_to_port_primary_timeout_returns_false(self) -> None:
-        """is_container_bound_to_port returns False if primary docker port call times out."""
         with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd=["docker", "port"], timeout=5.0)):
             assert is_container_bound_to_port(8080) is False
 
     def test_is_container_bound_to_port_fallback_timeout_returns_false(self) -> None:
-        """is_container_bound_to_port returns False if fallback docker port call times out."""
         failed_res = MagicMock(returncode=1, stdout="")
         with patch(
             "subprocess.run",
@@ -339,11 +325,13 @@ class TestDockerDiagnosticsAndPortConflicts:
             assert is_container_bound_to_port(8080) is False
 
     def test_is_container_bound_to_port_oserror_returns_false(self) -> None:
-        """is_container_bound_to_port returns False when OSError raised on primary call."""
         with patch("subprocess.run", side_effect=OSError("no docker")):
             assert is_container_bound_to_port(8080) is False
 
     def test_ensure_proxy_running_timeout_combines_logs(self, capsys: pytest.CaptureFixture[str]) -> None:
+        succeeded_inspect = MagicMock(returncode=0)
+        succeeded_rm = MagicMock(returncode=0)
+        succeeded_run = MagicMock(returncode=0)
         logs_res = MagicMock(returncode=0, stdout="out msg\n", stderr="err traceback\n")
         with (
             patch("holon_coherence.container.lifecycle.check_docker_daemon", return_value=(True, "")),
@@ -354,10 +342,10 @@ class TestDockerDiagnosticsAndPortConflicts:
             patch(
                 "subprocess.run",
                 side_effect=[
-                    MagicMock(returncode=0),  # inspect image
-                    MagicMock(returncode=0),  # rm -f
-                    MagicMock(returncode=0),  # docker run
-                    logs_res,  # docker logs
+                    succeeded_inspect,
+                    succeeded_rm,
+                    succeeded_run,
+                    logs_res,
                 ],
             ),
             patch("holon_coherence.container.lifecycle.ProxyLifecycle.wait_until_ready", return_value=False),
@@ -372,6 +360,8 @@ class TestDockerDiagnosticsAndPortConflicts:
         assert "err traceback" in captured.err
 
     def test_ensure_proxy_running_build_failure(self, capsys: pytest.CaptureFixture[str]) -> None:
+        failed_inspect = MagicMock(returncode=1)
+        failed_build = MagicMock(returncode=1)
         with (
             patch("holon_coherence.container.lifecycle.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.container.lifecycle.is_port_in_use", return_value=False),
@@ -381,8 +371,8 @@ class TestDockerDiagnosticsAndPortConflicts:
             patch(
                 "subprocess.run",
                 side_effect=[
-                    MagicMock(returncode=1),  # inspect image fails
-                    MagicMock(returncode=1),  # docker build fails
+                    failed_inspect,
+                    failed_build,
                 ],
             ),
             pytest.raises(SystemExit) as exc_info,
@@ -393,6 +383,9 @@ class TestDockerDiagnosticsAndPortConflicts:
         assert "Failed to build Docker image" in captured.err
 
     def test_ensure_proxy_running_ghcr_pull_failure(self, capsys: pytest.CaptureFixture[str]) -> None:
+        failed_inspect = MagicMock(returncode=1)
+        failed_primary_pull = MagicMock(returncode=1)
+        failed_ghcr_pull = MagicMock(returncode=1)
         with (
             patch("holon_coherence.container.lifecycle.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.container.lifecycle.is_port_in_use", return_value=False),
@@ -402,9 +395,9 @@ class TestDockerDiagnosticsAndPortConflicts:
             patch(
                 "subprocess.run",
                 side_effect=[
-                    MagicMock(returncode=1),  # inspect image fails
-                    MagicMock(returncode=1),  # docker pull image fails
-                    MagicMock(returncode=1),  # docker pull ghcr fails
+                    failed_inspect,
+                    failed_primary_pull,
+                    failed_ghcr_pull,
                 ],
             ),
             pytest.raises(SystemExit) as exc_info,
@@ -416,8 +409,6 @@ class TestDockerDiagnosticsAndPortConflicts:
 
 
 class TestWaitForProxyReady:
-    """Tests for wait_for_proxy_ready HTTP metrics polling and fail-fast container exit handling."""
-
     def test_wait_for_proxy_ready_immediate_success(self) -> None:
         mock_resp = MagicMock()
         mock_resp.status = 200
@@ -536,11 +527,6 @@ class TestWaitForProxyReady:
 
     @staticmethod
     def _stepping_clock(wall_step: float) -> tuple[MagicMock, list[float], list[float]]:
-        """Fake ``time`` module whose wall clock jumps by ``wall_step`` on the first sleep.
-
-        Both clocks advance 0.25s per poll, as real clocks would; only the wall clock is stepped.
-        A quarter-second tick keeps the monotonic arithmetic exact in binary floating point.
-        """
         wall = [1_000_000.0]
         mono = [0.0]
         fake_time = MagicMock()
@@ -567,7 +553,6 @@ class TestWaitForProxyReady:
             patch("holon_coherence.container.lifecycle.time", fake_time),
         ):
             assert wait_for_proxy_ready(8080, timeout=1.0) is False
-        # 1.0s budget at 0.25s per poll: exactly four attempts, regardless of the wall-clock step.
         assert mock_urlopen.call_count == 4
         assert fake_time.time.call_count == 0
 
@@ -594,7 +579,6 @@ class TestWaitForProxyReady:
         attempts = [0]
 
         def flaky_open(_req: urllib.request.Request, timeout: float) -> Any:
-            # Step the wall clock backwards on every attempt as well.
             wall[0] -= 7200.0
             attempts[0] += 1
             if attempts[0] <= 2:
@@ -613,8 +597,6 @@ class TestWaitForProxyReady:
 
 
 class TestHostLocalContainerWiring:
-    """The container must be able to resolve the host and know which authorities to reroute."""
-
     def test_add_host_flag_shape(self) -> None:
         assert docker_host_alias_args() == ["--add-host", "host.docker.internal:host-gateway"]
 
@@ -623,6 +605,9 @@ class TestHostLocalContainerWiring:
         assert host_local_container_args("") == []
 
     def test_docker_run_includes_add_host_and_allow_list(self) -> None:
+        succeeded_inspect = MagicMock(returncode=0)
+        succeeded_rm = MagicMock(returncode=0)
+        succeeded_run = MagicMock(returncode=0)
         with (
             patch("holon_coherence.container.lifecycle.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.container.lifecycle.is_port_in_use", return_value=False),
@@ -632,9 +617,9 @@ class TestHostLocalContainerWiring:
             patch(
                 "subprocess.run",
                 side_effect=[
-                    MagicMock(returncode=0),  # image inspect
-                    MagicMock(returncode=0),  # rm -f
-                    MagicMock(returncode=0),  # docker run
+                    succeeded_inspect,
+                    succeeded_rm,
+                    succeeded_run,
                 ],
             ) as mock_run,
             patch("holon_coherence.container.lifecycle.ProxyLifecycle.wait_until_ready", return_value=True),
@@ -679,8 +664,6 @@ class TestHostLocalContainerWiring:
 
         docker_cmd = mock_run.call_args_list[-1][0][0]
         assert f"{HOST_LOCAL_ENV_VAR}=localhost:11434" in docker_cmd
-        # The container only knows its own listen port, so the published port has to be handed over
-        # for the addon to refuse rewriting a client straight back into the proxy.
         assert "HOLON_PROXY_PORT=8080" in docker_cmd
 
     def test_running_container_env_is_read_back(self) -> None:
@@ -700,6 +683,9 @@ class TestHostLocalContainerWiring:
         assert host_local_covered("localhost:8081", "localhost") is True
 
     def test_unfit_running_container_is_recreated(self) -> None:
+        succeeded_inspect = MagicMock(returncode=0)
+        succeeded_rm = MagicMock(returncode=0)
+        succeeded_run = MagicMock(returncode=0)
         with (
             patch("holon_coherence.container.lifecycle.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.container.lifecycle.is_port_in_use", side_effect=[True, False, False]),
@@ -713,9 +699,9 @@ class TestHostLocalContainerWiring:
             patch(
                 "subprocess.run",
                 side_effect=[
-                    MagicMock(returncode=0),  # image inspect
-                    MagicMock(returncode=0),  # rm -f
-                    MagicMock(returncode=0),  # docker run
+                    succeeded_inspect,
+                    succeeded_rm,
+                    succeeded_run,
                 ],
             ) as mock_subproc,
             patch("holon_coherence.container.lifecycle.ProxyLifecycle.wait_until_ready", return_value=True),
@@ -767,8 +753,6 @@ class TestHostLocalContainerWiring:
 
 
 class TestProbeHostLocalReachable:
-    """Tests for probe_host_local_reachable() container execution and fallback."""
-
     def test_probe_python3_success(self) -> None:
         with patch("subprocess.run", return_value=MagicMock(returncode=0)) as mock_run:
             ok, detail = probe_host_local_reachable(8081)
@@ -883,8 +867,6 @@ class TestProbeHostLocalReachable:
 
 
 class TestPlanAndReportLocalLlmRoute:
-    """Unit tests for plan_local_llm_route and report_local_llm_route."""
-
     @pytest.fixture(autouse=True)
     def _mock_host_addrs(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("holon_coherence.commands.start.detect_host_addresses", lambda: ("192.168.2.13",))
@@ -925,7 +907,6 @@ class TestPlanAndReportLocalLlmRoute:
         assert "retained" in captured.err
 
     def test_report_local_llm_route_unreachable_without_pruning(self, capsys: pytest.CaptureFixture[str]) -> None:
-        # 192.168.2.13:8081 is not in default NO_PROXY, so plan.remove is empty
         route = plan_local_llm_route("192.168.2.13:8081")
         assert route is not None
         dropped = report_local_llm_route(route, reachable=False, detail="gateway name does not resolve")
@@ -960,11 +941,6 @@ def _free_ports(port: int, host: str = "127.0.0.1") -> bool:
 
 
 class TestMitmwebInspectorDefault:
-    """The mitmweb inspector is opt-in (``--web`` or ``HOLON_COHERENCE_WEB``); a plain ``start`` stays headless.
-
-    mitmweb keeps every flow in memory with no retention cap, so a long-running default proxy must not run it.
-    """
-
     @staticmethod
     def _host_start(
         argv: list[str],
@@ -1146,11 +1122,9 @@ class TestMitmwebInspectorDefault:
         set_values = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--set"]
         assert "web_password=tok123" in set_values
         assert "web_open_browser=false" in set_values
-        # In-container stdout is kept by `docker logs`; the raw token must never reach it.
         out = capsys.readouterr().out
         assert "tok123" not in out
         assert "mitmweb inspector listening on container port 8081" in out
-        # A manual `docker run ... start --web` has no host-side token; the message names the recovery path.
         assert "docker exec <container> sh -c 'cat \"$HOME/.holon/web-token\"'" in out
 
     def test_in_container_no_web_runs_mitmdump(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1159,13 +1133,11 @@ class TestMitmwebInspectorDefault:
         assert not any("web_password" in arg for arg in cmd)
 
     def test_in_container_default_stays_headless(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The Dockerfile CMD and run/run-agent containers publish no inspector port."""
         cmd = self._in_container_start(["start", "--port", "8080"], monkeypatch)
         assert cmd[0].endswith("mitmdump")
         assert "--web-port" not in cmd
 
     def test_in_container_ignores_env_opt_in(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The env opt-in is a host preference; only an explicit --web turns on an in-container mitmweb."""
         monkeypatch.setenv("HOLON_COHERENCE_WEB", "1")
         cmd = self._in_container_start(["start", "--port", "8080"], monkeypatch)
         assert cmd[0].endswith("mitmdump")

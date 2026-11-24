@@ -1,5 +1,3 @@
-"""mitmweb inspector token management and credential persistence."""
-
 from __future__ import annotations
 
 import argparse
@@ -23,38 +21,38 @@ from holon_coherence.commands.endpoints import (
 )
 
 WEB_TOKEN_PATH = os.path.expanduser("~/.holon/web-token")
+WEB_TOKEN_DIR_MODE = 0o700
+WEB_TOKEN_FILE_MODE = 0o600
+GENERATED_WEB_TOKEN_BYTES = 16
 
 
 def resolve_web_password(cli_password: str | None = None) -> str:
-    """Resolves web password from CLI argument, environment, or generates a secure token."""
     if cli_password:
         return cli_password
     env_password = os.getenv("HOLON_COHERENCE_WEB_PASSWORD")
     if env_password:
         return env_password
-    return secrets.token_urlsafe(16)
+    return secrets.token_urlsafe(GENERATED_WEB_TOKEN_BYTES)
 
 
 def save_web_token(token: str, token_path: str = WEB_TOKEN_PATH) -> str:
-    """Persists web dashboard token to disk with strict 0600 POSIX permissions."""
     token_dir = os.path.dirname(token_path)
     if token_dir:
-        os.makedirs(token_dir, mode=0o700, exist_ok=True)
+        os.makedirs(token_dir, mode=WEB_TOKEN_DIR_MODE, exist_ok=True)
         with contextlib.suppress(OSError):
-            os.chmod(token_dir, 0o700)
+            os.chmod(token_dir, WEB_TOKEN_DIR_MODE)
 
-    fd = os.open(token_path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    fd = os.open(token_path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, WEB_TOKEN_FILE_MODE)
     try:
         with open(fd, "w") as f:
             f.write(token.strip())
     finally:
         with contextlib.suppress(OSError):
-            os.chmod(token_path, 0o600)
+            os.chmod(token_path, WEB_TOKEN_FILE_MODE)
     return token_path
 
 
 def get_active_web_token(token_path: str = WEB_TOKEN_PATH) -> str | None:
-    """Reads active web token from disk if present and readable."""
     if os.path.isfile(token_path):
         try:
             with open(token_path) as f:
@@ -75,7 +73,6 @@ def handle_web_token(  # noqa: PLR0913
     is_running_fn: Callable[[str], bool] | None = None,
     get_mapped_port_fn: Callable[[str, int], int | None] | None = None,
 ) -> int:
-    """Displays the active mitmweb inspector token and, when it is running, its resolved URL."""
     tok_getter = tok_getter_fn or get_active_web_token
     container_tok_getter = container_tok_getter_fn or get_container_web_token
     is_running = is_running_fn or is_container_running
@@ -83,7 +80,6 @@ def handle_web_token(  # noqa: PLR0913
     name = getattr(args, "name", None) or get_container_name()
     web_port = get_mapped_port(name, INSPECTOR_CONTAINER_PORT) if is_running(name) else None
     if web_port is not None:
-        # A running inspector accepts only its own container's token, not the last-written file.
         container_token = container_tok_getter(name)
         if container_token:
             print(f"🔑 Active mitmweb inspector token: {container_token}")
@@ -106,12 +102,10 @@ def handle_web_token(  # noqa: PLR0913
 
 
 def handle(args: Any) -> int:
-    """Handle web-token and web-key commands."""
     return handle_web_token(args)
 
 
 def register(subparsers: Any) -> list[argparse.ArgumentParser]:
-    """Register web-token and web-key subparsers."""
     parsers = []
     for token_command, token_help in (
         ("web-token", "Display the active mitmweb inspector token and URL"),

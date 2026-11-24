@@ -1,5 +1,3 @@
-"""Unit tests for endpoint resolution, table row formatting, and display helpers."""
-
 from __future__ import annotations
 
 import json
@@ -22,8 +20,6 @@ from holon_coherence.commands.metrics import handle_metrics
 
 
 class TestEndpointsFormatting:
-    """Tests for rendering endpoint table rows."""
-
     def test_format_endpoint_rows_alignment(self) -> None:
         rows = format_endpoint_rows(ExposedEndpoints(proxy_port=8080, web_port=8081, web_token="tok"))
         assert rows == [
@@ -54,8 +50,6 @@ class TestEndpointsFormatting:
 
 
 class TestResolveContainerEndpoints:
-    """Tests for resolving container ports and token into ExposedEndpoints."""
-
     def test_resolve_container_endpoints_when_running(self) -> None:
         with (
             patch("holon_coherence.commands.endpoints.is_container_running", return_value=True),
@@ -89,8 +83,6 @@ class TestResolveContainerEndpoints:
 
 
 class TestEndpointReporting:
-    """``status``, ``metrics`` and ``web-token`` report the resolved endpoints, never a stale URL."""
-
     @staticmethod
     def _mapped_ports(mapping: dict[int, int | None]) -> Any:
         return lambda _name, container_port: mapping.get(container_port)
@@ -169,7 +161,6 @@ class TestEndpointReporting:
 
     @staticmethod
     def _empty_metrics_response() -> MagicMock:
-        # Transport fixture only: zero counters exercise the table layout, no figures are asserted.
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.read.return_value = json.dumps({}).encode("utf-8")
@@ -188,7 +179,6 @@ class TestEndpointReporting:
         ):
             assert handle_metrics(port=9000) == 0
         out = capsys.readouterr().out
-        # An explicit --port is honoured for the proxy rows; the inspector comes from the container.
         assert "Proxy Listen Address         : 127.0.0.1:9000" in out
         assert "Coherence Live Dashboard     : http://127.0.0.1:9000/holon/" in out
         assert "mitmweb Req/Resp Inspector   : http://127.0.0.1:8083/?token=tok" in out
@@ -272,7 +262,6 @@ class TestEndpointReporting:
     def test_two_named_containers_each_report_their_own_token(
         self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # ``start --name a`` then ``start --name b``: the shared file holds b's token, but a's inspector accepts a's.
         ports = {"a": {8080: 8080, 8081: 8081}, "b": {8080: 8090, 8081: 8091}}
         tokens = {"a": "tok-a", "b": "tok-b"}
         with (
