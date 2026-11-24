@@ -1,6 +1,5 @@
 HELP_FORMAT := "  %-30s - %s\n"
 
-# Helper to locate conda binary across standard install locations and PATH
 FIND_CONDA_BIN = \
 	CONDA_BIN=""; \
 	if command -v conda >/dev/null 2>&1; then \
