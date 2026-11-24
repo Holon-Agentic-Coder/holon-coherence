@@ -2,13 +2,14 @@
   "kb_id": "KB-pattern-565d240f",
   "kb_type": "pattern",
   "version": "1.0",
-  "created_ts": "2026-11-24T10:54:31.740783+00:00",
+  "created_ts": "2026-11-24T10:51:19.464707+00:00",
   "updated_ts": "2026-11-24T10:54:31.740783+00:00",
   "created_by": "holon-promotion-engine",
   "status": "active",
   "evidence": {
     "ledger_refs": [
       "ACT-1795517671-0ce0bcef",
+      "ACT-1795517479-4ec6f342",
       "ACT-1795516082-d62bf34f",
       "ACT-1795515439-b5220398",
       "ACT-1795511173-a5120126",

@@ -1,5 +1,3 @@
-"""Repository hygiene: tracked files must not depend on an external harness."""
-
 from __future__ import annotations
 
 import re
@@ -10,38 +8,23 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# Fragments are joined so that this file never matches its own patterns.
 FORBIDDEN_DIRS = frozenset({"to" + "do", "." + "sub" + "agent", "." + "be" + "ans"})
-# Dotted harness directories are never legitimate at any depth; the bare name is only rejected at the root.
 NESTED_FORBIDDEN_DIRS = frozenset({"." + "sub" + "agent", "." + "be" + "ans"})
 PROVENANCE_PREFIXES = ("holon-knowledge/ledger/", "plans/", "executions/", "intents/")
-# Calls nest up to five levels inside a path-call argument, the repository's own deepest idiom
-# (dirname(dirname(dirname(dirname(abspath(f)))))).
 CALL_NESTING = 5
 
 
 def call_arguments(depth: int) -> str:
-    """Regex for call-argument text whose parenthesised sub-calls nest at most ``depth`` levels."""
     inner = r"[^()]*"
     for _ in range(depth):
         inner = r"(?:[^()]|\(" + inner + r"\))*"
     return inner
 
 
-# Calls that build a path from their arguments: a join() (qualified or imported bare), os.sep.join() or a
-# separator-literal join ("/".join, "\\".join), joinpath() and Path(); a plain str.join() (any other join preceded
-# by a dot, os.pathsep.join included) is not one.
 PATH_CALL = r"""(?:(?<![\w.])join|path\.join|(?:os|path)\.sep\.join|["'](?:/|\\{1,2})["']\.join|joinpath|Path)\("""
-# Prefixes an unquoted path starts from: a parent, current or home directory, a shell variable or parameter expansion
-# (${R}, ${R:-..}, ${R%/}), or a command substitution ($(cmd) or `cmd`), optionally quoted before the separator
-# ("${R}"/x, "$R"/x, '$(cmd)'/x).
 PATH_ORIGIN = r"""(?:(?<![\w.])\.{1,2}|~|\$\w+|\$\{[^{}\n]*\}|\$\([^()\n]*\)|`[^`\n]*`)["']?(?:/|\\{1,2})"""
 CONTENT_PATTERNS = (
     re.compile(r"(?<![\w.-])" + "to" + r"do/"),
-    # A quoted bare name only counts in a path context: any argument of a PATH_CALL, including after arguments that
-    # are themselves calls (up to CALL_NESTING levels) and inside a tuple or list (join(("x", s)), join(*["x", s])), or
-    # either side of a "/" operator, string prefixes (f"", r"", rb"") included. A tuple opener must not follow a name or
-    # closing bracket, so a literal passed to a call inside the arguments (join(root, d.get(s))) is not a path segment.
     re.compile(
         "(?:"
         + PATH_CALL
@@ -52,22 +35,17 @@ CONTENT_PATTERNS = (
         + "to"
         + r"""do["']\s*/"""
     ),
-    # A quoted path whose last segment is the bare name ("../x", f"{root}/x", "~/x").
     re.compile(r"""["'`][^"'`\s]*/""" + "to" + r"""do["'`]"""),
-    # An unquoted path ending in the bare name (Makefile, shell, YAML, Windows separators): "../x", "~/x", "$(R)/x".
-    # A longer name ("xs", "x-list") or a file ("x.md") is not the directory; trailing punctuation still counts.
     re.compile(PATH_ORIGIN + "to" + r"do(?![\w-]|\.\w)"),
     re.compile(r"(?<![\w-])\." + "sub" + r"agent/"),
     re.compile(r"(?<![\w-])\." + "be" + r"ans/"),
     re.compile(r"/(?:Users|home)/[^/\s]+/git/"),
     re.compile("holon-agentic-" + "coder-ref"),
-    # Any-case ids need a non-letter before them; a capitalised id may also be joined onto a name (TestFooId0001 style).
     re.compile(r"(?:(?i:(?<![a-z])" + "be" + r"ans?)|" + "Be" + r"ans?)[ _:#-]*\d{4}(?!\d)"),
 )
 
 
 def tracked_files() -> list[str]:
-    """List tracked paths relative to the repository root; skip only outside a git checkout."""
     if not (REPO_ROOT / ".git").exists():
         pytest.skip("not a git checkout, so there are no tracked files to list")
     result = subprocess.run(["git", "ls-files", "-z"], cwd=REPO_ROOT, capture_output=True, check=True)
@@ -75,23 +53,19 @@ def tracked_files() -> list[str]:
 
 
 def forbidden_dir(path: str) -> bool:
-    """True when the root component, or any dotted component, is an exact harness directory name."""
     parts = path.split("/")
     return parts[0] in FORBIDDEN_DIRS or any(part in NESTED_FORBIDDEN_DIRS for part in parts)
 
 
 def is_exempt(path: str) -> bool:
-    """Only provenance records are not scanned; every other tracked file, docs and configs included, is."""
     return path.startswith(PROVENANCE_PREFIXES)
 
 
 def leaks_in(text: str) -> list[str]:
-    """Return the pattern of every leak pattern found in ``text``."""
     return [pattern.pattern for pattern in CONTENT_PATTERNS if pattern.search(text)]
 
 
 def read_text(path: str) -> str | None:
-    """Read a tracked file as text, returning ``None`` for binary or missing files."""
     file_path = REPO_ROOT / path
     if not file_path.is_file():
         return None

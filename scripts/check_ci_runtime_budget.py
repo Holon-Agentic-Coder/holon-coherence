@@ -1,18 +1,12 @@
 #!/usr/bin/env python3
-"""CI runtime budget verification script.
-
-Evaluates job elapsed runtime against a maximum duration threshold and outputs
-GitHub Actions annotations and markdown step summaries.
-
-Standard library only, compatible with Python 3.11+.
-"""
-
 from __future__ import annotations
 
 import argparse
 import sys
 import time
 from pathlib import Path
+
+DEFAULT_MAX_RUNTIME_SECONDS = 300.0
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -28,7 +22,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--max-seconds",
         type=float,
-        default=300.0,
+        default=DEFAULT_MAX_RUNTIME_SECONDS,
         help="Maximum allowable job runtime in seconds (default: 300.0).",
     )
     parser.add_argument(
@@ -41,19 +35,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def escape_annotation(message: str) -> str:
-    """Format workflow command text escaping characters treated specially by GitHub Actions."""
     return message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
+def _format_budget_utilization(elapsed: float, max_seconds: float) -> str:
+    return f"{(elapsed / max_seconds * 100):.1f}%" if max_seconds > 0 else "N/A"
+
+
 def write_step_summary(summary_path_str: str, elapsed: float, max_seconds: float, passed: bool) -> None:
-    """Append CI runtime budget check results to the GitHub step summary file."""
     if not summary_path_str.strip():
         return
 
     summary_path = Path(summary_path_str)
     try:
         summary_path.parent.mkdir(parents=True, exist_ok=True)
-        pct_str = f"{(elapsed / max_seconds * 100):.1f}%" if max_seconds > 0 else "N/A"
+        pct_str = _format_budget_utilization(elapsed, max_seconds)
         status_str = "PASS" if passed else "FAIL"
 
         markdown = (
@@ -95,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
     max_seconds = max(0.0, args.max_seconds)
     passed = elapsed <= max_seconds
 
-    pct_str = f"{(elapsed / max_seconds * 100):.1f}%" if max_seconds > 0 else "N/A"
+    pct_str = _format_budget_utilization(elapsed, max_seconds)
     print(f"CI runtime budget check: elapsed {elapsed:.1f}s, maximum budget {max_seconds:.1f}s ({pct_str})")
 
     if args.step_summary:

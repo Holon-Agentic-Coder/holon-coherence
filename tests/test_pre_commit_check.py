@@ -1,5 +1,3 @@
-"""Unit tests for scripts/pre_commit_check.py."""
-
 from __future__ import annotations
 
 import pathlib
@@ -16,33 +14,37 @@ from scripts.pre_commit_check import (
 
 
 def test_is_disallowed_path():
-    # Scratch and temporary paths that must be blocked
-    assert is_disallowed_path("tmp/scratch.txt")
-    assert is_disallowed_path("subdir/tmp/scratch.txt")
-    assert is_disallowed_path("debug.log")
-    assert is_disallowed_path("logs/server.log")
-    assert is_disallowed_path("data.tmp")
-    assert is_disallowed_path("sub/test.tmp")
-    assert is_disallowed_path(".index/store.db")
-    assert is_disallowed_path("nested/.index/rag_cache")
+    disallowed_scratch_paths = (
+        "tmp/scratch.txt",
+        "subdir/tmp/scratch.txt",
+        "debug.log",
+        "logs/server.log",
+        "data.tmp",
+        "sub/test.tmp",
+        ".index/store.db",
+        "nested/.index/rag_cache",
+    )
+    for path in disallowed_scratch_paths:
+        assert is_disallowed_path(path)
 
-    # Allowed canonical paths
-    assert not is_disallowed_path("src/holon_coherence/cli.py")
-    assert not is_disallowed_path("README.md")
-    assert not is_disallowed_path("tests/test_cli.py")
-    assert not is_disallowed_path("Makefile")
-    assert not is_disallowed_path("docs/audit_report.md")
+    allowed_canonical_paths = (
+        "src/holon_coherence/cli.py",
+        "README.md",
+        "tests/test_cli.py",
+        "Makefile",
+        "docs/audit_report.md",
+    )
+    for path in allowed_canonical_paths:
+        assert not is_disallowed_path(path)
 
 
 def test_mask_secret():
-    # Construct strings dynamically to avoid scanner detection
     sec = "AIza" + "1234567890abcdef"
     assert mask_secret(sec) == "AIza...cdef"
     assert mask_secret("short") == "****"
 
 
 def test_check_content_detects_secrets():
-    # Dynamically assemble secret strings
     google_key = "AIza" + "SyD1234567890abcdefghijklmnopqrstuvw"
     github_classic = "ghp_" + "1234567890abcdefghijklmnopqrstuvwxyz1234"
     github_pat = "github_pat_" + "1234567890abcdefghijklmnopqrstuvwxyz1234"
@@ -118,6 +120,5 @@ def test_main_empty_staged_files():
 
 
 def test_get_staged_files():
-    # Should safely return a list without raising exceptions
     files = get_staged_files()
     assert isinstance(files, list)

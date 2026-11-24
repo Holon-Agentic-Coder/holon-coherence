@@ -1,5 +1,3 @@
-"""Pytest suite enforcing Ruff complexity thresholds and inline noqa ratchet ceiling."""
-
 from __future__ import annotations
 
 import re
@@ -17,8 +15,6 @@ PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 
 COMPLEXITY_RULES = frozenset({"C901", "PLR0911", "PLR0912", "PLR0913", "PLR0915"})
 
-# Ratchet ceiling: Maximum permissible legacy function inline noqa suppressions for complexity rules.
-# This baseline must NEVER increase. When legacy functions are refactored, reduce this ceiling accordingly.
 BASELINE_CEILING = 11
 
 COMPLEXITY_NOQA_PATTERN = re.compile(r"#\s*noqa(?::|\s).*?\b(C901|PLR0911|PLR0912|PLR0913|PLR0915)\b")
@@ -30,7 +26,6 @@ def _load_pyproject() -> dict:
 
 
 def test_pyproject_complexity_configuration() -> None:
-    """Verify that pyproject.toml defines required complexity rules and exact thresholds."""
     config = _load_pyproject()
     ruff_lint = config.get("tool", {}).get("ruff", {}).get("lint", {})
 
@@ -53,7 +48,6 @@ def test_pyproject_complexity_configuration() -> None:
 
 
 def test_no_global_or_per_file_suppression_of_complexity_rules() -> None:
-    """Verify that complexity rules are not blanket-suppressed via ignore or per-file-ignores."""
     config = _load_pyproject()
     ruff_lint = config.get("tool", {}).get("ruff", {}).get("lint", {})
 
@@ -71,7 +65,6 @@ def test_no_global_or_per_file_suppression_of_complexity_rules() -> None:
 
 
 def test_complexity_baseline_ratchet_ceiling() -> None:
-    """Verify that inline noqa suppressions for complexity rules do not exceed baseline ceiling."""
     matches: list[tuple[str, int, str]] = []
 
     for py_file in sorted(SRC_ROOT.rglob("*.py")):
@@ -93,7 +86,6 @@ def test_complexity_baseline_ratchet_ceiling() -> None:
 
 
 def test_ruff_check_clean() -> None:
-    """Verify that Ruff static analysis passes cleanly with complexity rules enabled."""
     ruff_bin = shutil.which("ruff")
     if not ruff_bin:
         candidate = Path(sys.executable).parent / "ruff"
