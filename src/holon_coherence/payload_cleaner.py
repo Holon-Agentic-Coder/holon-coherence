@@ -1,5 +1,3 @@
-"""Context cleaning, tool output deduplication, and prompt cache optimization for LLM payloads."""
-
 from __future__ import annotations
 
 import copy
@@ -22,13 +20,10 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_RECENT_TURNS_TO_KEEP = 10
 _RECENT_TURNS_TO_KEEP = _DEFAULT_RECENT_TURNS_TO_KEEP
-"""Number of recent conversation turns preserved verbatim at the end of the history during summarization."""
 
 
 @dataclass
 class CleaningResult:
-    """Result of context cleaning, tool output deduplication, and prompt cache optimization."""
-
     payload: dict[str, Any]
     tool_outputs_omitted: int = 0
     turns_summarized: int = 0
@@ -37,11 +32,6 @@ class CleaningResult:
 
 
 class JSONContextCleaner:
-    """Cleans JSON LLM payloads by deduplicating tool outputs, summarizing history,
-
-    and inserting prompt cache control breakpoints for Anthropic API schemas.
-    """
-
     def __init__(
         self,
         enable_deduplication: bool = True,
@@ -55,22 +45,9 @@ class JSONContextCleaner:
         self.recent_turns_to_keep = recent_turns_to_keep
 
     def process_payload(self, payload: dict[str, Any], provider: str = "anthropic") -> dict[str, Any]:
-        """Convenience wrapper that returns only the cleaned payload dict, dropping stats.
-
-        Matches the original `process_payload(payload)` signature for backward compatibility.
-        """
         return self.process_payload_with_stats(payload, provider=provider).payload
 
     def process_payload_with_stats(self, payload: dict[str, Any], provider: str = "anthropic") -> CleaningResult:
-        """Processes and optimizes an outgoing LLM JSON request payload and returns metrics.
-
-        Args:
-            payload: Parsed JSON payload dictionary.
-            provider: Provider format ('anthropic', 'openai', or 'gemini').
-
-        Returns:
-            CleaningResult: Dataclass containing the cleaned payload and execution stats.
-        """
         seen_content_hashes: dict[str, tuple[int, str]] = {}
         cleaned_payload = copy.deepcopy(payload)
         stats = {
