@@ -1,5 +1,3 @@
-"""Unit tests for scripts/check_ci_runtime_budget.py."""
-
 from __future__ import annotations
 
 import pathlib
@@ -32,7 +30,8 @@ def test_negative_start_epoch(capsys):
 def test_budget_within_limit(tmp_path: pathlib.Path, capsys):
     summary_file = tmp_path / "step_summary.md"
     start_time = 1000.0
-    now_time = 1100.0  # elapsed 100s <= 300s budget
+    elapsed_within_budget_seconds = 100.0
+    now_time = start_time + elapsed_within_budget_seconds
 
     with mock.patch("time.time", return_value=now_time):
         ret = check_ci_runtime_budget.main(
@@ -60,7 +59,8 @@ def test_budget_within_limit(tmp_path: pathlib.Path, capsys):
 def test_budget_exceeded(tmp_path: pathlib.Path, capsys):
     summary_file = tmp_path / "step_summary.md"
     start_time = 1000.0
-    now_time = 1400.0  # elapsed 400s > 300s budget
+    elapsed_over_budget_seconds = 400.0
+    now_time = start_time + elapsed_over_budget_seconds
 
     with mock.patch("time.time", return_value=now_time):
         ret = check_ci_runtime_budget.main(

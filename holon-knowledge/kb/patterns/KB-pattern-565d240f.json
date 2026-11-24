@@ -1,0 +1,33 @@
+{
+  "kb_id": "KB-pattern-565d240f",
+  "kb_type": "pattern",
+  "version": "1.0",
+  "created_ts": "2026-11-24T10:51:19.464707+00:00",
+  "updated_ts": "2026-11-24T10:51:19.464707+00:00",
+  "created_by": "holon-promotion-engine",
+  "status": "active",
+  "evidence": {
+    "ledger_refs": [
+      "ACT-1795517479-4ec6f342",
+      "ACT-1795516082-d62bf34f",
+      "ACT-1795515439-b5220398",
+      "ACT-1795511173-a5120126",
+      "ACT-1795505423-81e93ac3"
+    ],
+    "success_count": 9,
+    "failure_count": 0,
+    "wilson_lower": 0.7008549515804675,
+    "posterior_mean": 0.9090909090909091,
+    "ladder_state": "likely-success"
+  },
+  "tags": [
+    "reconciliation",
+    "proven"
+  ],
+  "human_approved": false,
+  "payload": {
+    "name": "Proven approach for ",
+    "description": "Advisory (likely-success): Historical executions matching this context pattern succeeded in 9/9 (100.0%) trials (Wilson 95% lower bound: 0.70). Consider evaluating proven approach: ''.",
+    "action": ""
+  }
+}

@@ -1,20 +1,4 @@
 #!/usr/bin/env python3
-"""CI timing regression gate.
-
-Measures the wall-clock duration of a CI job and compares it against the recent history of the same job on `main`.
-
-Two modes:
-
-- `record` (pushes to `main`, manual runs): writes `timing.json` (job duration plus per-test times parsed from the
-  pytest JUnit report) for upload as the artefact `ci-timing-<job>-<OS>`, and enforces the absolute ceiling.
-- `compare` (pull requests): fetches the most recent `main` records for the same job and OS, fails when the duration
-  exceeds the rolling median by more than the relative tolerance *and* the absolute floor, or exceeds the ceiling,
-  and summarises the tests that grew the most.
-
-Every threshold is a command-line flag so the numbers live in the workflow files. Standard library only, and kept
-compatible with Python 3.11 so the runner's system `python3` can run it outside Conda and `uv`.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -34,28 +18,24 @@ import zipfile
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
+from typing import Literal
 
 SCHEMA = 1
 RECORD_FILE = "timing.json"
 ACCEPT_LABEL = "timing-regression-accepted"
 HTTP_TIMEOUT_S = 20
 REDIRECT_CODES = (301, 302, 303, 307, 308)
-# Everything a flaky API, blob store or malformed artefact can raise; each degrades to a notice, never a failed job.
+MAX_DOWNLOAD_ATTEMPTS_MULTIPLIER = 2
 FETCH_ERRORS = (OSError, http.client.HTTPException, KeyError, TypeError, ValueError, AttributeError, zipfile.BadZipFile)
 
 
 def notice(message: str) -> None:
-    """Print an informational GitHub Actions annotation."""
     print(annotation("notice", message))
 
 
 def annotation(level: str, message: str) -> str:
-    """Format a workflow command, escaping the characters GitHub treats specially."""
     escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
     return f"::{level}::{escaped}"
-
-
-# --- Records -----------------------------------------------------------------------------------------------------
 
 
 @dataclass
@@ -95,7 +75,6 @@ def _finite_number(value: object) -> bool:
 
 
 def _valid_values(data: Mapping) -> bool:
-    """A positive finite `duration_s` and a `tests` mapping of names to finite numbers."""
     duration, tests = data.get("duration_s"), data.get("tests", {})
     if not (_finite_number(duration) and duration > 0 and isinstance(tests, dict)):
         return False
@@ -106,9 +85,6 @@ def artefact_name(job: str, os_name: str) -> str:
     return f"ci-timing-{job}-{os_name}"
 
 
-# --- Pure decision core ------------------------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class Skip:
     message: str
@@ -116,7 +92,7 @@ class Skip:
 
 @dataclass
 class Verdict:
-    status: str  # "pass", "warn" or "fail"
+    status: Literal["pass", "warn", "fail"]
     messages: list[str] = field(default_factory=list)
     notices: list[str] = field(default_factory=list)
 
@@ -134,7 +110,6 @@ def check_ceiling(duration: float, ceiling: float) -> str | None:
 def check_relative(
     duration: float, baseline: list[float], count: int, tolerance: float, min_delta: float
 ) -> str | Skip | None:
-    """Compare against the median of the most recent `count` durations (most recent first)."""
     if len(baseline) < count:
         return Skip(f"relative check skipped: only {len(baseline)} of {count} main records; ceiling only")
     median = rolling_median(baseline[:count])
@@ -168,7 +143,6 @@ def decide(  # noqa: PLR0913
     accepted: bool,
     accept_label: str = ACCEPT_LABEL,
 ) -> Verdict:
-    """Combine both checks; the label can soften a relative failure but never the ceiling."""
     verdict = _relative_verdict(check_relative(duration, baseline, count, tolerance, min_delta), accepted, accept_label)
     ceiling_failure = check_ceiling(duration, ceiling)
     if ceiling_failure:
@@ -176,11 +150,7 @@ def decide(  # noqa: PLR0913
     return verdict
 
 
-# --- JUnit parsing and the per-test report -----------------------------------------------------------------------
-
-
 def parse_junit(text: str) -> dict[str, float]:
-    """Map `classname::name` to seconds for every testcase (bare `testsuite` or `testsuites` root)."""
     times: dict[str, float] = {}
     for case in ET.fromstring(text).iter("testcase"):
         key = f"{case.get('classname', '')}::{case.get('name', '')}"
@@ -222,7 +192,6 @@ def test_offenders(
     min_delta: float = 5.0,
     limit: int = 10,
 ) -> list[Offender]:
-    """Tests slower than their baseline median by more than `tolerance` and `min_delta`, largest delta first."""
     offenders = []
     for test, seconds in current.items():
         median = _test_median(test, baseline_records)
@@ -231,7 +200,7 @@ def test_offenders(
     return sorted(offenders, key=lambda offender: offender.delta, reverse=True)[:limit]
 
 
-test_offenders.__test__ = False  # not a pytest test, despite the name
+test_offenders.__test__ = False
 
 
 def count_new_tests(current: Mapping[str, float], baseline_records: list[TimingRecord]) -> int:
@@ -249,18 +218,13 @@ def format_offenders(offenders: list[Offender], tolerance: float = 0.5, min_delt
     return lines
 
 
-# --- Artefact selection and the injectable I/O layer -------------------------------------------------------------
-
-
 def is_main_artifact(artifact: Mapping) -> bool:
-    """An unexpired artefact from a `main` run of this repository (not a fork branch also called `main`)."""
     run = artifact.get("workflow_run") or {}
     same_repo = run.get("repository_id") is not None and run.get("head_repository_id") == run.get("repository_id")
     return not artifact.get("expired") and run.get("head_branch") == "main" and same_repo
 
 
 def select_main_artifacts(artifacts: list[Mapping]) -> list[Mapping]:
-    """Main-branch artefacts, most recent first."""
     selected = [artifact for artifact in artifacts if is_main_artifact(artifact)]
     return sorted(selected, key=lambda artifact: artifact.get("created_at", ""), reverse=True)
 
@@ -273,7 +237,7 @@ class Fetchers:
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):  # surface the redirect as an HTTPError instead of following it
+    def redirect_request(self, *args, **kwargs):
         return None
 
 
@@ -290,7 +254,6 @@ def _get_json(url: str, token: str):
 
 
 def _download_zip(url: str, token: str) -> bytes:
-    """Fetch an artefact archive; the token is never sent to the blob-storage redirect target."""
     try:
         with urllib.request.build_opener(_NoRedirect()).open(_request(url, token), timeout=HTTP_TIMEOUT_S) as response:
             return response.read()
@@ -303,7 +266,6 @@ def _download_zip(url: str, token: str) -> bytes:
 
 
 def _event_labels(event_path: str) -> list[str]:
-    """Labels from the event payload; a missing or malformed payload yields no labels, never a crash."""
     try:
         event = json.loads(Path(event_path).read_text(encoding="utf-8"))
         return [label["name"] for label in (event.get("pull_request") or {}).get("labels", [])]
@@ -326,7 +288,6 @@ def github_fetchers(api_url: str, repo: str, token: str, event_path: str = "") -
             return None
 
     def pr_labels(number: int) -> list[str]:
-        # Read live so that re-running a job after adding the label honours it; the event payload of a re-run is stale.
         try:
             return [label["name"] for label in _get_json(f"{base}/issues/{number}/labels", token)]
         except FETCH_ERRORS as exc:
@@ -336,15 +297,11 @@ def github_fetchers(api_url: str, repo: str, token: str, event_path: str = "") -
     return Fetchers(list_artifacts, download_record, pr_labels)
 
 
-# --- Command-line interface --------------------------------------------------------------------------------------
-
-
 def _percent(text: str) -> float:
     return float(text) / 100
 
 
 def _positive_int(text: str) -> int:
-    """A whole number of at least 1; zero or negative counts would empty the baseline or hide every offender."""
     try:
         value = int(text)
     except ValueError:
@@ -355,7 +312,6 @@ def _positive_int(text: str) -> int:
 
 
 def _pr_number(text: str) -> int | None:
-    """An empty or blank pull-request number means none, so no label lookup is made; anything else must be a number."""
     if not text.strip():
         return None
     try:
@@ -365,7 +321,6 @@ def _pr_number(text: str) -> int | None:
 
 
 def _epoch(text: str) -> float | None:
-    """An empty, non-numeric or non-finite start timestamp becomes None so the gate can skip with a notice."""
     try:
         value = float(text)
     except ValueError:
@@ -441,23 +396,20 @@ def run_record(args: argparse.Namespace, now: float, env: Mapping[str, str]) -> 
 
 
 def load_baseline(fetchers: Fetchers, name: str, count: int) -> list[TimingRecord]:
-    """The most recent `count` readable main records; a listing failure means a cold start, never a crash.
-
-    At most `2 * count` downloads are attempted so an unreachable blob store cannot eat the runner's time.
-    """
     try:
         artifacts = select_main_artifacts(fetchers.list_artifacts(name))
     except FETCH_ERRORS as exc:
         notice(f"artefact listing for {name} failed ({exc}); treating as 0 main records")
         return []
+    max_download_attempts = MAX_DOWNLOAD_ATTEMPTS_MULTIPLIER * count
     records: list[TimingRecord] = []
-    for artifact in artifacts[: 2 * count]:
+    for artifact in artifacts[:max_download_attempts]:
         record = fetchers.download_record(artifact)
         records += [record] if record else []
         if len(records) >= count:
             return records
-    if len(artifacts) > 2 * count:
-        notice(f"stopped after {2 * count} artefact downloads for {name}; {len(records)} readable")
+    if len(artifacts) > max_download_attempts:
+        notice(f"stopped after {max_download_attempts} artefact downloads for {name}; {len(records)} readable")
     return records
 
 
