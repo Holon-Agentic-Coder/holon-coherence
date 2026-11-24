@@ -4,6 +4,11 @@ import pathlib
 from unittest.mock import patch
 
 from scripts.pre_commit_check import (
+    BUDGET_CONFIG_REL_PATH,
+    REPO_ROOT,
+    _run_module_budget_check,
+    _should_check_module_budgets,
+    _to_repo_relative,
     check_content,
     get_staged_files,
     is_disallowed_path,
@@ -122,3 +127,56 @@ def test_main_empty_staged_files():
 def test_get_staged_files():
     files = get_staged_files()
     assert isinstance(files, list)
+
+
+def test_to_repo_relative(tmp_path: pathlib.Path):
+    assert _to_repo_relative("./src/holon_coherence/cli.py") == "src/holon_coherence/cli.py"
+    assert _to_repo_relative(REPO_ROOT / "scripts/pre_commit_check.py") == "scripts/pre_commit_check.py"
+    assert _to_repo_relative(tmp_path / "outside.py") is None
+
+
+def test_should_check_module_budgets(tmp_path: pathlib.Path):
+    assert _should_check_module_budgets(["README.md"], check_all=True)
+    assert _should_check_module_budgets(["src/holon_coherence/cli.py"], check_all=False)
+    assert _should_check_module_budgets(["scripts/check_module_budgets.py"], check_all=False)
+    assert _should_check_module_budgets([str(REPO_ROOT / "scripts/pre_commit_check.py")], check_all=False)
+    assert _should_check_module_budgets([BUDGET_CONFIG_REL_PATH], check_all=False)
+    assert not _should_check_module_budgets(["README.md", "tests/test_pre_commit_check.py"], check_all=False)
+    assert not _should_check_module_budgets([str(tmp_path / "outside.py")], check_all=False)
+
+
+def test_run_module_budget_check_prints_notices_and_returns_errors(capsys):
+    with patch(
+        "scripts.check_module_budgets.check_repo_budgets",
+        return_value=(["src/app/mod.py: 205 > 200 lines"], ["Ratchet notice: src/app/old.py"]),
+    ) as mock_check:
+        errors = _run_module_budget_check()
+    mock_check.assert_called_once_with(REPO_ROOT)
+    assert errors == ["src/app/mod.py: 205 > 200 lines"]
+    assert "Ratchet notice: src/app/old.py" in capsys.readouterr().out
+
+
+def test_main_propagates_module_budget_failures_and_skips_unrelated(tmp_path: pathlib.Path, capsys):
+    unrelated = tmp_path / "clean.py"
+    unrelated.write_text('print("ok")\n', encoding="utf-8")
+    with patch("scripts.pre_commit_check._run_module_budget_check", return_value=["budget failure"]) as mock_budget:
+        assert main([str(unrelated)]) == 0
+        mock_budget.assert_not_called()
+
+    with (
+        patch("scripts.pre_commit_check.scan_file", return_value=[]),
+        patch(
+            "scripts.pre_commit_check._run_module_budget_check",
+            return_value=["src/app/mod.py: 205 > 200 lines"],
+        ) as mock_budget,
+    ):
+        assert main(["src/app/mod.py"]) == 1
+        mock_budget.assert_called_once_with()
+    assert "src/app/mod.py: 205 > 200 lines" in capsys.readouterr().out
+
+    with (
+        patch("scripts.pre_commit_check.scan_file", return_value=[]),
+        patch("scripts.pre_commit_check._run_module_budget_check", return_value=[]) as mock_budget,
+    ):
+        assert main([BUDGET_CONFIG_REL_PATH]) == 0
+        mock_budget.assert_called_once_with()
