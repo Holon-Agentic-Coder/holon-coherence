@@ -1,5 +1,3 @@
-"""A/B testing package for holon-coherence context optimization."""
-
 from __future__ import annotations
 
 from holon_coherence.ab_testing.evaluation import (

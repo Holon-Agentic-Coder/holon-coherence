@@ -1,5 +1,3 @@
-"""Unit tests for A/B testing evaluation domain module."""
-
 from __future__ import annotations
 
 import json
@@ -16,7 +14,6 @@ from holon_coherence.ab_testing.evaluation import (
 
 
 def test_load_trace_transactions_json_array(tmp_path: Path) -> None:
-    """Load trace transactions from JSON array file."""
     fpath = tmp_path / "trace_array.json"
     records = [{"turn_id": "t1", "raw_request": {"request": {"messages": [{"role": "user", "content": "hello"}]}}}]
     fpath.write_text(json.dumps(records), encoding="utf-8")
@@ -27,7 +24,6 @@ def test_load_trace_transactions_json_array(tmp_path: Path) -> None:
 
 
 def test_load_trace_transactions_jsonl_with_corrupt_lines(tmp_path: Path) -> None:
-    """Load trace transactions from JSONL, skipping unparseable lines."""
     fpath = tmp_path / "trace.jsonl"
     fpath.write_text(
         "   \n"
@@ -43,13 +39,11 @@ def test_load_trace_transactions_jsonl_with_corrupt_lines(tmp_path: Path) -> Non
 
 
 def test_load_trace_transactions_nonexistent() -> None:
-    """Missing file raises FileNotFoundError."""
     with pytest.raises(FileNotFoundError):
         load_trace_transactions("nonexistent_path_xyz.jsonl")
 
 
 def test_load_trace_transactions_empty(tmp_path: Path) -> None:
-    """Empty file raises ValueError."""
     fpath = tmp_path / "empty.jsonl"
     fpath.write_text("", encoding="utf-8")
     with pytest.raises(ValueError, match="No valid transaction records"):
@@ -57,7 +51,6 @@ def test_load_trace_transactions_empty(tmp_path: Path) -> None:
 
 
 def test_load_transactions_from_path_dir_walk(tmp_path: Path) -> None:
-    """Walk directory to find .jsonl and turn_*.json files."""
     subdir = tmp_path / "traces"
     subdir.mkdir()
     (subdir / "run1.jsonl").write_text('{"turn_id": "t1"}\n', encoding="utf-8")
@@ -69,7 +62,6 @@ def test_load_transactions_from_path_dir_walk(tmp_path: Path) -> None:
 
 
 def test_evaluate_offline_ab_run_parity_failure() -> None:
-    """Detect semantic parity discrepancy when messages are missing from optimized payload."""
     tx = {
         "turn_id": "t-discrepancy",
         "provider": "anthropic",
@@ -96,7 +88,6 @@ def test_evaluate_offline_ab_run_parity_failure() -> None:
 
 
 def test_evaluate_runs_different_turn_lengths() -> None:
-    """Evaluate runs with unequal turns by pairing up to minimum turn count."""
     base_txs = [
         {
             "turn_id": "t1",
