@@ -1,0 +1,29 @@
+{
+  "kb_id": "KB-failure-c7dd6731",
+  "kb_type": "failure_mode",
+  "version": "1.0",
+  "created_ts": "2026-11-24T07:30:23.568602+00:00",
+  "updated_ts": "2026-11-24T07:30:23.568602+00:00",
+  "created_by": "holon-promotion-engine",
+  "status": "active",
+  "evidence": {
+    "ledger_refs": [
+      "REV-1795501373-3c4a99fb-antigravity-agent",
+      "REV-1795501372-928c4e28-antigravity-agent"
+    ],
+    "success_count": 0,
+    "failure_count": 2,
+    "ladder_state": "repeated"
+  },
+  "tags": [
+    "general",
+    "veto"
+  ],
+  "human_approved": false,
+  "payload": {
+    "name": "Failure mode in I-1795500029-coherence-providers-self-doc/P-1795500046-ANA-G4A/_",
+    "description": "Reproduced failure across 2 executions with identical context.",
+    "action": "Review Loop halted without consensus after 1 iteration(s): not approved: reviewer 1 final verdict CHANGES_REQUESTED, reviewer 1 Engineering role CHANGES, reviewer 2 final verdict FAILED, reviewer 3 final verdict FAILED; final verdicts: Reviewer 1 CHANGES_REQUESTED (0/0/2); Reviewer 1 Engineering role CHANGES; Reviewer 2 FAILED (0/0/0); Reviewer 3 FAILED (0/0/0)",
+    "symptoms": []
+  }
+}

@@ -1,11 +1,13 @@
-"""Provider wire format implementations and registry."""
-
 from __future__ import annotations
 
 from typing import Any
 from urllib.parse import urlparse
 
 from holon_coherence.providers.base import ProviderFormat
+
+DEFAULT_FALLBACK_PROVIDER_NAME = "openai"
+UNKNOWN_PROVIDER_NAME = "unknown"
+GEMINI_API_HOSTNAME = "generativelanguage.googleapis.com"
 
 OPENAI_PROVIDERS: tuple[str, ...] = (
     "openai",
@@ -26,12 +28,10 @@ _REGISTRY: dict[str, ProviderFormat] = {}
 
 
 def register_provider(name: str, provider: ProviderFormat) -> None:
-    """Registers a provider instance in the global registry."""
     _REGISTRY[name.strip().lower()] = provider
 
 
 def _load_default_providers() -> None:
-    """Lazily loads and registers default provider implementations."""
     try:
         from holon_coherence.providers.anthropic import AnthropicProvider
 
@@ -49,20 +49,21 @@ def _load_default_providers() -> None:
     try:
         from holon_coherence.providers.openai import OpenAIProvider
 
-        _REGISTRY.setdefault("openai", OpenAIProvider())
+        _REGISTRY.setdefault(DEFAULT_FALLBACK_PROVIDER_NAME, OpenAIProvider())
     except ImportError:
         pass
 
 
 def get_provider(name: str) -> ProviderFormat:
-    """Retrieves the provider implementation for a given provider name, defaulting to openai."""
     _load_default_providers()
     key = name.strip().lower() if name else ""
     if key in _REGISTRY:
         return _REGISTRY[key]
-    if "openai" in _REGISTRY:
-        return _REGISTRY["openai"]
-    raise KeyError(f"No provider registered for '{name}' and fallback 'openai' is unavailable.")
+    if DEFAULT_FALLBACK_PROVIDER_NAME in _REGISTRY:
+        return _REGISTRY[DEFAULT_FALLBACK_PROVIDER_NAME]
+    raise KeyError(
+        f"No provider registered for '{name}' and fallback '{DEFAULT_FALLBACK_PROVIDER_NAME}' is unavailable."
+    )
 
 
 def _detect_by_url(url_or_path: str) -> str | None:
@@ -74,15 +75,15 @@ def _detect_by_url(url_or_path: str) -> str | None:
     if "anthropic" in url_lower or "v1/messages" in url_lower:
         return "anthropic"
     if (
-        hostname == "generativelanguage.googleapis.com"
-        or hostname.endswith(".generativelanguage.googleapis.com")
+        hostname == GEMINI_API_HOSTNAME
+        or hostname.endswith(f".{GEMINI_API_HOSTNAME}")
         or "gemini" in url_lower
         or "generatecontent" in url_lower
         or "streamgeneratecontent" in url_lower
     ):
         return "gemini"
     if any(p in url_lower for p in OPENAI_PROVIDERS):
-        return "openai"
+        return DEFAULT_FALLBACK_PROVIDER_NAME
     return None
 
 
@@ -97,12 +98,11 @@ def _detect_by_payload(payload: dict[str, Any]) -> str | None:
     if "system" in payload:
         return "anthropic"
     if "messages" in payload or "prompt" in payload:
-        return "openai"
+        return DEFAULT_FALLBACK_PROVIDER_NAME
     return None
 
 
 def detect_provider_name(url_or_path: str, payload: dict[str, Any] | None = None) -> str:
-    """Infers provider name from request URL or payload signature."""
     if url_or_path:
         detected = _detect_by_url(url_or_path)
         if detected:
@@ -111,11 +111,10 @@ def detect_provider_name(url_or_path: str, payload: dict[str, Any] | None = None
         detected = _detect_by_payload(payload)
         if detected:
             return detected
-    return "unknown"
+    return UNKNOWN_PROVIDER_NAME
 
 
 def resolve_provider(url_or_path: str, payload: dict[str, Any] | None = None) -> ProviderFormat:
-    """Resolves provider implementation from URL or payload heuristics."""
     name = detect_provider_name(url_or_path, payload)
     return get_provider(name)
 
