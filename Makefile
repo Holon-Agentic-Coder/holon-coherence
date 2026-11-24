@@ -2,125 +2,40 @@ include config/config.mk
 
 .DEFAULT_GOAL := help
 
-# OS and Architecture Detection
 DETECTED_OS := $(shell uname -s)
 DETECTED_ARCH := $(shell uname -m)
 
-# Dry-run detection, consulted by install-docker, check-docker, check-prerequisites and
-# install-miniforge.
-#
-# Why a guard is needed at all: GNU make EXECUTES every recipe line that references $(MAKE)
-# even under -n (measured on 3.81 and 4.4.1 - the whole shell command runs, so everything
-# sharing that line with the recursion runs with it). These recipes probe and install, so
-# they cannot leave the decision to make's own -n handling.
-#
-# Why the two earlier detectors were wrong: they read MAKEFLAGS, which no two makes write
-# alike. Measured with `make -f probe.mk <flags> print-mf`, which echoes $(MAKEFLAGS):
-#
-#   flags                       GNU make 3.81                 GNU make 4.4.1
-#   -n                          n                             n
-#   -Bn                         nB                            Bn
-#   --no-print-directory -n     " --no-print-directory -n"    "n --no-print-directory"
-#   -I incdir_n                 "I incdir_n"                  " -Iincdir_n"
-#   DETECTED_OS=Linux           "DETECTED_OS=Linux"           " -- DETECTED_OS=Linux"
-#
-# 3.81 writes long options that have no short equivalent BEFORE the compacted single-letter
-# cluster, and writes that cluster with a leading dash (`-nB`); 4.x writes the cluster first
-# and glues an option's value onto its flag (`-Iincdir_n`). Reading only the first word - the
-# previous revision - misses 3.81's dry run completely: the long option is dropped, the
-# cluster is never read, DRY_RUN stays empty and `make --no-print-directory -n check-prerequisites`
-# executes every probe for real. Reading every word - the revision before that - reads an
-# option's own argument as a -n, and arguments are paths: `make -I incdir_n` then reported a
-# green prerequisite check that had checked nothing.
-#
-# The rule below drops leading long options and leading VAR=value assignments (make never
-# puts a flag cluster or an option argument in front of those), consults the ONE word left at
-# the front, and counts it as the cluster only when every character in it is a single-letter
-# option make really accepts. So `I incdir_n`, `-Iincdir_n`, `-In` and `-j4` cannot read as a
-# -n, while `n`, `nB`, `sn` and 3.81's dashed `-nI` do. A dashed word is believed only when a
-# long option led, because that is the only situation any measured make writes a dashed
-# cluster, and 4.x spells an include directory `-In`.
-#
-# These are recursive (=) on purpose: the value must be read when the recipe is expanded, not
-# when this makefile is parsed. GNU make 3.81 reports a half-built MAKEFLAGS during parsing
-# (`-I incdir_n` is not in it yet), which is a different string from the one the recipe's own
-# sub-makes are given.
-#
-# What is not covered, and which way it fails: a make that spells dry run only inside a word
-# this rule rejects reads as NOT a dry run, so the probes run and print during `make -n`.
-# That is the harmless direction - nothing is installed, because no recipe line that installs
-# references $(MAKE) any more (see the install-homebrew / install-docker prerequisites below).
-# No spelling measured on 3.81 or 4.4.1 fails in that direction, and none was found that fails
-# the other way; the detector is not claimed to be complete for makes that were not measured.
 MF_SINGLE_LETTER_OPTIONS := b B c C d D e E f F g G h i I j k l L m n N o p q r R s S t v w W
 MF_ALPHANUMERIC := a b c d e f g h i j k l m n o p q r s t u v w x y z A B C D E F G H I J K L M N O P Q R S T U V W X Y Z 0 1 2 3 4 5 6 7 8 9
 
-# The characters in $1 that no single-letter make option uses: non-empty means $1 is an
-# option argument or an assignment, never make's compacted flag cluster.
 mf_non_option_characters = $(strip $(foreach character,$(MF_ALPHANUMERIC),$(if $(findstring $(character),$(1)),$(if $(filter $(character),$(MF_SINGLE_LETTER_OPTIONS)),,$(character)))))
 mf_drop_leading_long_options = $(if $(filter --%,$(firstword $(1))),$(call mf_drop_leading_long_options,$(wordlist 2,$(words $(1)),$(1))),$(1))
 mf_drop_leading_assignments = $(if $(findstring =,$(firstword $(1))),$(call mf_drop_leading_assignments,$(wordlist 2,$(words $(1)),$(1))),$(1))
 
 MF_ASSIGNMENT_REGION = $(call mf_drop_leading_assignments,$(MAKEFLAGS))
 MF_LONG_OPTION_REGION = $(call mf_drop_leading_long_options,$(MF_ASSIGNMENT_REGION))
-# Non-empty when long options were dropped from the front, which is when 3.81 dashes the cluster.
 MF_LONG_OPTION_LEADS = $(if $(filter $(words $(MF_ASSIGNMENT_REGION)),$(words $(MF_LONG_OPTION_REGION))),,1)
 MF_FLAG_WORD = $(firstword $(MF_LONG_OPTION_REGION))
 MF_FLAG_LETTERS = $(if $(filter -%,$(MF_FLAG_WORD)),$(if $(MF_LONG_OPTION_LEADS),$(subst -,,$(MF_FLAG_WORD))),$(MF_FLAG_WORD))
 MF_OPTION_CLUSTER = $(if $(MF_FLAG_LETTERS),$(if $(call mf_non_option_characters,$(MF_FLAG_LETTERS)),,$(MF_FLAG_LETTERS)))
 DRY_RUN = $(if $(findstring n,$(MF_OPTION_CLUSTER)),1,)
 
-# Whether the host still needs Homebrew, and whether it already has a Docker CLI. Decided
-# while the makefile is read so that the installs below can express their recursion as a
-# prerequisite instead of as a $(MAKE) reference inside a recipe line.
 NEEDS_HOMEBREW := $(if $(filter Darwin,$(DETECTED_OS)),$(if $(shell command -v brew 2>/dev/null),,yes),)
 HAVE_DOCKER_CLI := $(shell command -v docker 2>/dev/null)
 
-# CI Detection
 CI ?= false
 
-# Automated prerequisite installation (set to false in check-prerequisites for read-only probe)
 AUTO_INSTALL ?= true
 
-# Conda Environment Configuration.
-#
-# CONDA_ENV is the *read* default used when reporting prerequisites: reporting
-# the active environment is the most useful thing, so default it to
-# CONDA_DEFAULT_ENV when one is active, else holon.
 ifdef CONDA_DEFAULT_ENV
 CONDA_ENV ?= $(CONDA_DEFAULT_ENV)
 else
 CONDA_ENV ?= holon
 endif
 
-# CONDA_WRITE_ENV is the *write* target used by create-conda-env. It never
-# follows the active environment: an activated `base` is not consent to install
-# packages into base. It defaults to holon and tracks CONDA_ENV when that value
-# was passed on the make command line or inherited from the environment, so an
-# exported CONDA_ENV still names the environment this target works on.
-#
-# CONDA_BASE_CONSENT is the resolved answer to "may this run write into the
-# shared base environment?". Consent must be given IN THIS INVOCATION, by one of:
-#   - `make create-conda-env CONDA_ENV=base`   (typed on the command line),
-#   - `make create-conda-env CONDA_ALLOW_BASE=1` (pre-authorises a typed choice),
-#   - a typed `yes` at the interactive prompt.
-# An INHERITED variable is never consent: `export CONDA_ENV=base` or
-# `export CONDA_ALLOW_BASE=1` in the shell leaves CONDA_BASE_CONSENT=false and the
-# recipe refuses at runtime and says why. That is why CONDA_BASE_CONSENT is named
-# for the resolved decision and CONDA_ALLOW_BASE for the deliberate act.
-#
-# One qualification, so the wording is not over-broad: make carries command-line
-# assignments into sub-makes through MAKEFLAGS, and a value that arrives that way still
-# has command-line origin, so it does count as consent. `export MAKEFLAGS='CONDA_ENV=base'
-# make ...` is therefore a deliberate (if obscure) act rather than inherited state. Nothing
-# in this repository or .github/workflows sets MAKEFLAGS, and stripping it would break the
-# sanctioned recursion (create-conda-env -> install-miniforge, check-prerequisites ->
-# check-docker), so the channel stays as make defines it and the sentence is narrowed here
-# instead.
 CONDA_ENV_ORIGIN := $(origin CONDA_ENV)
 CONDA_ALLOW_BASE_ORIGIN := $(origin CONDA_ALLOW_BASE)
 CONDA_ENV_REQUESTED := $(if $(or $(findstring command line,$(CONDA_ENV_ORIGIN)),$(findstring environment,$(CONDA_ENV_ORIGIN))),true,false)
-# Command-line origin only: this is the test that separates a deliberate act from inherited state.
 CONDA_ENV_ON_COMMAND_LINE := $(if $(findstring command line,$(CONDA_ENV_ORIGIN)),true,false)
 CONDA_ALLOW_BASE_REQUESTED := $(if $(filter 1 true yes,$(CONDA_ALLOW_BASE)),$(if $(findstring command line,$(CONDA_ALLOW_BASE_ORIGIN)),true,false),false)
 ifeq ($(CONDA_ENV_REQUESTED),true)
@@ -129,10 +44,6 @@ else
 CONDA_WRITE_ENV := holon
 endif
 CONDA_BASE_CONSENT := false
-# CONDA_ALLOW_BASE pre-authorises a choice typed in THIS invocation. It must not turn an
-# inherited `export CONDA_ENV=base` into consent: there the name was not typed, so base
-# would be selected by inherited state alone (one Enter at the prompt, or no prompt at all
-# in CI). The name has to be on the command line, or not base, for the flag to count.
 ifeq ($(CONDA_ALLOW_BASE_REQUESTED),true)
 ifeq ($(and $(filter base,$(CONDA_WRITE_ENV)),$(filter environment,$(CONDA_ENV_ORIGIN))),)
 CONDA_BASE_CONSENT := true
@@ -144,29 +55,17 @@ CONDA_BASE_CONSENT := true
 endif
 endif
 
-# Upper bound, in seconds, for the interactive target prompt. `create-conda-env` offers
-# the prompt whenever stdin is a terminal, which includes pty-backed automation; a run
-# that never answers must fail fast instead of blocking forever. A timeout (or a shell
-# whose `read` cannot time out) is a REFUSAL, never an implicit yes.
 CONDA_PROMPT_TIMEOUT ?= 20
 
-# Pruning an environment this target did not create can remove packages the
-# user added by hand, so it is opt-in: pass CONDA_PRUNE=1 (or true).
 CONDA_PRUNE ?= false
-# Command-line origin only, matching CONDA_ALLOW_BASE. `--prune` removes packages that are
-# absent from environment.yml from an environment this target may not have created, so the
-# destructive choice must come from an act in this invocation: `CONDA_PRUNE=1 make ...` (the
-# idiomatic one-off) qualifies, `export CONDA_PRUNE=1` left in the shell does not.
 CONDA_PRUNE_EFFECTIVE := $(if $(findstring command line,$(origin CONDA_PRUNE)),$(CONDA_PRUNE),false)
 
-# Options passed to build_image.sh (use --output-log in CI environments)
 ifeq ($(CI),true)
 BUILD_IMAGE_ARGS ?= --output-log
 else
 BUILD_IMAGE_ARGS ?=
 endif
 
-# Terminal Colors (disabled in CI or when NO_COLOR is set)
 ifeq ($(CI),true)
 COLOR_BOLD :=
 COLOR_GREEN :=
@@ -189,18 +88,6 @@ endif
 
 .PHONY: check-prerequisites prerequisites check-docker install-docker install-homebrew install-miniforge create-conda-env activate-conda-env build-image build-images tools check lint lint-json lint-yaml lint-shell lint-md pre-commit-check help
 
-## ==============================================================================
-## Docker & Prerequisite Installation & Checks
-## ==============================================================================
-
-# Install Homebrew if not installed (macOS).
-#
-# Leaf installer: its recipe references no $(MAKE), which is what makes it safe to reach
-# under -n. GNU make executes any recipe line that references $(MAKE) even in a dry run, so
-# an installer reached that way would run for real; an installer on a line without that
-# reference is only printed. The two targets that used to bootstrap Homebrew from inside
-# their own installing shell command now take it as a prerequisite instead, decided when the
-# makefile is read, so that their install lines contain no recursion at all.
 install-homebrew:
 	@if [ "$(DETECTED_OS)" = "Darwin" ]; then \
 		if ! command -v brew >/dev/null 2>&1; then \
@@ -216,7 +103,6 @@ install-docker: install-homebrew
 install-miniforge: install-homebrew
 endif
 
-# Install Docker based on operating system
 install-docker:
 	@echo "$(COLOR_BOLD)Checking Docker installation for $(DETECTED_OS)...$(COLOR_RESET)"
 	@if [ -n "$(DRY_RUN)" ]; then exit 0; \
@@ -254,12 +140,6 @@ install-docker:
 		fi; \
 	fi
 
-# Check Docker prerequisite (CLI, buildx, daemon). Docker itself is installed by the
-# install-docker prerequisite below, not from inside this recipe: the probe below shares one
-# shell command with the buildx install further down, and a line that references $(MAKE) is
-# executed even under -n, which would have run both of them during a dry run. AUTO_INSTALL
-# now selects the prerequisite while the makefile is read, which is the same decision this
-# target made at runtime before.
 check-docker:
 	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
 	ERRORS=0; \
@@ -355,7 +235,6 @@ check-docker: install-docker
 endif
 endif
 
-# Check system prerequisites: Docker (CLI, buildx, daemon), Conda, uv, OpenSSL, and npx
 check-prerequisites:
 	@echo "$(COLOR_BOLD)=========================================$(COLOR_RESET)"
 	@echo "$(COLOR_BOLD) Checking Prerequisites for holon-coherence$(COLOR_RESET)"
@@ -444,10 +323,8 @@ check-prerequisites:
 		echo "$(COLOR_GREEN)✅ All prerequisites are satisfied!$(COLOR_RESET)"; \
 	fi
 
-# Alias for check-prerequisites
 prerequisites: check-prerequisites
 
-# Install Miniforge based on operating system
 install-miniforge:
 	@echo "$(COLOR_BOLD)Installing Miniforge for $(DETECTED_OS)...$(COLOR_RESET)"
 	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
@@ -519,22 +396,8 @@ install-miniforge:
 		exit 1; \
 	fi
 
-# Single-quote a make value for the recipe's shell. CONDA_ENV and CONDA_PROMPT_TIMEOUT
-# can come from the caller's environment, and a backtick or $( ) inside the
-# double quotes the recipe used to wrap them in ran as shell code before any validation saw it.
-# Inside single quotes only a single quote is special, and it is closed, escaped and reopened.
 shq = '$(subst ','\'',$(1))'
 
-# Create or update conda environment with interactive confirmation/selection
-#
-# The prompt is offered only when this invocation has to INVENT a name. A name typed on the
-# command line is already the answer the prompt asks for, so the prompt - and with it the
-# `read -t` capability probe - is skipped for it. That ordering matters twice over: the
-# probe runs first in a shell, and `read` has no -t on dash (Debian/Ubuntu /bin/sh), so a
-# probe placed ahead of the explicit name refused `make create-conda-env CONDA_ENV=mydev`
-# on dash, which is the exact command this target's own abort text and README.md both tell
-# dash users to run. Refusing is reserved for the case it belongs in: no name typed, so the
-# default would be picked on the user's behalf by an unbounded read.
 create-conda-env: install-miniforge
 	@$(FIND_CONDA_BIN); \
 	if [ -z "$$CONDA_BIN" ]; then \
@@ -627,7 +490,6 @@ create-conda-env: install-miniforge
 		echo "  conda activate $$CHOSEN_ENV"; \
 	fi
 
-# Activate conda environment command helper
 activate-conda-env:
 	@echo "Target conda environment: $(CONDA_WRITE_ENV)"
 	@if [ -n "$$CONDA_DEFAULT_ENV" ]; then \
@@ -643,24 +505,12 @@ activate-conda-env:
 		echo "  conda activate $(CONDA_WRITE_ENV)"; \
 	fi
 
-## ==============================================================================
-## Docker Image Build
-## ==============================================================================
-
-# Build the holon-coherence Docker container image
 build-image: check-docker
 	@echo "$(COLOR_BOLD)Building holon-coherence Docker image...$(COLOR_RESET)"
 	@./build_image.sh $(BUILD_IMAGE_ARGS)
 
-# Alias for build-image
 build-images: build-image
 
-
-## ==============================================================================
-## Developer & Quality Toolbelt Targets
-## ==============================================================================
-
-# Inspect OS toolbelt dependencies
 tools:
 	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
 	ERRORS=0; \
@@ -695,7 +545,6 @@ tools:
 		echo "$(COLOR_GREEN)✅ All toolbelt tools are present.$(COLOR_RESET)"; \
 	fi
 
-# Pre-commit credential and scratch file detection check
 pre-commit-check:
 	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
 	echo "$(COLOR_BOLD)Running pre-commit security and scratch file checks...$(COLOR_RESET)"; \
@@ -705,7 +554,6 @@ pre-commit-check:
 		python3 scripts/pre_commit_check.py; \
 	fi
 
-# Check JSON formatting with Prettier
 lint-json:
 	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
 	if command -v npx >/dev/null 2>&1; then \
@@ -715,7 +563,6 @@ lint-json:
 		echo "$(COLOR_YELLOW)⚠️  npx not found on PATH, skipping lint-json$(COLOR_RESET)"; \
 	fi
 
-# Check YAML formatting with Prettier
 lint-yaml:
 	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
 	if command -v npx >/dev/null 2>&1; then \
@@ -725,7 +572,6 @@ lint-yaml:
 		echo "$(COLOR_YELLOW)⚠️  npx not found on PATH, skipping lint-yaml$(COLOR_RESET)"; \
 	fi
 
-# Check shell scripts with shellcheck
 lint-shell:
 	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
 	if command -v shellcheck >/dev/null 2>&1; then \
@@ -735,7 +581,6 @@ lint-shell:
 		echo "$(COLOR_YELLOW)⚠️  shellcheck not found on PATH, skipping lint-shell$(COLOR_RESET)"; \
 	fi
 
-# Check Markdown formatting with Prettier
 lint-md:
 	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
 	if command -v npx >/dev/null 2>&1; then \
@@ -745,7 +590,6 @@ lint-md:
 		echo "$(COLOR_YELLOW)⚠️  npx not found on PATH, skipping lint-md$(COLOR_RESET)"; \
 	fi
 
-# Run all repository lint checks
 lint: pre-commit-check lint-json lint-yaml lint-shell lint-md
 	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
 	if command -v uv >/dev/null 2>&1; then \
@@ -753,15 +597,8 @@ lint: pre-commit-check lint-json lint-yaml lint-shell lint-md
 		uv run task lint; \
 	fi
 
-# Comprehensive pre-commit and lint check
 check: pre-commit-check lint
 
-
-## ==============================================================================
-## Help Target
-## ==============================================================================
-
-# Show this help message
 help:
 	@echo "$(COLOR_BOLD)Usage:$(COLOR_RESET) make [target]"
 	@echo "All targets must be executed from the root of the repository."
