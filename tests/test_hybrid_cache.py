@@ -1,5 +1,3 @@
-"""Tests for HybridCacheStore shingle storage, migration and concurrency."""
-
 import json
 import sqlite3
 import threading
@@ -17,7 +15,6 @@ def _payload(text: str, system: str = "You are a coding agent.") -> dict:
 
 
 def test_put_stores_precomputed_shingles(tmp_path) -> None:
-    """A write must record the tokens and system hash the next miss will compare against."""
     store = HybridCacheStore(cache_dir=str(tmp_path))
     store.put(_payload("refactor the parser to use a state machine"), {"content": "ok"}, provider="openai")
 
@@ -29,11 +26,6 @@ def test_put_stores_precomputed_shingles(tmp_path) -> None:
 
 
 def test_semantic_miss_does_not_deserialize_candidates(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """PERF-01: a miss used to re-parse and re-tokenize up to `candidate_limit` stored payloads.
-
-    Instrumenting the extractor is the honest way to pin this: with shingles present the scan may
-    touch the extractor exactly once (for the incoming payload) no matter how many rows are stored.
-    """
     store = HybridCacheStore(cache_dir=str(tmp_path), candidate_limit=100)
     for i in range(40):
         store.put(_payload(f"unrelated cached transaction {i} alpha beta"), {"content": str(i)}, provider="openai")
@@ -77,7 +69,6 @@ CREATE TABLE prompt_cache (
 
 
 def _write_legacy_database(cache_dir, rows: list[tuple[str, str, str]]) -> None:
-    """Write a pre-shingles cache file so the store's own migration is what we exercise."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(str(cache_dir / "llm_cache.db")) as conn:
         conn.execute(LEGACY_SCHEMA)
@@ -90,7 +81,6 @@ def _write_legacy_database(cache_dir, rows: list[tuple[str, str, str]]) -> None:
 
 
 def test_legacy_database_gains_the_shingle_columns_on_open(tmp_path) -> None:
-    """Migration has to run against an existing file, not only a freshly created one."""
     _write_legacy_database(tmp_path, [("legacykey1", "openai", json.dumps(_payload("placeholder")), "{}")])
 
     store = HybridCacheStore(cache_dir=str(tmp_path))
@@ -102,7 +92,6 @@ def test_legacy_database_gains_the_shingle_columns_on_open(tmp_path) -> None:
 
 
 def test_legacy_rows_without_shingles_still_hit_and_are_backfilled(tmp_path) -> None:
-    """An old row must still produce a semantic hit, and must gain shingles on the way."""
     payload = _payload("refactor the parser to use a state machine")
     _write_legacy_database(
         tmp_path,
@@ -118,7 +107,6 @@ def test_legacy_rows_without_shingles_still_hit_and_are_backfilled(tmp_path) -> 
 
 
 def test_concurrent_writers_and_readers_do_not_error(tmp_path) -> None:
-    """WAL plus an explicit busy_timeout must absorb parallel agent workloads without OperationalError."""
     store = HybridCacheStore(cache_dir=str(tmp_path))
     errors: list[BaseException] = []
     providers = ["openai", "anthropic", "gemini"]
@@ -149,20 +137,20 @@ def test_concurrent_writers_and_readers_do_not_error(tmp_path) -> None:
 
 
 def test_sqlite_pragmas_applied_on_every_connection(tmp_path) -> None:
-    """Verify busy_timeout=5000, journal_mode=WAL, and synchronous=NORMAL on opened connections."""
+    expected_busy_timeout_ms = 5000
+    expected_synchronous_normal = 1
     store = HybridCacheStore(cache_dir=str(tmp_path))
     with store._connect() as conn:
         busy_timeout = conn.execute("PRAGMA busy_timeout;").fetchone()[0]
         journal_mode = conn.execute("PRAGMA journal_mode;").fetchone()[0].lower()
         synchronous = conn.execute("PRAGMA synchronous;").fetchone()[0]
 
-    assert busy_timeout == 5000
+    assert busy_timeout == expected_busy_timeout_ms
     assert journal_mode == "wal"
-    assert synchronous == 1
+    assert synchronous == expected_synchronous_normal
 
 
 def test_concurrent_prune_and_read_write_interleaving(tmp_path) -> None:  # noqa: C901
-    """Background pruning threads concurrently with active readers and writers."""
     store = HybridCacheStore(cache_dir=str(tmp_path), ttl_seconds=1.0, prune_interval_seconds=0.01, prune_batch_size=5)
     for i in range(20):
         store.put(_payload(f"initial item {i}"), {"val": i}, provider="openai")
@@ -206,7 +194,6 @@ def test_concurrent_prune_and_read_write_interleaving(tmp_path) -> None:  # noqa
 
 
 def test_malformed_payload_normalization_does_not_corrupt_cache(tmp_path) -> None:
-    """Test unparseable strings, missing messages/system prompts, and non-dict payload elements."""
     store = HybridCacheStore(cache_dir=str(tmp_path))
     malformed_payloads = [
         {"messages": "not-a-list", "system": 12345},
@@ -228,7 +215,6 @@ def test_malformed_payload_normalization_does_not_corrupt_cache(tmp_path) -> Non
 
 
 def test_connections_are_closed_after_each_operation(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`with sqlite3.connect(...)` commits but never closes; a leaked handle pins a WAL snapshot."""
     opened: list[sqlite3.Connection] = []
     real_connect = sqlite3.connect
 
@@ -249,14 +235,12 @@ def test_connections_are_closed_after_each_operation(tmp_path, monkeypatch: pyte
 
 
 def _age_entries(store: HybridCacheStore, seconds: float) -> None:
-    """Backdate every row, so TTL behaviour is tested without sleeping."""
     with sqlite3.connect(store.db_path) as conn:
         conn.execute("UPDATE prompt_cache SET created_at = created_at - ?", (seconds,))
         conn.commit()
 
 
 def test_expired_entry_is_not_served_even_before_a_sweep(tmp_path) -> None:
-    """A TTL that only the sweeper honours is a suggestion, not a bound."""
     store = HybridCacheStore(cache_dir=str(tmp_path), ttl_seconds=60, prune_interval_seconds=10_000)
     store.put(_payload("refactor the parser"), {"content": "stale"}, provider="openai")
     _age_entries(store, 120)
@@ -278,7 +262,6 @@ def test_sweep_removes_expired_rows_and_keeps_fresh_ones(tmp_path) -> None:
 
 
 def test_sweep_is_time_gated_rather_than_per_write(tmp_path) -> None:
-    """Ten writes must not cost ten table scans."""
     store = HybridCacheStore(cache_dir=str(tmp_path), ttl_seconds=60, prune_interval_seconds=600)
 
     for i in range(10):
@@ -288,7 +271,6 @@ def test_sweep_is_time_gated_rather_than_per_write(tmp_path) -> None:
 
 
 def test_sweep_deletes_in_batches_larger_than_the_batch_size(tmp_path) -> None:
-    """The loop must keep going until the table is clean, not stop at the first batch."""
     store = HybridCacheStore(cache_dir=str(tmp_path), ttl_seconds=60, prune_batch_size=3)
     for i in range(10):
         store.put(_payload(f"bulk entry {i} token set"), {"content": str(i)}, provider="openai")
@@ -300,7 +282,6 @@ def test_sweep_deletes_in_batches_larger_than_the_batch_size(tmp_path) -> None:
 
 
 def test_ttl_zero_disables_expiry_entirely(tmp_path) -> None:
-    """`ttl_seconds=0` must serve rows of any age and delete none."""
     store = HybridCacheStore(cache_dir=str(tmp_path), ttl_seconds=0)
     store.put(_payload("refactor the parser"), {"content": "kept"}, provider="openai")
     _age_entries(store, 10**9)
@@ -310,13 +291,16 @@ def test_ttl_zero_disables_expiry_entirely(tmp_path) -> None:
 
 
 def test_sweep_gate_ignores_wall_clock_steps(tmp_path) -> None:
-    """The sweep interval is a duration: a forward wall-clock jump must not trigger extra sweeps."""
+    forward_wall_clock_jump_seconds = 86_400.0
     store = HybridCacheStore(cache_dir=str(tmp_path), ttl_seconds=60, prune_interval_seconds=600)
     store.put(_payload("first shared words"), {"content": "1"}, provider="openai")
     assert store._sweep_count == 1
 
     real_time = time.time
-    with patch("holon_coherence.hybrid_cache.time.time", side_effect=lambda: real_time() + 86_400.0):
+    with patch(
+        "holon_coherence.hybrid_cache.time.time",
+        side_effect=lambda: real_time() + forward_wall_clock_jump_seconds,
+    ):
         store.put(_payload("second shared words"), {"content": "2"}, provider="openai")
 
     assert store._sweep_count == 1, "a wall-clock step must not reopen the monotonic sweep gate"

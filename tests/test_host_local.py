@@ -1,6 +1,3 @@
-"""Tests for host-local LLM endpoint routing: parsing, equivalence classes, NO_PROXY pruning
-and the container-side rewrite decision table."""
-
 from __future__ import annotations
 
 from typing import Any
@@ -32,8 +29,6 @@ DEFAULT_NO_PROXY = "localhost,127.0.0.1,::1,169.254.169.254,api.github.com,githu
 
 
 class TestParseLocalTarget:
-    """The flag must accept every spelling a user can paste out of a model server's docs."""
-
     @pytest.mark.parametrize(
         ("raw", "expected"),
         [
@@ -89,7 +84,6 @@ class TestParseLocalTarget:
         ],
     )
     def test_invalid_forms(self, raw: str | None) -> None:
-        """Bind addresses and malformed values must be rejected, not silently accepted."""
         assert parse_local_target(raw) is None
 
     def test_normalize_host_strips_brackets_zone_and_dot(self) -> None:
@@ -116,8 +110,6 @@ class TestParseLocalTarget:
 
 
 class TestEquivalenceClass:
-    """localhost / 127.0.0.1 / ::1 / the host's own LAN IP are one endpoint from the host's view."""
-
     def test_loopback_declaration_expands_to_every_host_literal(self) -> None:
         targets = expand_equivalence_class(LocalTarget("localhost", 8081), HOST_IPS)
         hosts = {target.host for target in targets}
@@ -162,13 +154,9 @@ class TestEquivalenceClass:
 
 
 class TestRewriteDecision:
-    """The container-side decision table."""
-
     TARGETS = decode_targets("localhost:8081,127.0.0.1:8081,[::1]:8081,192.168.2.13:8081")
 
     def test_loopback_is_rewritten_even_on_undeclared_ports(self) -> None:
-        # Inside the container, loopback is never where the agent's model server lives, so
-        # any loopback authority that arrives must go to the host.
         for host in ("localhost", "127.0.0.1", "::1"):
             decision = decide_rewrite(host, 8081, self.TARGETS, GATEWAY)
             assert decision.should_rewrite
@@ -188,7 +176,6 @@ class TestRewriteDecision:
         assert decide_rewrite("192.168.2.13", 9999, self.TARGETS, GATEWAY).address is None
 
     def test_genuine_lan_peer_is_never_rewritten(self) -> None:
-        """Safety invariant: an undeclared LAN host may be a real remote inference box."""
         decision = decide_rewrite("192.168.2.99", 8081, self.TARGETS, GATEWAY)
         assert decision.address is None
         assert decision.reason == "not-allow-listed"
@@ -209,7 +196,6 @@ class TestRewriteDecision:
         assert decide_rewrite(GATEWAY_HOSTNAME, 8081, self.TARGETS, GATEWAY).reason == "already-gateway"
 
     def test_proxy_own_port_never_loops(self) -> None:
-        """Rewriting the proxy's own published port would dial back into itself."""
         decision = decide_rewrite("localhost", 8080, self.TARGETS, GATEWAY, proxy_ports=(8080,))
         assert decision.address is None
         assert decision.reason == "proxy-own-port"
@@ -245,8 +231,6 @@ class _FakeHookData:
 
 
 class TestRewriteConnection:
-    """rewrite_connection mutates the mitmproxy server address in place."""
-
     TARGETS = decode_targets("localhost:8081,127.0.0.1:8081,192.168.2.13:8081")
 
     def test_mutates_address(self) -> None:
@@ -268,8 +252,6 @@ class TestRewriteConnection:
 
 
 class TestNoProxyPruning:
-    """A loopback entry in NO_PROXY means the agent never asks the proxy at all."""
-
     def test_loopback_declaration_removes_the_whole_loopback_class(self) -> None:
         plan = plan_no_proxy_pruning(DEFAULT_NO_PROXY, LocalTarget("localhost", 8081))
         assert set(plan.remove) == {"localhost", "127.0.0.1", "::1"}
@@ -277,7 +259,6 @@ class TestNoProxyPruning:
         assert plan.intercepted
 
     def test_host_ip_declaration_leaves_loopback_bypass_intact(self) -> None:
-        """Declaring the LAN address must not silently route other localhost traffic."""
         plan = plan_no_proxy_pruning(DEFAULT_NO_PROXY, LocalTarget("192.168.2.13", 8081), HOST_IPS)
         assert plan.remove == ()
         assert "localhost" in plan.keep
@@ -328,8 +309,6 @@ class _FakeConnectData:
 
 
 class TestMitmproxyServerConnectHook:
-    """The mitmproxy hook is what actually redirects the dial onto the host gateway."""
-
     ALLOW_LIST = "127.0.0.1:8081,192.168.2.13:8081,localhost:8081"
 
     def _addon(self) -> Any:
@@ -338,7 +317,6 @@ class TestMitmproxyServerConnectHook:
         return MitmproxyAddon(cache_dir="/tmp/holon-test-cache")
 
     def test_host_mode_is_left_untouched(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """On the host, localhost genuinely is the target -- rewriting there would be wrong."""
         monkeypatch.setenv(HOST_LOCAL_ENV_VAR, self.ALLOW_LIST)
         monkeypatch.setattr("holon_coherence.mitm_addon.in_container", lambda: False)
         data: Any = _FakeConnectData(("localhost", 8081))
@@ -366,7 +344,6 @@ class TestMitmproxyServerConnectHook:
         assert logged and "localhost:8081" in logged[0] and GATEWAY in logged[0]
 
     def test_only_the_listen_port_counts_as_self(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """8081 is a common model-server port; assuming the proxy owns it would block it."""
         monkeypatch.setenv(HOST_LOCAL_ENV_VAR, self.ALLOW_LIST)
         monkeypatch.setattr("holon_coherence.mitm_addon.in_container", lambda: True)
         monkeypatch.setattr("holon_coherence.mitm_addon.resolve_gateway_address", lambda: GATEWAY)
@@ -417,7 +394,6 @@ class TestMitmproxyServerConnectHook:
         assert addon._resolve_gateway() is None
         assert addon._resolve_gateway() is None
         assert addon._resolve_gateway() == GATEWAY
-        # Subsequent call uses cache
         assert addon._resolve_gateway() == GATEWAY
         assert len(calls) == 0
 
@@ -440,7 +416,6 @@ class TestMitmproxyServerConnectHook:
     def test_proxy_own_port_in_container_does_not_treat_listen_port_as_published(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """In container mode, only HOLON_PROXY_PORT counts as a host self-loop hazard."""
         monkeypatch.setattr("holon_coherence.mitm_addon.in_container", lambda: True)
         monkeypatch.setenv("HOLON_PROXY_PORT", "9090")
         addon = self._addon()
@@ -454,8 +429,6 @@ class TestMitmproxyServerConnectHook:
 
 
 class TestDetectHostAddresses:
-    """Tests for host-side address discovery and exclusion of bridge/tunnel subnets."""
-
     def test_udp_probe_address_prioritized(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class _FakeSocket:
             def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -496,11 +469,15 @@ class TestDetectHostAddresses:
                 pass
 
         monkeypatch.setattr("socket.socket", _FailingSocket)
+        loopback_ip = "127.0.0.1"
+        docker_bridge_ip = "172.17.0.1"
+        cgnat_tailscale_ip = "100.64.1.2"
+        valid_lan_ip = "192.168.1.100"
         fake_addrinfo = [
-            (2, 1, 6, "", ("127.0.0.1", 0)),
-            (2, 1, 6, "", ("172.17.0.1", 0)),  # docker0 bridge
-            (2, 1, 6, "", ("100.64.1.2", 0)),  # Tailscale / RFC 6598
-            (2, 1, 6, "", ("192.168.1.100", 0)),  # Valid LAN
+            (2, 1, 6, "", (loopback_ip, 0)),
+            (2, 1, 6, "", (docker_bridge_ip, 0)),
+            (2, 1, 6, "", (cgnat_tailscale_ip, 0)),
+            (2, 1, 6, "", (valid_lan_ip, 0)),
         ]
         monkeypatch.setattr("socket.getaddrinfo", lambda *args, **kwargs: fake_addrinfo)
-        assert detect_host_addresses() == ("192.168.1.100",)
+        assert detect_host_addresses() == (valid_lan_ip,)
