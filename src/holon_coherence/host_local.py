@@ -1,26 +1,3 @@
-"""Host-local LLM endpoint routing between the host and the containerized proxy.
-
-The optimization proxy normally runs inside a Docker container, so a request the agent
-addresses at the machine itself cannot be resolved from the container's network
-namespace: ``localhost`` / ``127.0.0.1`` belong to the container, and the host's own LAN
-address is not routable from the Docker Desktop VM. Every one of those spellings denotes
-the same thing from the host's point of view, and from inside the container they must all
-resolve to the same place: ``host.docker.internal``.
-
-Two halves live here:
-
-* **Host side** (used by ``cli.py``): expand a declared ``--local-llm-base`` authority into
-  its *equivalence class* (every literal that denotes "this machine"), work out which
-  ``NO_PROXY`` entries would silently bypass it, and hand the allow list to the container.
-* **Container side** (used by ``mitm_addon.py``): decide, per outbound connection, whether
-  the requested authority must be dialled via the Docker host gateway.
-
-Safety invariant: rewriting is opt-in and address-specific. Loopback plus explicitly
-declared or host-detected addresses are rewritten; arbitrary RFC1918 peers are never
-rewritten, so a genuinely remote inference box on the same LAN cannot be hijacked onto
-the host.
-"""
-
 from __future__ import annotations
 
 import contextlib
@@ -32,17 +9,11 @@ import socket
 from typing import NamedTuple
 
 GATEWAY_HOSTNAME = "host.docker.internal"
-"""Docker's name for the host as seen from inside a container."""
-
 HOST_LOCAL_ENV_VAR = "HOLON_HOST_LOCAL_HOSTS"
-"""Container environment variable carrying the allow list of host-local authorities."""
-
 NO_PROXY_WILDCARD = "*"
 
 _LOOPBACK_NAMES = frozenset({"localhost", "ip6-localhost", "ip6-loopback"})
-
 _CANONICAL_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
-"""Loopback spellings treated as the same endpoint as a declared loopback base."""
 
 _HOST_CHARS_RE = re.compile(r"^[A-Za-z0-9._:\-\[\]]+$")
 _SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*$")
@@ -52,65 +23,54 @@ _ROUTING_PROBE_ENDPOINTS = (
     (socket.AF_INET, ("8.8.8.8", 1)),
     (socket.AF_INET6, ("2001:4860:4860::8888", 1)),
 )
+_DOCKER_DEFAULT_BRIDGE_NETWORK = ipaddress.ip_network("172.17.0.0/16")
+_CGNAT_RFC6598_NETWORK = ipaddress.ip_network("100.64.0.0/10")
 _EXCLUDED_HOST_NETWORKS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (
-    ipaddress.ip_network("172.17.0.0/16"),  # Default Docker bridge (docker0 / 172.17.0.1)
-    ipaddress.ip_network("100.64.0.0/10"),  # RFC 6598 Carrier-Grade NAT / Tailscale / virtual tunnel
+    _DOCKER_DEFAULT_BRIDGE_NETWORK,
+    _CGNAT_RFC6598_NETWORK,
 )
 
 
 class LocalTarget(NamedTuple):
-    """A host-local endpoint: a normalized host literal and an optional port."""
-
     host: str
     port: int | None = None
 
     @property
     def canonical(self) -> str:
-        """Render as a ``host:port`` (or bare ``host``) token for the allow list."""
         if self.port is None:
             return self.host
         return f"[{self.host}]:{self.port}" if ":" in self.host else f"{self.host}:{self.port}"
 
 
 class RewriteDecision(NamedTuple):
-    """Outcome of a container-side rewrite check."""
-
     address: tuple[str, int] | None
     reason: str
 
     @property
     def should_rewrite(self) -> bool:
-        """True when the connection must be dialled via the gateway address."""
         return self.address is not None
 
 
 class PruningPlan(NamedTuple):
-    """Result of reconciling a ``NO_PROXY`` value against a declared local endpoint."""
-
     keep: tuple[str, ...]
     remove: tuple[str, ...]
     blocked_by_wildcard: bool
 
     @property
     def intercepted(self) -> bool:
-        """True when traffic to the target reaches the proxy once ``remove`` is dropped."""
         return bool(self.remove) and not self.blocked_by_wildcard
 
 
 class PruningResult(NamedTuple):
-    """A rewritten ``NO_PROXY`` value plus what was taken out of it."""
-
     value: str
     plan: PruningPlan
 
 
 def normalize_host(raw: str) -> str:
-    """Normalize a host literal: strip brackets, trailing dot, whitespace; lowercase."""
     return raw.strip().strip("[]").split("%", 1)[0].rstrip(".").lower()
 
 
 def is_loopback_host(host: str) -> bool:
-    """True for ``localhost``, ``.localhost`` subdomains (RFC 6761), and loopback ranges (127.0.0.0/8, ::1)."""
     normalized = normalize_host(host)
     if normalized in _LOOPBACK_NAMES or normalized.endswith(".localhost"):
         return True
@@ -121,7 +81,6 @@ def is_loopback_host(host: str) -> bool:
 
 
 def _split_authority(value: str) -> tuple[str | None, int | None]:  # noqa: C901, PLR0911, PLR0912
-    """Split ``host``, ``host:port`` or ``[ipv6]:port`` into a normalized host and optional port."""
     value = value.strip()
     if not value:
         return None, None
@@ -133,8 +92,6 @@ def _split_authority(value: str) -> tuple[str | None, int | None]:  # noqa: C901
         host, port = match.group(1), match.group(2)
     else:
         if value.count(":") > 1:
-            # Unbracketed IPv6 literal (``fe80::1``): its last group is an address part, not a port.
-            # Must be a valid IPv6 literal; reject malformed strings like `:::11434`.
             try:
                 ipaddress.IPv6Address(value)
             except ValueError:
@@ -145,7 +102,6 @@ def _split_authority(value: str) -> tuple[str | None, int | None]:  # noqa: C901
             if tail.isdigit():
                 host, port = head, tail
             elif sep:
-                # ``host:notaport`` or ``host:`` is a mistake, not a portless host or an unbracketed IPv6.
                 return None, None
             else:
                 host, port = value, None
@@ -154,7 +110,6 @@ def _split_authority(value: str) -> tuple[str | None, int | None]:  # noqa: C901
     if not host or not _HOST_CHARS_RE.match(host):
         return None, None
     if _is_unspecified_address(host):
-        # 0.0.0.0 / :: are bind addresses, not endpoints anyone can dial.
         return None, None
     if port is None:
         return host, None
@@ -166,7 +121,6 @@ def _split_authority(value: str) -> tuple[str | None, int | None]:  # noqa: C901
 
 
 def _is_unspecified_address(host: str) -> bool:
-    """True for the unspecified addresses ``0.0.0.0`` and ``::``."""
     try:
         return ipaddress.ip_address(host).is_unspecified
     except ValueError:
@@ -174,12 +128,6 @@ def _is_unspecified_address(host: str) -> bool:
 
 
 def parse_local_target(raw: str | None) -> LocalTarget | None:
-    """Parse a declared local endpoint.
-
-    Accepts the spellings users actually paste: ``localhost:8081``, ``127.0.0.1:8081``,
-    ``192.168.2.13:8081``, ``[::1]:8081`` and whole base URLs such as
-    ``http://localhost:8081/v1``. Returns ``None`` when no usable host can be read.
-    """
     if raw is None:
         return None
     value = raw.strip()
@@ -208,14 +156,6 @@ _parse_url = parse_local_target
 
 
 def detect_host_addresses() -> tuple[str, ...]:  # noqa: C901
-    """Return the host's own non-loopback unicast addresses.
-
-    Safe to rewrite onto the gateway *because these addresses are the host*: the probe
-    runs on the host itself, before the container is started. Loopback, link-local,
-    multicast, unspecified, Docker bridge (172.17.0.0/16), and virtual/CGNAT (100.64.0.0/10)
-    addresses are excluded. The UDP routing probe is prioritized; hostname resolution
-    serves as a best-effort fallback if probes return no addresses.
-    """
     probe_addresses: set[str] = set()
 
     for family, endpoint in _ROUTING_PROBE_ENDPOINTS:
@@ -229,7 +169,6 @@ def detect_host_addresses() -> tuple[str, ...]:  # noqa: C901
     addresses: set[str] = set(probe_addresses)
     if not addresses:
         try:
-            # Fallback to hostname resolution only if UDP routing probes failed (e.g. offline host)
             infos = socket.getaddrinfo(socket.gethostname(), None)
             for info in infos:
                 addresses.add(str(info[4][0]))
@@ -256,11 +195,6 @@ def detect_host_addresses() -> tuple[str, ...]:  # noqa: C901
 
 
 def resolve_gateway_address() -> str | None:
-    """Resolve ``host.docker.internal`` to a usable gateway IP, preferring IPv4.
-
-    Returns ``None`` when the name does not resolve (Linux without
-    ``--add-host=host.docker.internal:host-gateway``) or only yields loopback.
-    """
     try:
         infos = socket.getaddrinfo(GATEWAY_HOSTNAME, None, type=socket.SOCK_STREAM)
     except OSError:
@@ -282,19 +216,10 @@ def resolve_gateway_address() -> str | None:
 
 
 def in_container() -> bool:
-    """True when executing inside a Docker container."""
     return os.path.exists("/.dockerenv") or os.environ.get("HOLON_IN_CONTAINER") == "1"
 
 
 def expand_equivalence_class(target: LocalTarget, host_addresses: tuple[str, ...] = ()) -> tuple[LocalTarget, ...]:
-    """Expand one declared endpoint into every literal that denotes the same machine.
-
-    ``localhost:8081``, ``127.0.0.1:8081``, ``[::1]:8081`` and the host's own LAN address
-    all reach the same server as far as the host is concerned, so from the container they
-    must all be rewritten onto the gateway. The declared port is carried through.
-
-    A non-loopback, non-host address is returned unchanged: it may be a real remote peer.
-    """
     hosts = {target.host}
     if is_loopback_host(target.host):
         hosts.update(_CANONICAL_LOOPBACK_HOSTS)
@@ -307,12 +232,10 @@ def expand_equivalence_class(target: LocalTarget, host_addresses: tuple[str, ...
 
 
 def encode_targets(targets: tuple[LocalTarget, ...]) -> str:
-    """Serialize an allow list for the container environment."""
     return ",".join(dict.fromkeys(target.canonical for target in targets))
 
 
 def decode_targets(spec: str | None) -> tuple[LocalTarget, ...]:
-    """Parse a container allow list back into targets, dropping malformed entries."""
     if not spec:
         return ()
     targets: list[LocalTarget] = []
@@ -329,7 +252,6 @@ def decode_targets(spec: str | None) -> tuple[LocalTarget, ...]:
 
 
 def targets_from_env(environ: dict[str, str] | None = None) -> tuple[LocalTarget, ...]:
-    """Read the allow list from the environment (container side)."""
     env = os.environ if environ is None else environ
     return decode_targets(env.get(HOST_LOCAL_ENV_VAR))
 
@@ -341,11 +263,6 @@ def decide_rewrite(  # noqa: C901, PLR0911
     gateway_ip: str | None,
     proxy_ports: tuple[int, ...] = (),
 ) -> RewriteDecision:
-    """Decide whether an outbound connection must be dialled via the host gateway.
-
-    ``proxy_ports`` lists ports the proxy itself listens on; rewriting one of those would
-    dial straight back into the proxy through its own published mapping.
-    """
     if not host or port is None:
         return RewriteDecision(None, "no-authority")
     if not targets:
@@ -378,7 +295,6 @@ def decide_rewrite(  # noqa: C901, PLR0911
 
 
 def parse_no_proxy(value: str | None) -> tuple[str, ...]:
-    """Split a ``NO_PROXY`` value into ordered, de-duplicated entries."""
     if not value:
         return ()
     entries: list[str] = []
@@ -407,13 +323,6 @@ def plan_no_proxy_pruning(
     target: LocalTarget,
     host_addresses: tuple[str, ...] = (),
 ) -> PruningPlan:
-    """Reconcile ``NO_PROXY`` against a declared local endpoint.
-
-    An entry is removed when its host denotes the declared machine and it either omits a
-    port or names the declared port. A wildcard ``*`` is never removed: it bypasses the
-    proxy globally, so the caller must report that interception is impossible rather than
-    silently discarding a deliberate global bypass.
-    """
     entries = parse_no_proxy(no_proxy_value)
     if not entries:
         return PruningPlan((), (), False)
@@ -425,7 +334,6 @@ def plan_no_proxy_pruning(
 
 
 def apply_no_proxy_pruning(no_proxy_value: str | None, plan: PruningPlan) -> PruningResult:
-    """Materialize the pruned ``NO_PROXY`` value for a plan."""
     if plan.blocked_by_wildcard:
         return PruningResult(no_proxy_value or "", plan)
     return PruningResult(",".join(plan.keep), plan)
@@ -437,10 +345,6 @@ def rewrite_connection(
     gateway_ip: str | None,
     proxy_ports: tuple[int, ...] = (),
 ) -> RewriteDecision:
-    """Apply the rewrite decision to a mitmproxy ``server_connect`` payload.
-
-    Kept separate from the hook so the decision table is unit-testable without mitmproxy.
-    """
     server = getattr(data, "server", None)
     address = getattr(server, "address", None) if server is not None else None
     if not address:

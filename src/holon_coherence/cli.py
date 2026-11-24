@@ -1,5 +1,3 @@
-"""CLI wrapper for holon-coherence proxy orchestration and agent execution."""
-
 from __future__ import annotations
 
 import argparse
@@ -81,9 +79,6 @@ from holon_coherence.commands import (
 )
 from holon_coherence.host_local import detect_host_addresses
 
-# Registration order mirrors the pre-refactor cli.py so `--help` lists
-# subcommands identically: start, stop/status/logs/build, init-ca,
-# web-token/web-key, metrics, ab-test, run, run-agent, agent aliases.
 COMMAND_MODULES = (
     start,
     stop,
@@ -168,7 +163,6 @@ __all__ = [
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Construct main CLI parser with self-registered command subparsers."""
     parser = argparse.ArgumentParser(
         prog="holon-coherence",
         description="High-coherence, low-entropy optimization gateway for fractal coding agents.",
@@ -180,7 +174,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _runner_kwargs(flags: RunnerFlags) -> dict[str, object]:
-    """Translate extracted runner flags into ``run_agent`` keyword arguments."""
     kwargs: dict[str, object] = {
         "ephemeral": flags.ephemeral,
         "port": flags.port,
@@ -192,7 +185,6 @@ def _runner_kwargs(flags: RunnerFlags) -> dict[str, object]:
 
 
 def _dispatch_run_agent(argv: list[str]) -> None:
-    """Dispatch the ``run-agent`` subcommand from raw argv; always exits."""
     if not argv[1:]:
         _print_run_agent_help()
         sys.exit(1)
@@ -218,12 +210,6 @@ def _dispatch_run_agent(argv: list[str]) -> None:
 
 
 def _dispatch_agent_argv(argv: list[str]) -> None:
-    """Direct agent invocation fast-path or run-agent subcommand dispatch.
-
-    Exits the process when ``argv`` targets a supported agent or the
-    ``run-agent`` subcommand; otherwise returns so the argparse-based
-    dispatch in :func:`main` can handle the arguments.
-    """
     first = argv[0]
     if first in SUPPORTED_AGENTS:
         flags = extract_runner_flags(argv[1:])
@@ -235,8 +221,12 @@ def _dispatch_agent_argv(argv: list[str]) -> None:
         _dispatch_run_agent(argv)
 
 
+def _exit_if_propagated(args: argparse.Namespace, result: object) -> None:
+    if getattr(args, "propagates_exit", False):
+        sys.exit(result if isinstance(result, int) else 0)
+
+
 def main(argv: list[str] | None = None) -> None:
-    """Main CLI entrypoint for holon-coherence."""
     if argv is None:
         argv = sys.argv[1:]
 
@@ -252,14 +242,7 @@ def main(argv: list[str] | None = None) -> None:
 
     handler = getattr(args, "handler", None)
     if handler is not None:
-        res = handler(args)
-        if getattr(args, "propagates_exit", False):
-            sys.exit(res if isinstance(res, int) else 0)
-        # Parity with the pre-refactor dispatcher: modules that declare
-        # propagates_exit=True at registration (run/metrics/ab-test/web-token/
-        # web-key) exit with their handler's return code; the rest
-        # (build/stop/status/logs/start/init-ca) report via stdout/stderr and
-        # never propagate their return codes as exit codes.
+        _exit_if_propagated(args, handler(args))
         return
 
     parser.print_help(sys.stderr)

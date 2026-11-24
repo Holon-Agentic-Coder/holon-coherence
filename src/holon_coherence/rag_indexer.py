@@ -1,5 +1,3 @@
-"""AST & BM25 Codebase Indexer for RAG-based targeted context injection."""
-
 import ast
 import logging
 import os
@@ -10,16 +8,13 @@ logger = logging.getLogger(__name__)
 
 
 class RAGCodebaseIndexer:
-    """Combines AST symbol extraction and keyword indexing to generate compact codebase context maps."""
-
     def __init__(self, root_dir: str):
         self.root_dir = os.path.abspath(root_dir)
-        self.symbol_map: dict[str, list[dict[str, Any]]] = {}  # symbol_name -> list of locations
-        self.file_index: dict[str, list[str]] = {}  # file_path -> lines of text
+        self.symbol_map: dict[str, list[dict[str, Any]]] = {}
+        self.file_index: dict[str, list[str]] = {}
         self.build_index()
 
     def build_index(self) -> None:
-        """Traverses workspace files, building AST symbol maps and keyword indexes."""
         self.symbol_map.clear()
         self.file_index.clear()
 
@@ -63,11 +58,9 @@ class RAGCodebaseIndexer:
             logger.debug("AST parsing skipped for %s: %s", rel_path, e)
 
     def graph_find_symbol(self, symbol_name: str) -> list[dict[str, Any]]:
-        """Finds all occurrences and definitions of a symbol across the AST codebase index."""
         return self.symbol_map.get(symbol_name, [])
 
     def semantic_search(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
-        """Performs keyword relevance search across the codebase index."""
         query_words = set(re.findall(r"\w+", query.lower()))
         if not query_words:
             return []
@@ -98,10 +91,8 @@ class RAGCodebaseIndexer:
         return results[:top_k]
 
     def build_context_bootstrap(self, query: str | None = None) -> str:
-        """Generates a compact context bootstrap summary string for initial intent/plan injection."""
         summary = ["### Codebase Symbol Map & Overview\n"]
 
-        # 1. Top classes & functions
         summary.append("**Indexed Symbols:**")
         for idx, (sym, locs) in enumerate(sorted(self.symbol_map.items())):
             loc_strs = [f"`{loc_item['file']}:{loc_item['line']}`" for loc_item in locs[:2]]
