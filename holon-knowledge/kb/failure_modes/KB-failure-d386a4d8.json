@@ -1,0 +1,31 @@
+{
+  "kb_id": "KB-failure-d386a4d8",
+  "kb_type": "failure_mode",
+  "version": "1.0",
+  "created_ts": "2026-11-24T12:17:14.667463+00:00",
+  "updated_ts": "2026-11-24T12:17:14.667463+00:00",
+  "created_by": "holon-promotion-engine",
+  "status": "active",
+  "evidence": {
+    "ledger_refs": [
+      "ACT-FIND-1795521978-b7da3e97",
+      "ACT-FIND-1795521975-625ccce6"
+    ],
+    "success_count": 0,
+    "failure_count": 2,
+    "ladder_state": "repeated"
+  },
+  "tags": [
+    "code",
+    "veto"
+  ],
+  "human_approved": false,
+  "payload": {
+    "name": "Failure mode in I-1795521016-coherence-module-line-budget-all/P-1795521032-ANA-G4N/E-1795521216-ANA-G4N/_",
+    "description": "Reproduced failure across 2 executions with identical context.",
+    "action": "Review Loop iteration 1 finding detected: FIND-R1-001-02",
+    "symptoms": [
+      "verify_frozen_config does not check for newly added exclude patterns, allowing branches to bypass frozen budgets; flag new exclude patterns against the merge-base config and add a test."
+    ]
+  }
+}
