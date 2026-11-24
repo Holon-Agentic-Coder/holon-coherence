@@ -1,9 +1,3 @@
-"""Unit tests for scripts/ci_timing_gate.py.
-
-The fetchers are injected fakes, so nothing here reaches the network or the GitHub API. The fakes exercise decision
-logic only; the calibration replay at the end uses the real job durations measured on `main`.
-"""
-
 from __future__ import annotations
 
 import http.client
@@ -55,7 +49,6 @@ def main_artifact(index: int, **run_overrides) -> dict:
 
 
 def fake_fetchers(records: list[TimingRecord], labels: tuple[str, ...] = ()) -> Fetchers:
-    """Records are given most recent first."""
     artifacts = [main_artifact(index) for index in range(len(records))]
     return Fetchers(
         list_artifacts=lambda name: list(reversed(artifacts)),
@@ -84,18 +77,16 @@ def write_junit(path: pathlib.Path, times: dict[str, float]) -> pathlib.Path:
     return path
 
 
-# --- 1. Rolling median ---------------------------------------------------------------------------------------------
-
-
 def test_rolling_median_odd_and_even():
     assert rolling_median([3, 1, 2]) == 2
     assert rolling_median([4, 1, 3, 2]) == 2.5
 
 
 def test_only_most_recent_count_records_form_the_baseline():
-    # Most recent five have median 60; the stale 1000 s record must not count.
-    assert check_relative(85, [60, 60, 60, 60, 60, 1000], 5, 0.5, 30) is None
-    assert check_relative(100, [60, 60, 60, 60, 60, 10], 5, 0.5, 30) is not None
+    recent_five_durations = [60, 60, 60, 60, 60]
+    stale_outlier_duration = 1000
+    assert check_relative(85, [*recent_five_durations, stale_outlier_duration], 5, 0.5, 30) is None
+    assert check_relative(100, [*recent_five_durations, 10], 5, 0.5, 30) is not None
 
 
 def test_compare_downloads_only_count_records(tmp_path):
@@ -108,23 +99,20 @@ def test_compare_downloads_only_count_records(tmp_path):
     assert downloaded == [0, 1, 2, 3, 4]
 
 
-# --- 2-3. Relative rule --------------------------------------------------------------------------------------------
-
-
 def test_pass_inside_tolerance():
-    assert decide(140, [100] * 5, **RULES).status == "pass"  # +40 %, +40 s
-    assert decide(135, [100] * 5, **RULES).status == "pass"  # +35 %, +35 s
+    assert decide(140, [100] * 5, **RULES).status == "pass"
+    assert decide(135, [100] * 5, **RULES).status == "pass"
 
 
 @pytest.mark.parametrize(
     ("median", "current", "status"),
     [
-        (30, 50, "pass"),  # +67 %, +20 s: delta below the floor
-        (200, 240, "pass"),  # +20 %, +40 s: below the tolerance
-        (60, 100, "fail"),  # +67 %, +40 s: both exceeded
-        (60, 90, "pass"),  # exactly +50 % and exactly +30 s
-        (100, 150, "pass"),  # exactly +50 %, +50 s
-        (20, 50, "pass"),  # +150 %, exactly +30 s
+        pytest.param(30, 50, "pass", id="delta-below-floor"),
+        pytest.param(200, 240, "pass", id="below-tolerance"),
+        pytest.param(60, 100, "fail", id="both-exceeded"),
+        pytest.param(60, 90, "pass", id="exact-tolerance-and-floor-boundary"),
+        pytest.param(100, 150, "pass", id="exact-tolerance-boundary"),
+        pytest.param(20, 50, "pass", id="exact-floor-boundary"),
     ],
 )
 def test_both_thresholds_must_be_exceeded(median, current, status):
@@ -138,9 +126,6 @@ def test_relative_failure_message_states_numbers_and_thresholds():
         assert fragment in message
 
 
-# --- 4. Ceiling ----------------------------------------------------------------------------------------------------
-
-
 def test_ceiling_boundary():
     assert check_ceiling(300, 300) is None
     assert "300 s" in check_ceiling(301, 300)
@@ -150,9 +135,6 @@ def test_ceiling_fails_with_matching_baseline_and_without_baseline():
     assert decide(301, [301] * 5, **RULES).status == "fail"
     assert decide(301, [], **RULES).status == "fail"
     assert decide(300, [], **RULES).status == "pass"
-
-
-# --- 5. Cold start -------------------------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("available", [0, 4])
@@ -227,7 +209,6 @@ def test_pr_labels_fall_back_to_event_on_forbidden(monkeypatch, tmp_path, capsys
 
 
 def _redirecting_opener(monkeypatch, code: int, headers: dict) -> list:
-    """Patch build_opener so the first request fails with `code`; returns the handlers it was built with."""
     handlers = []
 
     class Opener:
@@ -253,7 +234,7 @@ def test_download_zip_follows_redirect_without_the_token(monkeypatch):
     monkeypatch.setattr(ci_timing_gate.urllib.request, "urlopen", urlopen)
     assert ci_timing_gate._download_zip("https://example.invalid/zip", "t") == b"archive"
     assert [type(handler) for handler in handlers] == [ci_timing_gate._NoRedirect]
-    assert followed == ["https://blob.invalid/x"]  # a bare URL carries no Authorization header
+    assert followed == ["https://blob.invalid/x"]
 
 
 @pytest.mark.parametrize(("code", "headers"), [(404, {}), (302, {})])
@@ -293,9 +274,6 @@ def test_unreadable_artefacts_shrink_the_baseline(tmp_path, capsys):
     fetchers.download_record = lambda artifact: None if artifact["id"] == 0 else make_record(60)
     assert run_compare(tmp_path, 200, fetchers) == 0
     assert "only 4 of 5" in capsys.readouterr().out
-
-
-# --- 6. Label override ---------------------------------------------------------------------------------------------
 
 
 def test_label_turns_relative_failure_into_warning(tmp_path, capsys):
@@ -355,23 +333,19 @@ def test_non_integer_count_is_rejected(tmp_path, capsys):
     assert "expected a positive whole number, got '2.5'" in capsys.readouterr().err
 
 
-# --- 7. Per-test report --------------------------------------------------------------------------------------------
-
-
 def test_offenders_ordered_by_delta_with_both_thresholds_and_limit():
     baseline = [make_record(60, {f"t::{i}": 10.0 for i in range(15)} | {"t::small": 2.0, "t::flat": 20.0})] * 3
     current = {f"t::{i}": 16.0 + i for i in range(15)} | {"t::small": 6.0, "t::flat": 26.0}
     offenders = test_offenders(current, baseline)
     assert [o.test for o in offenders] == [f"t::{i}" for i in range(14, 4, -1)]
     assert len(offenders) == 10
-    # t::small is +200 % but only +4 s; t::flat is +6 s but only +30 %
     assert {"t::small", "t::flat"}.isdisjoint(o.test for o in offenders)
     assert len(test_offenders(current, baseline, limit=3)) == 3
 
 
 def test_offender_boundaries_and_new_tests():
     baseline = [make_record(60, {"a::x": 10.0})]
-    assert test_offenders({"a::x": 15.0}, baseline) == []  # exactly +50 % and +5 s
+    assert test_offenders({"a::x": 15.0}, baseline) == []
     assert test_offenders({"a::x": 15.1}, baseline) == [Offender("a::x", 10.0, 15.1)]
     assert count_new_tests({"a::x": 1.0, "a::new": 1.0}, baseline) == 1
 
@@ -421,9 +395,6 @@ def test_step_summary_is_appended(tmp_path):
     assert "CI timing unit (Linux): pass, 60 s" in text
 
 
-# --- 8. JUnit parsing ----------------------------------------------------------------------------------------------
-
-
 def test_parse_junit_testsuites_root():
     text = (
         '<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest">'
@@ -452,9 +423,6 @@ def test_read_junit_missing_and_malformed(tmp_path, capsys):
     bad.write_text("<testsuite")
     assert read_junit(bad) == {}
     assert "per-test times omitted" in capsys.readouterr().out
-
-
-# --- 9. Record mode ------------------------------------------------------------------------------------------------
 
 
 def test_record_writes_timing_json(tmp_path, capsys):
@@ -519,9 +487,6 @@ def test_artefact_name():
     assert artefact_name("unit", "macOS") == "ci-timing-unit-macOS"
 
 
-# --- 10. Artefact filtering ----------------------------------------------------------------------------------------
-
-
 def test_select_main_artifacts_filters_and_orders():
     newest, older = main_artifact(0), main_artifact(3)
     expired = {**main_artifact(1), "expired": True}
@@ -536,10 +501,6 @@ def test_request_omits_authorisation_without_token():
     assert _request("https://example.invalid", "t").get_header("Authorization") == "Bearer t"
 
 
-# --- 11. Replay of the real calibration durations ------------------------------------------------------------------
-# Job wall clock (seconds) from the GitHub API for successful main pushes, 2026-10-09 to 2026-10-24.
-
-# Previous main 29b7e50 -> latest main acbe924, the previous value as a one-record baseline.
 CONSECUTIVE_MAIN_RUNS = [
     ("unit ubuntu", 62, 53),
     ("unit macOS", 102, 115),
@@ -548,8 +509,6 @@ CONSECUTIVE_MAIN_RUNS = [
     ("docker-build", 33, 39),
 ]
 
-# Worst healthy deviations against the median of the previous five main runs, reconstructed as (median, current)
-# from the measured percentage and delta.
 WORST_HEALTHY_DEVIATIONS = [
     ("unit ubuntu +38 %/+24 s", 63, 87),
     ("integration +31 %/+22 s", 71, 93),
@@ -568,8 +527,10 @@ def test_replay_worst_healthy_deviations_pass(job, median, current):
 
 
 def test_replay_window_maximum_passes_ceiling():
-    assert check_ceiling(130, 300) is None  # largest job in the window: unit macOS
+    largest_measured_macos_job_seconds = 130
+    assert check_ceiling(largest_measured_macos_job_seconds, 300) is None
 
 
 def test_replay_negative_control_doubling_fails():
-    assert decide(106, [53] * 5, **RULES).status == "fail"  # latest unit ubuntu job doubled
+    doubled_ubuntu_job_seconds = 106
+    assert decide(doubled_ubuntu_job_seconds, [53] * 5, **RULES).status == "fail"

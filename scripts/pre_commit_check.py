@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""Pre-commit security hook and hygiene validator.
-
-Scans staged files (or explicitly passed file paths) for:
-1. Hardcoded secret credentials (Google AI, GitHub PATs, Anthropic, OpenAI).
-2. Disallowed ephemeral scratch and temporary paths (tmp/*, *.tmp, *.log, .index/*).
-"""
-
 from __future__ import annotations
 
 import fnmatch
@@ -15,7 +8,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# Disallowed ephemeral scratch patterns
 DISALLOWED_PATH_PATTERNS = [
     "tmp/*",
     "*/tmp/*",
@@ -25,7 +17,6 @@ DISALLOWED_PATH_PATTERNS = [
     "*/.index/*",
 ]
 
-# Secret detection regexes
 SECRET_PATTERNS: dict[str, re.Pattern[str]] = {
     "Anthropic API Key": re.compile(r"\bsk-ant-[0-9A-Za-z\-_]{20,}\b"),
     "Google AI API Key": re.compile(r"\bAIza[0-9A-Za-z\-_]{30,40}\b"),
@@ -34,7 +25,6 @@ SECRET_PATTERNS: dict[str, re.Pattern[str]] = {
     "OpenAI API Key": re.compile(r"\bsk-(?!ant-)[0-9A-Za-z\-_]{20,}\b"),
 }
 
-# Directories and files always ignored
 IGNORED_DIRS = {
     ".git",
     ".venv",
@@ -46,33 +36,38 @@ IGNORED_DIRS = {
     "dist",
 }
 
-# Whitelist patterns for files exempt from credential scanning (e.g. mock test secrets and docs)
 SCAN_WHITELIST_PATTERNS = [
     "tests/test_*.py",
     "docs/*",
 ]
 
+INLINE_SECRET_EXEMPTION_MARKERS = ("holon:allow-secret", "pr-allow-secret")
+
+BINARY_NON_TEXT_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".pyc", ".db", ".so"})
+
 
 def _normalise_path(path: str | Path) -> str:
-    """Normalise path without stripping leading dots from hidden directories."""
     s = str(path).replace("\\", "/")
     while s.startswith("./"):
         s = s[2:]
     return s
 
 
+def _is_disallowed_external_filename(filename: str) -> bool:
+    return any(fnmatch.fnmatch(filename, pat) for pat in ("*.tmp", "*.log")) or filename.endswith((".tmp", ".log"))
+
+
+def _is_in_ignored_dir(norm_path: str) -> bool:
+    return any(ignored in norm_path.split("/") for ignored in IGNORED_DIRS)
+
+
 def is_disallowed_path(path: str | Path) -> bool:
-    """Return True if the path matches any disallowed ephemeral scratch path pattern."""
     p = Path(path)
     if p.is_absolute():
         try:
             p = p.resolve().relative_to(Path.cwd().resolve())
         except ValueError:
-            # File is outside repo root (e.g. system /tmp in pytest on Linux)
-            norm = p.name
-            if any(fnmatch.fnmatch(norm, pat) for pat in ("*.tmp", "*.log")):
-                return True
-            return bool(norm.endswith(".tmp") or norm.endswith(".log"))
+            return _is_disallowed_external_filename(p.name)
     norm = _normalise_path(p)
     for pat in DISALLOWED_PATH_PATTERNS:
         if fnmatch.fnmatch(norm, pat):
@@ -86,19 +81,16 @@ def is_disallowed_path(path: str | Path) -> bool:
 
 
 def mask_secret(secret: str) -> str:
-    """Mask sensitive secret characters for safe reporting."""
     if len(secret) <= 8:
         return "****"
     return f"{secret[:4]}...{secret[-4:]}"
 
 
 def check_content(content: str, filename: str = "") -> list[dict[str, Any]]:
-    """Scan content line by line for secret patterns."""
     findings: list[dict[str, Any]] = []
     lines = content.splitlines()
     for line_num, line in enumerate(lines, start=1):
-        # Allow intentional inline exemptions
-        if "holon:allow-secret" in line or "pr-allow-secret" in line:
+        if any(marker in line for marker in INLINE_SECRET_EXEMPTION_MARKERS):
             continue
         for name, pattern in SECRET_PATTERNS.items():
             for match in pattern.finditer(line):
@@ -115,7 +107,6 @@ def check_content(content: str, filename: str = "") -> list[dict[str, Any]]:
 
 
 def is_whitelisted_path(path: str | Path) -> bool:
-    """Return True if path is whitelisted from credential scanning."""
     norm = _normalise_path(path)
     for pat in SCAN_WHITELIST_PATTERNS:
         if fnmatch.fnmatch(norm, pat):
@@ -126,27 +117,22 @@ def is_whitelisted_path(path: str | Path) -> bool:
 
 
 def scan_file(path: str | Path) -> list[str]:
-    """Scan a single file for path violations and secret credentials."""
     errors: list[str] = []
     str_path = _normalise_path(path)
 
-    # 1. Check disallowed scratch path
     if is_disallowed_path(str_path):
         errors.append(f"Disallowed ephemeral scratch path staged: {str_path}")
 
-    # 2. Check content for secrets if file exists, is a regular file, and is not whitelisted
     p = Path(path)
     if not p.is_file() or is_whitelisted_path(str_path):
         return errors
 
-    # Ignore binary files or common non-text extensions
-    if p.suffix in {".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".pyc", ".db", ".so"}:
+    if p.suffix in BINARY_NON_TEXT_EXTENSIONS:
         return errors
 
     try:
         content = p.read_text(encoding="utf-8", errors="replace")
     except Exception:
-        # Ignore unreadable files
         return errors
 
     findings = check_content(content, filename=str_path)
@@ -158,7 +144,6 @@ def scan_file(path: str | Path) -> list[str]:
 
 
 def get_staged_files() -> list[str]:
-    """Retrieve list of staged files from git diff."""
     try:
         res = subprocess.run(
             ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
@@ -172,7 +157,6 @@ def get_staged_files() -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:  # noqa: C901
-    """CLI entrypoint for pre-commit check."""
     if argv is None:
         argv = sys.argv[1:]
 
@@ -197,9 +181,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: C901
     all_errors: list[str] = []
     for f in files_to_check:
         norm_f = _normalise_path(f)
-        # Skip explicitly ignored directories
-        parts = norm_f.split("/")
-        if any(ignored in parts for ignored in IGNORED_DIRS):
+        if _is_in_ignored_dir(norm_f):
             continue
         errors = scan_file(f)
         all_errors.extend(errors)
