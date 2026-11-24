@@ -1,11 +1,3 @@
-"""Tests for SSE stream parsing in mitm_addon.
-
-These cover the aggregation the token-reduction accounting is built on: content reassembled from
-stream fragments, for each supported provider, including the cases where a naive parser silently
-loses text. Every test uses wire-shaped SSE text rather than mocks, because the behaviour under
-test is exactly how byte lines are turned back into content.
-"""
-
 from __future__ import annotations
 
 import json
@@ -45,7 +37,6 @@ from holon_coherence.payload_cleaner import CleaningResult
 
 
 def _sse(*payloads: dict | str, prefix: str = "data: ") -> str:
-    """Render SSE lines; `prefix='data:'` exercises the no-space variant providers really emit."""
     rendered = []
     for payload in payloads:
         body = payload if isinstance(payload, str) else json.dumps(payload)
@@ -80,7 +71,6 @@ class TestSSEContentAnthropic:
         assert extract_sse_content(stream, "anthropic") == 'read_file({"path":"a.py"})'
 
     def test_unclosed_tool_block_is_still_closed(self) -> None:
-        """A stream cut off mid-call must not emit an unbalanced call rendering."""
         stream = _sse(
             {"type": "content_block_start", "content_block": {"type": "tool_use", "name": "grep"}},
             {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": "x"}},
@@ -114,7 +104,6 @@ class TestSSEContentOpenAI:
         assert extract_sse_content(stream, "openai") == "shell(x) done"
 
     def test_reasoning_content_is_not_mistaken_for_content(self) -> None:
-        """Only `content` is completion text; reasoning deltas must not double-count into it."""
         stream = _sse({"choices": [{"delta": {"reasoning_content": "hidden chain of thought"}}]})
         assert extract_sse_content(stream, "openai") == ""
 
@@ -145,7 +134,6 @@ class TestSSEContentRobustness:
         assert extract_sse_content(stream, "openai") == "hi"
 
     def test_malformed_json_line_does_not_abort_the_stream(self) -> None:
-        """One corrupt frame must not discard the content around it."""
         stream = "\n".join(
             [
                 "data: " + json.dumps({"choices": [{"delta": {"content": "before"}}]}),
@@ -171,7 +159,6 @@ class TestSSEContentRobustness:
         assert extract_sse_content(stream, "mistral") == ""
 
     def test_truncated_final_frame_loses_only_that_frame(self) -> None:
-        """A cut-off final frame drops only its own content; nothing earlier is truncated."""
         full = _sse(
             {"choices": [{"delta": {"content": "alpha"}}]},
             {"choices": [{"delta": {"content": "beta"}}]},
@@ -219,26 +206,26 @@ class TestSSETokenCountsAnthropic:
 
         counts = extract_sse_token_counts(stream, {}, "anthropic")
 
-        # input_tokens is the documented sum of fresh + cache-read + cache-creation tokens
-        assert tuple(counts) == (150, 7, 40)
+        expected_total_input_tokens = 100 + 40 + 10
+        assert tuple(counts) == (expected_total_input_tokens, 7, 40)
         assert counts.cache_creation_tokens == 10
         assert counts.reasoning_tokens == 3
 
     def test_missing_usage_falls_back_to_the_chars_over_four_heuristic(self) -> None:
-        """No usage frame must still produce a number, and it must be the documented heuristic."""
         req = {"messages": [{"role": "user", "content": "hello there"}]}
+        text_delta = "abcd" * 10
+        thinking_delta = "thi" * 40
         stream = _sse(
-            {"type": "content_block_delta", "delta": {"text": "abcd" * 10}},
-            {"type": "content_block_delta", "delta": {"thinking": "thi" * 40}},
+            {"type": "content_block_delta", "delta": {"text": text_delta}},
+            {"type": "content_block_delta", "delta": {"thinking": thinking_delta}},
         )
 
         counts = extract_sse_token_counts(stream, req, "anthropic")
 
-        # thinking is added to the output estimate as well as being reported as reasoning tokens, so
-        # the output heuristic covers text + thinking rather than text alone.
-        assert counts.output_tokens == (len("abcd" * 10) + len("thi" * 40)) // 4
+        expected_output_tokens = (len(text_delta) + len(thinking_delta)) // 4
+        assert counts.output_tokens == expected_output_tokens
         assert counts.input_tokens == max(1, estimate_chars(req) // 4)
-        assert counts.reasoning_tokens == len("thi" * 40) // 4
+        assert counts.reasoning_tokens == len(thinking_delta) // 4
 
     def test_partial_json_counts_as_output_content(self) -> None:
         stream = _sse({"type": "content_block_delta", "delta": {"partial_json": '{"a": 1}'}})
@@ -275,7 +262,6 @@ class TestSSETokenCountsOpenAI:
         assert counts.reasoning_tokens == 9
 
     def test_usage_arriving_only_in_the_final_frame_is_still_counted(self) -> None:
-        """Streaming puts usage last; a parser that stops at the first frame reports zero."""
         frames = [{"choices": [{"delta": {"content": f"tok{i} "}}]} for i in range(5)]
         frames.append(
             {
@@ -369,22 +355,20 @@ class TestDetailedCounts:
 
 
 class TestScrubbing:
-    """Credential redaction for wire logs, using real key shapes rather than the word 'secret'."""
-
     @pytest.mark.parametrize(
         "secret",
         [
-            "sk-ant-" + "A" * 30,  # Anthropic
-            "sk-" + "a" * 24,  # OpenAI
-            "sk-proj-" + "a" * 24,  # OpenAI project key
-            "AIza" + "a" * 35,  # Google API key
-            "ghp_" + "a" * 36,  # GitHub PAT
-            "github_pat_" + "a" * 24,  # GitHub fine-grained PAT
-            "AKIA" + "ABCDEFGHIJKLMNOP",  # AWS access key id
-            "ASIA" + "ABCDEFGHIJKLMNOP",  # AWS temporary access key id
-            "hf_" + "a" * 34,  # Hugging Face
-            "eyJ" + "a" * 22 + "." + "b" * 22 + "." + "c" * 22,  # JWT
-            "-----BEGIN PRIVATE KEY-----\nMIIBVw\n-----END PRIVATE KEY-----",  # PEM
+            pytest.param("sk-ant-" + "A" * 30, id="anthropic"),
+            pytest.param("sk-" + "a" * 24, id="openai"),
+            pytest.param("sk-proj-" + "a" * 24, id="openai-project"),
+            pytest.param("AIza" + "a" * 35, id="google-api-key"),
+            pytest.param("ghp_" + "a" * 36, id="github-pat"),
+            pytest.param("github_pat_" + "a" * 24, id="github-fine-grained-pat"),
+            pytest.param("AKIA" + "ABCDEFGHIJKLMNOP", id="aws-access-key-id"),
+            pytest.param("ASIA" + "ABCDEFGHIJKLMNOP", id="aws-temp-access-key-id"),
+            pytest.param("hf_" + "a" * 34, id="huggingface"),
+            pytest.param("eyJ" + "a" * 22 + "." + "b" * 22 + "." + "c" * 22, id="jwt"),
+            pytest.param("-----BEGIN PRIVATE KEY-----\nMIIBVw\n-----END PRIVATE KEY-----", id="pem-private-key"),
         ],
     )
     def test_recognised_credential_shapes_are_redacted(self, secret: str) -> None:
@@ -426,7 +410,6 @@ class TestScrubHeaders:
         assert cleaned[name.lower()] == "[REDACTED]"
 
     def test_unknown_header_name_still_scrubs_a_secret_value(self) -> None:
-        """The closed name list is not the only defence: values are scanned regardless of key."""
         cleaned = scrub_headers({"x-upstream-assertion": "Bearer sk-" + "b" * 24})
         assert "bbbbb" not in cleaned["x-upstream-assertion"]
 
@@ -454,14 +437,11 @@ class TestScrubHeaders:
 
 
 def _estimate_tokens(payload: object) -> int:
-    """Mirror the documented chars//4 heuristic, including the zero-content case."""
     chars = estimate_chars(payload)
     return max(1, chars // 4) if chars > 0 else 0
 
 
 class TestNonStreamingTokenCounts:
-    """`extract_token_counts` for ordinary JSON responses, where the reduction ratio is reported from."""
-
     def test_string_response_is_routed_to_the_stream_parser(self) -> None:
         stream = _sse({"usage": {"prompt_tokens": 4, "completion_tokens": 6}})
         assert tuple(extract_token_counts({}, stream, "openai")) == (4, 6, 0)
@@ -510,7 +490,6 @@ class TestNonStreamingTokenCounts:
         assert extract_token_counts({}, with_alias, "gemini").reasoning_tokens == 2
 
     def test_incomplete_usage_block_falls_back_instead_of_trusting_partial_data(self) -> None:
-        """Usage missing one required key is treated as no usage at all."""
         req = {"messages": [{"role": "user", "content": "x" * 40}]}
         resp = {"usage": {"input_tokens": 9999, "output_tokens": 9999}}
 
@@ -521,12 +500,6 @@ class TestNonStreamingTokenCounts:
         assert counts.output_tokens == _estimate_tokens(resp)
 
     def test_estimation_yields_zero_rather_than_one_for_a_content_free_payload(self) -> None:
-        """The floor of 1 applies to a non-empty payload; an empty one must not invent a token.
-
-        Reading `max(1, chars // 4)` alone suggests a bare integer response still costs a token.
-        The guard is `if chars > 0 else 0`, and estimate_chars counts strings, not numbers, so a
-        usage-only body estimates to zero.
-        """
         counts = extract_token_counts({}, {"usage": {"input_tokens": 9999, "output_tokens": 9999}}, "openai")
 
         assert estimate_chars({"usage": {"input_tokens": 9999}}) == 0
@@ -545,7 +518,6 @@ class TestNonStreamingTokenCounts:
             assert len(tuple(counts)) == 3
 
     def test_non_streaming_and_stream_paths_agree_on_the_same_numbers(self) -> None:
-        """The two parsers must not disagree about one exchange depending on transport."""
         req = {}
         json_resp = {
             "usage": {"prompt_tokens": 55, "completion_tokens": 17, "prompt_tokens_details": {"cached_tokens": 5}}
@@ -645,23 +617,26 @@ class TestMitmAddonLifecycle:
         addon = MitmproxyAddon()
         addon.done()
 
-    def test_proxy_own_ports(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_proxy_own_ports_container_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         addon = MitmproxyAddon()
-
-        # In container mode without HOLON_PROXY_PORT
         monkeypatch.setattr("holon_coherence.mitm_addon.in_container", lambda: True)
         monkeypatch.delenv("HOLON_PROXY_PORT", raising=False)
         assert addon._proxy_own_ports() == (8080,)
 
-        # In container mode with HOLON_PROXY_PORT
+    def test_proxy_own_ports_container_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        addon = MitmproxyAddon()
+        monkeypatch.setattr("holon_coherence.mitm_addon.in_container", lambda: True)
         monkeypatch.setenv("HOLON_PROXY_PORT", "8085")
         assert addon._proxy_own_ports() == (8085,)
 
-        # In container mode with invalid port
+    def test_proxy_own_ports_container_invalid_env_falls_back(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        addon = MitmproxyAddon()
+        monkeypatch.setattr("holon_coherence.mitm_addon.in_container", lambda: True)
         monkeypatch.setenv("HOLON_PROXY_PORT", "invalid")
         assert addon._proxy_own_ports() == (8080,)
 
-        # Non-container mode with ctx options
+    def test_proxy_own_ports_non_container_uses_ctx_options(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        addon = MitmproxyAddon()
         monkeypatch.setattr("holon_coherence.mitm_addon.in_container", lambda: False)
         monkeypatch.delenv("HOLON_PROXY_PORT", raising=False)
 
@@ -855,9 +830,9 @@ class TestMitmAddonLifecycle:
         assert flow.sse_chunks == [c1]
         assert existing_calls == [c1]
 
-        # Call with chunk exceeding _MAX_SSE_BUFFER_BYTES
         flow.sse_bytes = _MAX_SSE_BUFFER_BYTES + 1
-        flow.response.stream(b"overflow")
+        overflow_chunk = b"overflow"
+        flow.response.stream(overflow_chunk)
         assert len(flow.sse_chunks) == 1
 
     def test_responseheaders_with_dict_headers(self) -> None:

@@ -1,5 +1,3 @@
-"""Tests for mitm_addon metrics, dashboard, and host-local LLM protocol adapters."""
-
 from __future__ import annotations
 
 import json
@@ -42,8 +40,6 @@ from holon_coherence.payload_cleaner import CleaningResult
 
 
 class DummyHeaders(dict):
-    """Case-insensitive dictionary for headers mocking."""
-
     def get(self, key: str, default: str | None = None) -> str | None:
         target = key.lower()
         for k, v in self.items():
@@ -134,8 +130,6 @@ class DummyFlow:
 
 
 class TestCumulativeMetrics:
-    """Unit tests for CumulativeMetrics thread-safe collector."""
-
     def test_initial_state(self) -> None:
         m = CumulativeMetrics()
         d = m.to_dict()
@@ -210,16 +204,17 @@ class TestCumulativeMetrics:
         assert d["total_cache_read_tokens"] == 60
         assert d["total_cache_creation_tokens"] == 30
         assert d["total_reasoning_tokens"] == 20
-        assert d["avg_ttft_ms"] == 300.0  # (200ms + 400ms) / 2
-        assert d["avg_decode_throughput_tps"] == 30.0  # (25.0 + 35.0) / 2
+        expected_avg_ttft_ms = (200.0 + 400.0) / 2
+        expected_avg_decode_tps = (25.0 + 35.0) / 2
+        expected_provider_cache_hit_rate = 60 / 300
+        assert d["avg_ttft_ms"] == expected_avg_ttft_ms
+        assert d["avg_decode_throughput_tps"] == expected_avg_decode_tps
         assert d["avg_prefill_throughput_tps"] == 500.0
         assert d["avg_tail_prefill_tps"] == 400.0
-        assert d["provider_cache_hit_rate"] == 0.2  # 60 / 300
+        assert d["provider_cache_hit_rate"] == expected_provider_cache_hit_rate
 
 
 class TestMetricsAndDashboardEndpoints:
-    """Unit tests for intercepted /holon/api/metrics and /holon/ dashboard endpoints."""
-
     def test_metrics_api_endpoint(self) -> None:
         addon = MitmproxyAddon()
         addon.metrics.record_request()
@@ -286,8 +281,6 @@ class TestMetricsAndDashboardEndpoints:
 
 
 class TestIsLocalTarget:
-    """Unit tests for host-local target detection."""
-
     def test_loopback_and_gateway_hosts(self) -> None:
         for h in ("localhost", "127.0.0.1", "::1", "127.0.0.1.nip.io", "host.docker.internal"):
             flow = DummyFlow(request=DummyRequest(host=h, url=f"http://{h}:8080/v1/messages"))
@@ -322,9 +315,25 @@ class TestIsLocalTarget:
         assert is_local_target(flow_remote) is False
 
 
-class TestAnthropicNormalizer:
-    """Unit tests for Anthropic protocol normalisation for host-local engines."""
+def _collect_anthropic_cache_controls_in_evaluation_order(forwarded: dict[str, Any]) -> list[dict[str, Any]]:
+    cache_controls: list[dict[str, Any]] = [
+        item["cache_control"]
+        for section in ("tools", "system")
+        for item in forwarded.get(section, [])
+        if "cache_control" in item
+    ]
+    for msg in forwarded.get("messages", []):
+        if "cache_control" in msg:
+            cache_controls.append(msg["cache_control"])
+        content = msg.get("content", [])
+        if isinstance(content, list):
+            cache_controls.extend(
+                block["cache_control"] for block in content if isinstance(block, dict) and "cache_control" in block
+            )
+    return cache_controls
 
+
+class TestAnthropicNormalizer:
     def test_normalizer_strips_vendor_constructs(self) -> None:
         data = {
             "model": "claude-3-opus",
@@ -379,7 +388,6 @@ class TestAnthropicNormalizer:
         assert "thinking" in cleaned
 
     def test_addon_request_normalizes_anthropic_multi_block_system_cache_control_ttl(self, tmp_path: Path) -> None:
-        """End-to-end MitmproxyAddon.request() regression test for system.2.cache_control.ttl ordering."""
         addon = MitmproxyAddon(cache_dir=str(tmp_path / "cache"), wire_log_dir=str(tmp_path / "logs"))
         repeated_tool_output = "identical tool result payload " * 10
         req_payload = {
@@ -424,35 +432,17 @@ class TestAnthropicNormalizer:
         addon.request(flow)
 
         forwarded = json.loads(flow.request.get_text())
-        # Collect all cache_control dicts in Anthropic evaluation order: tools -> system -> messages
-        cc_list: list[dict[str, Any]] = []
-        for tool in forwarded.get("tools", []):
-            if "cache_control" in tool:
-                cc_list.append(tool["cache_control"])
-        for block in forwarded.get("system", []):
-            if "cache_control" in block:
-                cc_list.append(block["cache_control"])
-        for msg in forwarded.get("messages", []):
-            if "cache_control" in msg:
-                cc_list.append(msg["cache_control"])
-            content = msg.get("content", [])
-            if isinstance(content, list):
-                for block in content:
-                    if isinstance(block, dict) and "cache_control" in block:
-                        cc_list.append(block["cache_control"])
+        cc_list = _collect_anthropic_cache_controls_in_evaluation_order(forwarded)
 
         assert 1 <= len(cc_list) <= 4
         ranks = [3600 if cc.get("ttl") == "1h" else 300 for cc in cc_list]
         assert ranks == sorted(ranks, reverse=True), f"TTL ranks must be non-increasing, got {ranks}"
         assert forwarded["system"][2]["cache_control"] == {"type": "ephemeral"}
-        # Verify tool output deduplication still ran on the older duplicate turn
-        second_tool_out = forwarded["messages"][2]["content"][0]["content"]
-        assert "[Tool output omitted:" in second_tool_out
+        deduplicated_second_tool_output = forwarded["messages"][2]["content"][0]["content"]
+        assert "[Tool output omitted:" in deduplicated_second_tool_output
 
 
 class TestGeminiOpenAIBridge:
-    """Unit tests for bidirectional Gemini v1beta <-> OpenAI ChatCompletions bridge."""
-
     def test_request_translation_basic_messages(self) -> None:
         gemini_req = {
             "systemInstruction": {"parts": [{"text": "System prompt."}]},
@@ -517,18 +507,17 @@ class TestGeminiOpenAIBridge:
 
         messages = openai_req["messages"]
         assert len(messages) == 2
-        # Assistant tool call
-        assert messages[0]["role"] == "assistant"
-        assert len(messages[0]["tool_calls"]) == 1
-        tc = messages[0]["tool_calls"][0]
+        assistant_tool_call_msg, tool_response_msg = messages
+        assert assistant_tool_call_msg["role"] == "assistant"
+        assert len(assistant_tool_call_msg["tool_calls"]) == 1
+        tc = assistant_tool_call_msg["tool_calls"][0]
         assert tc["function"]["name"] == "run_command"
         assert json.loads(tc["function"]["arguments"]) == {"cmd": "ls -la"}
 
-        # Tool response
-        assert messages[1]["role"] == "tool"
-        assert messages[1]["name"] == "run_command"
-        assert json.loads(messages[1]["content"]) == {"output": "total 0"}
-        assert tc["id"] == messages[1]["tool_call_id"]
+        assert tool_response_msg["role"] == "tool"
+        assert tool_response_msg["name"] == "run_command"
+        assert json.loads(tool_response_msg["content"]) == {"output": "total 0"}
+        assert tc["id"] == tool_response_msg["tool_call_id"]
 
     def test_request_translation_multi_turn_tool_call_id_alignment(self) -> None:
         gemini_req = {
@@ -656,28 +645,28 @@ class TestGeminiOpenAIBridge:
 
     def test_sse_chunk_translation_tool_call_fragments_and_buffering(self) -> None:
         stream_state: dict[str, Any] = {}
-        # Fragment 1: function name declared, empty arguments
-        chunk1 = (
+        name_declaration_chunk = (
             'data: {"choices": [{"delta": {"tool_calls": ['
             '{"index": 0, "function": {"name": "run_command", "arguments": ""}}]}}]}\n\n'
         )
-        out1 = translate_openai_sse_chunk_to_gemini(chunk1, stream_state=stream_state)
-        # Should not emit candidate yet
-        assert out1 == ""
+        buffered_after_name_only = translate_openai_sse_chunk_to_gemini(
+            name_declaration_chunk, stream_state=stream_state
+        )
+        assert buffered_after_name_only == ""
 
-        # Fragment 2: partial arguments
-        chunk2 = (
+        partial_arguments_chunk = (
             'data: {"choices": [{"delta": {"tool_calls": ['
             '{"index": 0, "function": {"arguments": "{\\"cmd\\": \\"ls\\"}"}}]}}]}\n\n'
         )
-        out2 = translate_openai_sse_chunk_to_gemini(chunk2, stream_state=stream_state)
-        assert out2 == ""
+        buffered_after_arguments = translate_openai_sse_chunk_to_gemini(
+            partial_arguments_chunk, stream_state=stream_state
+        )
+        assert buffered_after_arguments == ""
 
-        # Fragment 3: finish_reason tool_calls
-        chunk3 = 'data: {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}\n\n'
-        out3 = translate_openai_sse_chunk_to_gemini(chunk3, stream_state=stream_state)
-        assert "data: " in out3
-        parsed = json.loads(out3.strip()[len("data: ") :])
+        finish_tool_calls_chunk = 'data: {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}\n\n'
+        emitted_on_finish = translate_openai_sse_chunk_to_gemini(finish_tool_calls_chunk, stream_state=stream_state)
+        assert "data: " in emitted_on_finish
+        parsed = json.loads(emitted_on_finish.strip()[len("data: ") :])
         cand = parsed["candidates"][0]
         assert cand["finishReason"] == "STOP"
         part = cand["content"]["parts"][0]
@@ -686,8 +675,6 @@ class TestGeminiOpenAIBridge:
 
 
 class TestTelemetryThroughput:
-    """Prefill / decode throughput arithmetic, guards and *unmeasured* semantics."""
-
     SSE_BODY = (
         'data: {"choices":[{"delta":{"content":"he"}}]}\n\n'
         'data: {"choices":[{"delta":{"content":"llo"},"finish_reason":"stop"}],'
@@ -739,8 +726,8 @@ class TestTelemetryThroughput:
         assert snapshot["total_input_tokens"] == 1000
         assert snapshot["total_output_tokens"] == 100
         assert snapshot["avg_ttft_ms"] == 500.0
-        assert snapshot["avg_prefill_throughput_tps"] == 2000.0  # 1000 tok / 0.5s
-        assert snapshot["avg_decode_throughput_tps"] == 250.0  # 100 tok / 0.4s window
+        assert snapshot["avg_prefill_throughput_tps"] == 2000.0
+        assert snapshot["avg_decode_throughput_tps"] == 250.0
         assert snapshot["latest_decode_throughput_tps"] == 250.0
         assert snapshot["decode_samples"] == 1
         assert snapshot["latest_total_time_ms"] == 900.0
@@ -753,7 +740,6 @@ class TestTelemetryThroughput:
         assert headers["X-Holon-Decode-Time-Sec"] == "0.400"
 
     def test_non_streaming_reply_never_samples_decode(self, tmp_path: Path) -> None:
-        """`total - ttft` is socket parse time for a buffered reply, so decode stays unmeasured."""
         addon = self._addon(tmp_path)
         flow = self._flow(body=self.JSON_BODY, sse=False)
         now = time.perf_counter()
@@ -763,7 +749,7 @@ class TestTelemetryThroughput:
 
         snapshot = addon.metrics.to_dict()
         assert snapshot["total_input_tokens"] == 1_200_000
-        assert snapshot["avg_prefill_throughput_tps"] == 2_000_000.0  # 1.2M tok / 0.6s
+        assert snapshot["avg_prefill_throughput_tps"] == 2_000_000.0
         assert snapshot["decode_samples"] == 0
         assert snapshot["avg_decode_throughput_tps"] == 0.0
         assert snapshot["latest_decode_throughput_tps"] == 0.0
@@ -774,7 +760,6 @@ class TestTelemetryThroughput:
         assert headers["X-Holon-Decode-Time-Sec"] == UNMEASURED
 
     def test_buffered_stream_burst_below_floor_is_unmeasured(self, tmp_path: Path) -> None:
-        """A stream that lands in one 2ms burst is a buffering artefact, not 50,000 tok/s."""
         addon = self._addon(tmp_path)
         flow = self._flow(body=self.SSE_BODY, sse=True)
         now = time.perf_counter()
@@ -787,11 +772,10 @@ class TestTelemetryThroughput:
         snapshot = addon.metrics.to_dict()
         assert snapshot["decode_samples"] == 0
         assert snapshot["avg_decode_throughput_tps"] == 0.0
-        assert snapshot["avg_prefill_throughput_tps"] == 2000.0  # 1000 tok / 0.5s TTFT
+        assert snapshot["avg_prefill_throughput_tps"] == 2000.0
         assert flow.response.headers["X-Holon-Output-TPS"] == UNMEASURED
 
     def test_missing_start_timestamp_is_unmeasured_not_zero(self, tmp_path: Path) -> None:
-        """The reported `0.00 tokens/sec` next to 1.2M prompt tokens can no longer be fabricated."""
         addon = self._addon(tmp_path)
         flow = self._flow(body=self.JSON_BODY, sse=False)
         addon.response(flow)
@@ -805,7 +789,6 @@ class TestTelemetryThroughput:
         assert flow.response.headers["X-Holon-Total-Time-Ms"] == UNMEASURED
 
     def test_wall_clock_timestamps_recover_prefill(self, tmp_path: Path) -> None:
-        """When the request hook never stamped the flow, mitmproxy timestamps supply real timings."""
         addon = self._addon(tmp_path)
         flow = self._flow(body=self.JSON_BODY, sse=False)
         flow.request.timestamp_start = 1000.0
@@ -865,7 +848,6 @@ class TestTelemetryThroughput:
         assert snapshot["latest_total_time_ms"] == 500.0
 
     def test_non_200_response_enters_no_rate_samples(self, tmp_path: Path) -> None:
-        """An upstream error is recorded as *not measured* (`None`), never as a fabricated 0.0 rate."""
         addon = self._addon(tmp_path)
         flow = self._flow(body='{"error":"rate_limited"}', sse=False)
         flow.response.status_code = 429
@@ -907,7 +889,6 @@ class TestTelemetryThroughput:
         assert "below floor" in timing.decode_reason()
 
     def test_resolve_flow_timing_epoch_fallback_requires_end_time(self) -> None:
-        """A replayed stream without `response.timestamp_end` cannot close an epoch window with perf_counter."""
         flow = DummyFlow()
         flow.sse_chunks = [b"data: x\n\n"]
         flow.request.timestamp_start = 0.5
@@ -950,14 +931,12 @@ class TestTelemetryThroughput:
 
 
 def test_scrub_string_redacts_mitmweb_inspector_token() -> None:
-    """An inspector URL that ever lands in a logged request or response is redacted."""
     scrubbed = scrub_string("GET http://127.0.0.1:8081/?token=abcDEF123 HTTP/1.1")
     assert "abcDEF123" not in scrubbed
     assert "?token=[REDACTED]" in scrubbed
 
 
 def test_wire_log_module_default_resolves_without_env() -> None:
-    """A fresh import with ``WIRE_LOG_DIR`` unset resolves the module default to ``.holon/mitm_wire_logs``."""
     env = {key: value for key, value in os.environ.items() if key != "WIRE_LOG_DIR"}
     code = "import holon_coherence.mitm_addon as m; print(m.WIRE_LOG_DIR)"
     result = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True)
@@ -967,11 +946,6 @@ def test_wire_log_module_default_resolves_without_env() -> None:
 def test_wire_log_default_directory_is_working_directory_relative(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Without ``WIRE_LOG_DIR`` the wire logger writes under the module default, creating parents.
-
-    The module value is pinned to the default because it is read once at import, when the environment of the test
-    process may differ; the resolution itself is covered by the fresh-import test above.
-    """
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("WIRE_LOG_DIR", raising=False)
     monkeypatch.setenv("ENABLE_WIRE_LOGGING", "1")
@@ -981,7 +955,6 @@ def test_wire_log_default_directory_is_working_directory_relative(
 
 
 def test_wire_log_directory_env_override_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """``WIRE_LOG_DIR`` keeps overriding the default directory."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("WIRE_LOG_DIR", str(tmp_path / "custom"))
     monkeypatch.setenv("ENABLE_WIRE_LOGGING", "1")
