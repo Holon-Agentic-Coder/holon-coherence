@@ -1,5 +1,3 @@
-"""Unit tests for the ``holon_coherence.proxy.steps`` pipeline runner and individual steps."""
-
 from __future__ import annotations
 
 import json
@@ -75,11 +73,6 @@ def _req_ctx(addon: MitmproxyAddon, flow: Any, **fields: Any) -> RequestContext:
     return ctx
 
 
-# --------------------------------------------------------------------------------------------------
-# Pipeline shape
-# --------------------------------------------------------------------------------------------------
-
-
 def test_request_pipeline_order_is_frozen() -> None:
     assert [(s.name, s.mode) for s in REQUEST_PRELUDE + REQUEST_GUARDED] == [
         ("serve_dashboard", "always"),
@@ -112,11 +105,6 @@ def test_response_pipeline_order_is_frozen() -> None:
 def test_prelude_is_unguarded_and_only_runner_branches_on_mode() -> None:
     assert all(s.mode == "always" for s in REQUEST_PRELUDE)
     assert {s.mode for s in REQUEST_GUARDED} == {"always", "active", "passive"}
-
-
-# --------------------------------------------------------------------------------------------------
-# Runner
-# --------------------------------------------------------------------------------------------------
 
 
 class _Ctx:
@@ -237,11 +225,6 @@ def test_error_policies_route_to_the_right_level(
     assert (records[0].exc_info is not None) is (level == logging.ERROR)
 
 
-# --------------------------------------------------------------------------------------------------
-# Individual steps
-# --------------------------------------------------------------------------------------------------
-
-
 def test_serve_mode_falls_through_for_put(addon: MitmproxyAddon) -> None:
     flow = _flow(url="http://127.0.0.1:8080/holon/api/mode", method="PUT", path="/holon/api/mode")
     ctx = _req_ctx(addon, flow)
@@ -311,11 +294,6 @@ def test_store_response_skipped_for_sse(addon: MitmproxyAddon, monkeypatch: pyte
     ctx.is_sse = False
     store_response(ctx)
     assert calls == [(("u", {}, "data: x"), {"status_code": 200})]
-
-
-# --------------------------------------------------------------------------------------------------
-# Wire record builder
-# --------------------------------------------------------------------------------------------------
 
 
 def test_delta_without_clean_result_uses_char_difference() -> None:

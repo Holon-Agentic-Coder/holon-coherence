@@ -1,5 +1,3 @@
-"""Unit tests for Gemini <-> OpenAI bidirectional protocol translation."""
-
 from __future__ import annotations
 
 import json

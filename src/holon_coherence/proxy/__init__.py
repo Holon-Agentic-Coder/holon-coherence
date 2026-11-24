@@ -1,5 +1,3 @@
-"""Holon Coherence Proxy package."""
-
 from __future__ import annotations
 
 from holon_coherence.proxy.addon import (

@@ -1,5 +1,3 @@
-"""Unit tests for telemetry dashboard rendering."""
-
 from __future__ import annotations
 
 from holon_coherence.proxy.dashboard import render_dashboard_html

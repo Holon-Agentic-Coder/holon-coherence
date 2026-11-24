@@ -1,12 +1,3 @@
-"""Ordered step pipelines behind the ``MitmproxyAddon`` hooks.
-
-The pipelines are plain tuples of ``StepSpec`` so their order is data that can be inspected and tested.
-``request`` runs ``REQUEST_PRELUDE`` unguarded (failures propagate to mitmproxy, as before) and then
-``REQUEST_GUARDED`` under ``REQUEST_POLICY``. ``response`` runs ``RESPONSE_SUCCESS`` under
-``SUCCESS_POLICY`` for HTTP 200, otherwise ``log_failure`` followed by ``RESPONSE_FAILURE`` under
-``FAILURE_POLICY``.
-"""
-
 from __future__ import annotations
 
 from holon_coherence.proxy.steps.apply_cache import serve_cached, store_response

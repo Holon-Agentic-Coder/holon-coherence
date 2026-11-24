@@ -1,5 +1,3 @@
-"""Transaction timing resolution and turn ID calculation."""
-
 from __future__ import annotations
 
 import time
@@ -16,9 +14,10 @@ __all__ = [
     "resolve_flow_timing",
 ]
 
+TURN_ID_HEADER_NAME = "x-holon-turn-id"
+
 
 def get_header_case_insensitive(headers: Any, target_header: str) -> str | None:
-    """Extracts header value matching target_header case-insensitively."""
     if headers:
         if hasattr(headers, "items"):
             target_lower = target_header.lower()
@@ -37,13 +36,8 @@ def derive_turn_id(
     payload: dict[str, Any] | None,
     fallback_id: int = 1,
 ) -> int | str:
-    """Derives conversation turn ID using 3-tier precedence:
-    1. X-Holon-Turn-Id header
-    2. Assistant completion count in message tree (+ 1)
-    3. Sequential fallback counter
-    """
     if headers:
-        val = get_header_case_insensitive(headers, "x-holon-turn-id")
+        val = get_header_case_insensitive(headers, TURN_ID_HEADER_NAME)
         if val is not None:
             try:
                 return int(val)
@@ -65,25 +59,12 @@ def derive_turn_id(
 
 @dataclass(frozen=True)
 class FlowTiming:
-    """Per-transaction timings in seconds, where ``None`` means *not measured*.
-
-    Attributes:
-        ttft_sec: Request sent -> first token (first SSE chunk, or first payload for a buffered
-            reply). ``None`` when either endpoint timestamp is missing.
-        total_sec: Request sent -> transaction complete.
-        generation_sec: First SSE chunk -> last SSE chunk. Only populated for genuine streams; a
-            buffered reply has no generation window, so ``total_sec - ttft_sec`` (socket parse time)
-            must never be used as a stand-in.
-        streaming: True when the upstream reply was an SSE stream.
-    """
-
     ttft_sec: float | None = None
     total_sec: float | None = None
     generation_sec: float | None = None
     streaming: bool = False
 
     def decode_reason(self) -> str:
-        """Human-readable explanation for an unmeasured decode throughput."""
         if not self.streaming:
             return "non-streaming"
         if self.generation_sec is None:
@@ -92,7 +73,6 @@ class FlowTiming:
 
 
 def _wall_clock_seconds(*values: Any) -> float | None:
-    """Return the first usable epoch timestamp, or ``None``."""
     for value in values:
         if value is None or isinstance(value, bool):
             continue
@@ -105,22 +85,20 @@ def _wall_clock_seconds(*values: Any) -> float | None:
     return None
 
 
+def _resolve_streaming_generation_seconds(
+    first_chunk: float | None,
+    end_time: float | None,
+    total_sec: float | None,
+    ttft_sec: float | None,
+) -> float | None:
+    if first_chunk is not None and end_time is not None:
+        return positive_seconds(end_time - first_chunk)
+    if total_sec is not None and ttft_sec is not None:
+        return positive_seconds(total_sec - ttft_sec)
+    return None
+
+
 def resolve_flow_timing(flow: Any, completed_at: float | None = None) -> FlowTiming:
-    """Derive TTFT / total / generation seconds for one flow using a single clock domain.
-
-    Prefers the ``time.perf_counter()`` stamps the addon records in ``request()`` /
-    ``responseheaders()`` / the SSE chunk wrapper. When those are absent (resumed or replayed flows
-    whose request hook never fired) it falls back to mitmproxy's own wall-clock timestamps instead
-    of substituting ``now`` for a missing start -- that substitution is what produced
-    ``ttft == 0.0`` and the resulting ``0.00 tokens/sec`` prefill readings.
-
-    Args:
-        flow: mitmproxy flow (or test double) carrying the timing attributes.
-        completed_at: ``time.perf_counter()`` reading taken when the transaction finished.
-
-    Returns:
-        FlowTiming: Timings in seconds; every field that could not be measured is ``None``.
-    """
     streaming = getattr(flow, "sse_chunks", None) is not None
     if completed_at is None:
         completed_at = time.perf_counter()
@@ -136,8 +114,8 @@ def resolve_flow_timing(flow: Any, completed_at: float | None = None) -> FlowTim
         response = getattr(flow, "response", None)
         req_start = _wall_clock_seconds(getattr(request, "timestamp_start", None))
         headers_time = _wall_clock_seconds(getattr(response, "timestamp_first_byte", None))
-        # A replayed flow exposes only byte-level markers, so first byte stands in for first token.
-        first_chunk = headers_time
+        replayed_first_byte_as_first_token = headers_time
+        first_chunk = replayed_first_byte_as_first_token
         end_time = _wall_clock_seconds(getattr(response, "timestamp_end", None))
         last_chunk = end_time
 
@@ -153,14 +131,12 @@ def resolve_flow_timing(flow: Any, completed_at: float | None = None) -> FlowTim
 
     generation_sec: float | None = None
     if streaming:
-        # Both window endpoints must share ``first_chunk``'s clock domain. The perf_counter branch
-        # always resolves an ``end_time``; in the epoch fallback a missing ``response.timestamp_end``
-        # leaves the window unmeasured instead of subtracting an epoch first-chunk from a
-        # perf_counter completion.
-        if first_chunk is not None and end_time is not None:
-            generation_sec = positive_seconds(end_time - first_chunk)
-        elif total_sec is not None and ttft_sec is not None:
-            generation_sec = positive_seconds(total_sec - ttft_sec)
+        generation_sec = _resolve_streaming_generation_seconds(
+            first_chunk=first_chunk,
+            end_time=end_time,
+            total_sec=total_sec,
+            ttft_sec=ttft_sec,
+        )
 
     return FlowTiming(
         ttft_sec=ttft_sec,

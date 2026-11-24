@@ -1,5 +1,3 @@
-"""Response telemetry: token/timing computation, X-Holon headers, telemetry lines, wire dump and metrics."""
-
 from __future__ import annotations
 
 import json
@@ -50,16 +48,11 @@ class Telemetry:
 
 
 def compute_telemetry(ctx: ResponseContext) -> Outcome:
-    """Token counts and timing-derived rates for a successful response."""
-    # Extract token counts and cache read tokens in a single pass
     token_counts = extract_token_counts(ctx.req_data, ctx.resp_data, ctx.provider)
     input_tokens = token_counts[0]
     output_tokens = token_counts[1]
     cache_read_tokens = token_counts[2]
 
-    # Compute timing from one clock domain; a missing stamp means "not measured"
-    # and must never be replaced by `now`, which is what yielded ttft == 0.0 and the
-    # 0.00 tokens/sec prefill readings.
     now = time.perf_counter()
     timing = resolve_flow_timing(ctx.flow, completed_at=now)
     ttft = timing.ttft_sec
@@ -89,7 +82,6 @@ def _ms_header(seconds: float | None) -> str:
 
 
 def inject_miss_headers(ctx: ResponseContext) -> Outcome:
-    """Inject telemetry headers on cache miss."""
     t = ctx.telemetry
     headers = writable_headers(ctx.flow)
     if headers is None:
@@ -116,7 +108,6 @@ def _output_label(t: Telemetry) -> str:
 
 
 def log_miss_telemetry(ctx: ResponseContext) -> Outcome:
-    """One telemetry line per cache-miss response."""
     t = ctx.telemetry
     log_msg = (
         f"📊 [TELEMETRY] Provider: {ctx.provider.upper()} | "
@@ -131,7 +122,6 @@ def log_miss_telemetry(ctx: ResponseContext) -> Outcome:
 
 
 def dump_miss_transaction(ctx: ResponseContext) -> Outcome:
-    """Persist wire transaction dump."""
     t = ctx.telemetry
     ctx.addon._dump_flow_transaction(
         ctx.flow,
@@ -150,7 +140,6 @@ def dump_miss_transaction(ctx: ResponseContext) -> Outcome:
 
 
 def record_response_metrics(ctx: ResponseContext) -> Outcome:
-    """Update in-memory cumulative optimization metrics."""
     t = ctx.telemetry
     ctx.addon.metrics.record_response(
         input_tokens=t.input_tokens,
@@ -168,7 +157,6 @@ def record_response_metrics(ctx: ResponseContext) -> Outcome:
 
 
 def log_failure(ctx: ResponseContext) -> None:
-    """Warn about a non-200 response and emit its telemetry line; runs outside the error guard."""
     logger.warning("Skipping caching response with HTTP status code %d for %s", ctx.status_code, ctx.url)
     start_t = getattr(ctx.flow, "request_start_time", None) or time.perf_counter()
     ctx.elapsed_ms = (time.perf_counter() - start_t) * 1000
@@ -202,7 +190,6 @@ def _load_failure_response(flow: Any) -> Any:
 
 
 def record_failure(ctx: ResponseContext) -> Outcome:
-    """Best-effort wire record and zeroed metrics sample for a non-200 response."""
     flow = ctx.flow
     _load_failure_request(flow)
     resp_data = _load_failure_response(flow)

@@ -1,10 +1,3 @@
-"""Server-sent-event tap installed by the ``responseheaders`` hook.
-
-The tap timestamps the first and last chunk, translates bridged Gemini streams on the fly and buffers
-chunks (up to ``_MAX_SSE_BUFFER_BYTES``) for the response hook, while passing every chunk through to
-any stream callable that was already installed.
-"""
-
 from __future__ import annotations
 
 import time
@@ -19,7 +12,6 @@ _MAX_SSE_BUFFER_BYTES = 50 * 1024 * 1024
 
 
 def response_content_type(response: Any) -> str:
-    """The response Content-Type, or ``""`` when absent."""
     headers = getattr(response, "headers", None)
     content_type = ""
     if headers:
@@ -34,7 +26,6 @@ def response_content_type(response: Any) -> str:
 
 
 def install_sse_tap(flow: Any, response: Any) -> None:
-    """Wrap ``response.stream`` so streamed chunks are timed, translated and buffered."""
     flow.sse_chunks = []
     flow.sse_bytes = 0
     flow._sse_stream_state = {}
