@@ -25,6 +25,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: CI Timing Gate (Start)
         uses: ./.github/actions/ci-timing-gate
@@ -62,6 +64,10 @@ jobs:
       - name: Lint with Ruff
         shell: bash -el {0}
         run: uv run task lint
+
+      - name: Check module line budgets
+        shell: bash -el {0}
+        run: uv run python scripts/check_module_budgets.py
 
       - name: Check markdown formatting with Prettier
         run: npx --yes prettier@3.8.4 --check "**/*.md"

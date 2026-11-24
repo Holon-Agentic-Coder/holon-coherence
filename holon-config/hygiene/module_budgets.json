@@ -1,0 +1,31 @@
+{
+  "default_max_lines": 200,
+  "exclude": [
+    {
+      "path": "tests/",
+      "reason": "Test suites are excluded from the 200-line production source module budget."
+    }
+  ],
+  "overrides": {
+    "scripts/ci_timing_gate.py": 486,
+    "src/holon_coherence/ab_testing/evaluation.py": 644,
+    "src/holon_coherence/ca_generator.py": 203,
+    "src/holon_coherence/cli.py": 253,
+    "src/holon_coherence/commands/ab_test.py": 401,
+    "src/holon_coherence/commands/agents.py": 454,
+    "src/holon_coherence/commands/docker_ops.py": 221,
+    "src/holon_coherence/commands/metrics.py": 269,
+    "src/holon_coherence/commands/start.py": 437,
+    "src/holon_coherence/container/lifecycle.py": 611,
+    "src/holon_coherence/host_local.py": 357,
+    "src/holon_coherence/hybrid_cache.py": 333,
+    "src/holon_coherence/metrics/aggregation.py": 222,
+    "src/holon_coherence/providers/anthropic.py": 673,
+    "src/holon_coherence/providers/gemini.py": 371,
+    "src/holon_coherence/providers/openai.py": 442,
+    "src/holon_coherence/providers/translation.py": 442,
+    "src/holon_coherence/proxy/addon.py": 316,
+    "src/holon_coherence/proxy/dashboard.py": 383,
+    "src/holon_coherence/proxy/steps/record_metrics.py": 216
+  }
+}
