@@ -1,5 +1,3 @@
-"""Ringer multi-agent framework: Architect/Executor subagent delegation."""
-
 import logging
 import os
 from typing import Any
@@ -11,18 +9,14 @@ DEFAULT_EXECUTOR_MODEL = "gemini-3.5-flash"
 
 
 def get_default_architect_model() -> str:
-    """Resolve default architect model dynamically from environment or fallback."""
     return os.environ.get("HOLON_ARCHITECT_MODEL", DEFAULT_ARCHITECT_MODEL)
 
 
 def get_default_executor_model() -> str:
-    """Resolve default executor model dynamically from environment or fallback."""
     return os.environ.get("HOLON_EXECUTOR_MODEL", DEFAULT_EXECUTOR_MODEL)
 
 
 class SubtaskResult:
-    """Encapsulates the execution outcome of a delegated subtask."""
-
     def __init__(self, task_id: str, success: bool, raw_output: str, summary: str | None = None):
         self.task_id = task_id
         self.success = success
@@ -30,7 +24,6 @@ class SubtaskResult:
         self.summary = summary if summary is not None else self._summarize(raw_output)
 
     def _summarize(self, raw_output: str) -> str:
-        """Compresses raw execution output to a high-level summary."""
         lines = raw_output.splitlines()
         if len(lines) <= 5:
             return raw_output.strip()
@@ -45,12 +38,6 @@ class SubtaskResult:
 
 
 class RingerOrchestrator:
-    """Orchestrates execution between high-capability Architect models and fast, low-cost Executor subagents.
-
-    Model identifiers are dynamically resolved from arguments or environment variables
-    (HOLON_ARCHITECT_MODEL and HOLON_EXECUTOR_MODEL) without hardcoded vendor locks.
-    """
-
     def __init__(
         self,
         architect_model: str | None = None,
@@ -62,7 +49,6 @@ class RingerOrchestrator:
         self.results: list[SubtaskResult] = []
 
     def plan_subtask(self, task_id: str, description: str, commands: list[str]) -> dict[str, Any]:
-        """Registers a subtask to be assigned to an Executor model."""
         subtask = {
             "task_id": task_id,
             "description": description,
@@ -78,14 +64,12 @@ class RingerOrchestrator:
         return subtask
 
     def record_execution_outcome(self, task_id: str, success: bool, raw_output: str) -> SubtaskResult:
-        """Records the raw execution output from an Executor subagent and generates a compressed summary."""
         res = SubtaskResult(task_id=task_id, success=success, raw_output=raw_output)
         self.results.append(res)
         logger.info("Recorded outcome for subtask '%s' (success=%s)", task_id, success)
         return res
 
     def build_architect_summary(self) -> str:
-        """Generates a compressed summary of all subtask outcomes to feed back to the Architect model."""
         if not self.results:
             return "No subtasks executed yet."
 

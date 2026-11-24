@@ -1,32 +1,3 @@
-"""Root CA generator for the opt-in local token-reduction proxy.
-
-This module owns exactly one job: guarantee that a *valid, trusted-shape, non-expiring* self-signed
-Root CA exists on the host so the sandbox can trust the locally-owned MITM proxy.
-
-Actual behaviour:
-
-* ``openssl`` is probed with :func:`shutil.which` before anything is written. When it is
-  missing, a :class:`RuntimeError` carrying an actionable install hint is raised.
-* The certificate is generated with ``openssl req -x509`` under a 60 second timeout.
-  ``subprocess.CalledProcessError`` and ``subprocess.TimeoutExpired`` are translated into
-  :class:`RuntimeError` including the captured stderr.
-* The generated certificate carries explicit CA extensions (``basicConstraints=critical,CA:TRUE``
-  and ``keyUsage=critical,keyCertSign,cRLSign``). A CA certificate without ``keyUsage`` is refused
-  as a trust anchor by several TLS stacks (BoringSSL/Node, Go, OpenSSL in strict ``purpose``
-  modes), which would break the whole trust bootstrap.
-* The private key is created with mode ``0o600`` (owner read/write only).
-* Every returned artifact is validated with ``openssl x509 -in <path> -noout`` — both after fresh
-  generation and when reusing an existing file — so a previously poisoned cache is reported instead
-  of silently trusted.
-* ``openssl x509 -noout`` returns 0 for an *expired* certificate, so expiry is checked separately
-  with ``openssl x509 -checkend``. A cached CA that expires within the renewal window is deleted
-  and regenerated instead of being reused forever.
-
-There is deliberately no "fallback certificate" generator: unparseable PEM blobs would be cached
-forever by the existence check and break every TLS client inside the sandbox with an opaque error.
-Fail loudly instead.
-"""
-
 from __future__ import annotations
 
 import contextlib
@@ -38,20 +9,13 @@ import subprocess
 logger = logging.getLogger(__name__)
 
 _OPENSSL_TIMEOUT_SECONDS = 60
-
-#: Lifetime of a freshly generated Root CA, in days. Bounded on purpose: together with
-#: ``_CA_RENEWAL_WINDOW_SECONDS`` it guarantees a cached CA is rotated instead of being silently
-#: reused forever.
 _CA_VALIDITY_DAYS = 397
-
-#: A cached CA expiring inside this window is treated as stale and regenerated (30 days).
 _CA_RENEWAL_WINDOW_SECONDS = 30 * 24 * 60 * 60
-
 _CA_CERT_FILENAME = "holon-root-ca.crt"
 _CA_KEY_FILENAME = "holon-root-ca.key"
+_OWNER_ONLY_KEY_FILE_MODE = 0o600
+_OWNER_ONLY_DIR_MODE = 0o700
 
-#: Explicit CA extensions. ``keyUsage`` is mandatory in practice: without it several TLS stacks
-#: refuse the certificate as a trust anchor even though it is a perfectly valid CA.
 _CA_EXTENSIONS = (
     "-addext",
     "basicConstraints=critical,CA:TRUE",
@@ -67,7 +31,6 @@ _OPENSSL_INSTALL_HINT = (
 
 
 def _openssl_binary() -> str:
-    """Return the absolute path of the ``openssl`` binary or raise with an install hint."""
     openssl_path = shutil.which("openssl")
     if openssl_path is None:
         raise RuntimeError(
@@ -77,7 +40,6 @@ def _openssl_binary() -> str:
 
 
 def _run_openssl(*args: str) -> subprocess.CompletedProcess[str]:
-    """Run ``openssl`` with captured output and no implicit raising."""
     openssl_path = shutil.which("openssl") or "openssl"
     try:
         return subprocess.run(
@@ -92,11 +54,6 @@ def _run_openssl(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 def _assert_valid_cert(ca_cert_path: str) -> None:
-    """Assert that ``ca_cert_path`` is a parseable X.509 certificate.
-
-    Raises:
-        RuntimeError: If ``openssl`` cannot parse the artifact (or times out doing so).
-    """
     result = _run_openssl("x509", "-in", ca_cert_path, "-noout")
 
     if result.returncode != 0:
@@ -108,15 +65,6 @@ def _assert_valid_cert(ca_cert_path: str) -> None:
 
 
 def _expires_within(ca_cert_path: str, window_seconds: int) -> bool:
-    """True when ``ca_cert_path`` expires within ``window_seconds``.
-
-    ``openssl x509 -noout`` exits 0 for an expired certificate, so expiry needs its own probe:
-    ``-checkend`` exits 0 when the certificate stays valid beyond the window and 1 when it does
-    not. Any other exit status is an openssl-level failure and is reported, not swallowed.
-
-    Raises:
-        RuntimeError: If ``openssl`` cannot evaluate the expiry of the artifact.
-    """
     result = _run_openssl("x509", "-in", ca_cert_path, "-noout", "-checkend", str(window_seconds))
 
     if result.returncode == 0:
@@ -132,12 +80,15 @@ def _expires_within(ca_cert_path: str, window_seconds: int) -> bool:
 
 
 def _harden_key_permissions(ca_key_path: str) -> None:
-    """Restrict the CA private key to owner read/write (``0o600``)."""
-    os.chmod(ca_key_path, 0o600)
+    os.chmod(ca_key_path, _OWNER_ONLY_KEY_FILE_MODE)
+
+
+def _precreate_owner_only_key_file(ca_key_path: str) -> None:
+    key_fd = os.open(ca_key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _OWNER_ONLY_KEY_FILE_MODE)
+    os.close(key_fd)
 
 
 def _remove_cached_ca(ca_cert_path: str, ca_key_path: str) -> None:
-    """Delete a stale cached CA pair so the next generation step starts from a clean slate."""
     cert_dir = os.path.dirname(ca_cert_path)
     mitm_ca_cert = os.path.join(cert_dir, "mitmproxy-ca-cert.pem")
     mitm_ca_pem = os.path.join(cert_dir, "mitmproxy-ca.pem")
@@ -149,11 +100,7 @@ def _remove_cached_ca(ca_cert_path: str, ca_key_path: str) -> None:
 
 
 def _generate(openssl_path: str, ca_cert_path: str, ca_key_path: str, cert_dir: str) -> None:
-    """Run ``openssl req -x509`` to create a fresh CA pair, translating failures into RuntimeError."""
-    # Pre-create the key file with 0o600 so the private key is never world-readable, even briefly,
-    # regardless of the caller's umask.
-    key_fd = os.open(ca_key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    os.close(key_fd)
+    _precreate_owner_only_key_file(ca_key_path)
 
     try:
         subprocess.run(
@@ -191,7 +138,6 @@ def _generate(openssl_path: str, ca_cert_path: str, ca_key_path: str, cert_dir: 
 
 
 def _sync_mitmproxy_ca(ca_cert_path: str, ca_key_path: str, cert_dir: str) -> None:
-    """Create mitmproxy-compatible CA files (mitmproxy-ca-cert.pem and mitmproxy-ca.pem)."""
     mitm_ca_cert = os.path.join(cert_dir, "mitmproxy-ca-cert.pem")
     mitm_ca_pem = os.path.join(cert_dir, "mitmproxy-ca.pem")
 
@@ -201,27 +147,21 @@ def _sync_mitmproxy_ca(ca_cert_path: str, ca_key_path: str, cert_dir: str) -> No
     with contextlib.suppress(OSError):
         with open(ca_key_path, encoding="utf-8") as kf, open(ca_cert_path, encoding="utf-8") as cf:
             combined = f"{kf.read().strip()}\n{cf.read().strip()}\n"
-        pem_fd = os.open(mitm_ca_pem, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        pem_fd = os.open(mitm_ca_pem, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _OWNER_ONLY_KEY_FILE_MODE)
         with os.fdopen(pem_fd, "w", encoding="utf-8") as pf:
             pf.write(combined)
-        os.chmod(mitm_ca_pem, 0o600)
+        os.chmod(mitm_ca_pem, _OWNER_ONLY_KEY_FILE_MODE)
 
 
 def _ensure_root_ca(cert_dir: str | None = None) -> tuple[str, str, bool]:
-    """Internal implementation shared by :func:`generate_root_ca` and the CLI entry point.
-
-    Returns:
-        tuple[str, str, bool]: ``(ca_cert_path, ca_key_path, generated)`` where ``generated`` is
-        False only when a still-valid cached CA was reused.
-    """
     openssl_path = _openssl_binary()
 
     if cert_dir is None:
         cert_dir = os.path.expanduser("~/.holon/certs")
 
-    os.makedirs(cert_dir, mode=0o700, exist_ok=True)
+    os.makedirs(cert_dir, mode=_OWNER_ONLY_DIR_MODE, exist_ok=True)
     with contextlib.suppress(OSError):
-        os.chmod(cert_dir, 0o700)
+        os.chmod(cert_dir, _OWNER_ONLY_DIR_MODE)
     ca_cert_path = os.path.join(cert_dir, _CA_CERT_FILENAME)
     ca_key_path = os.path.join(cert_dir, _CA_KEY_FILENAME)
 
@@ -251,21 +191,6 @@ def _ensure_root_ca(cert_dir: str | None = None) -> tuple[str, str, bool]:
 
 
 def generate_root_ca(cert_dir: str | None = None, output_dir: str | None = None) -> tuple[str, str]:
-    """Ensure a valid, properly extended, non-expiring self-signed Root CA exists.
-
-    Args:
-        cert_dir: Directory where certs should be stored. Defaults to ``~/.holon/certs``.
-        output_dir: Alias for ``cert_dir``.
-
-    Returns:
-        tuple[str, str]: Paths to ``(ca_cert_path, ca_key_path)``. The certificate is guaranteed to
-        be parseable by ``openssl x509``, to carry CA ``basicConstraints``/``keyUsage`` extensions,
-        to stay valid for more than 30 days, and the key is mode ``0o600``.
-
-    Raises:
-        RuntimeError: If ``openssl`` is unavailable, generation fails or times out, or an existing
-            cached certificate is not a parseable X.509 artifact.
-    """
     target_dir = cert_dir or output_dir
     ca_cert_path, ca_key_path, _ = _ensure_root_ca(target_dir)
     return ca_cert_path, ca_key_path

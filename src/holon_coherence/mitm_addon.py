@@ -1,5 +1,3 @@
-"""Backward-compatible entry point re-exporting proxy components."""
-
 from __future__ import annotations
 
 import os
@@ -90,7 +88,6 @@ CACHE_DIR = os.getenv("CACHE_DIR", os.path.expanduser("~/.holon/cache"))
 
 
 def _proxy_own_ports(addon: MitmproxyAddon | None = None) -> tuple[int, ...]:
-    """Helper re-export for proxy's own listening ports."""
     inst = addon if addon is not None else MitmproxyAddon()
     return inst._proxy_own_ports()
 

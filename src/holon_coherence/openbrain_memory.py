@@ -1,5 +1,3 @@
-"""OpenBrain episodic memory registry for cross-session continuity and memory retention."""
-
 import json
 import logging
 import os
@@ -11,8 +9,6 @@ logger = logging.getLogger(__name__)
 
 
 class OpenBrainMemory:
-    """OpenBrain (OB1) episodic memory layer for storing session learnings and preferences."""
-
     def __init__(self, db_dir: str | None = None):
         if db_dir is None:
             db_dir = os.path.expanduser("~/.holon/openbrain")
@@ -45,17 +41,6 @@ class OpenBrainMemory:
         category: str = "lesson_learned",
         metadata: dict[str, Any] | None = None,
     ) -> int:
-        """Stores a new memory entry in OpenBrain registry.
-
-        Args:
-            topic: Topic or tag (e.g. 'docker', 'pytest', 'linting').
-            content: The lesson learned or memory text.
-            category: Category ('lesson_learned', 'developer_preference', 'architecture_rule').
-            metadata: Optional dictionary metadata.
-
-        Returns:
-            int: Inserted memory ID.
-        """
         meta_str = json.dumps(metadata or {}, default=str)
         now = time.time()
 
@@ -78,7 +63,6 @@ class OpenBrainMemory:
     def fetch_memories(
         self, topic: str | None = None, category: str | None = None, limit: int = 10
     ) -> list[dict[str, Any]]:
-        """Retrieves memories filtered by topic or category."""
         query = "SELECT id, topic, category, content, metadata_json, created_at FROM memories WHERE 1=1"
         params: list[Any] = []
 
@@ -113,11 +97,9 @@ class OpenBrainMemory:
 
         return results
 
-    # Alias for backwards compatibility
     retrieve_memories = fetch_memories
 
     def format_memory_context(self, topic: str | None = None, limit: int = 5) -> str:
-        """Formats relevant memories into a prompt context section."""
         memories = self.fetch_memories(topic=topic, limit=limit)
         if not memories:
             return ""
