@@ -1,0 +1,29 @@
+{
+  "kb_id": "KB-failure-044086e2",
+  "kb_type": "failure_mode",
+  "version": "1.0",
+  "created_ts": "2026-11-24T05:23:43.376025+00:00",
+  "updated_ts": "2026-11-24T05:23:43.376025+00:00",
+  "created_by": "holon-promotion-engine",
+  "status": "active",
+  "evidence": {
+    "ledger_refs": [
+      "ACT-REV-1795497128-37c39a74",
+      "ACT-REV-1795497126-d6865737"
+    ],
+    "success_count": 0,
+    "failure_count": 2,
+    "ladder_state": "repeated"
+  },
+  "tags": [
+    "code",
+    "veto"
+  ],
+  "human_approved": false,
+  "payload": {
+    "name": "Failure mode in I-1795496324-coherence-build-self-doc/P-1795496341-ANA-G4A/E-1795496494-ANA-G4A/_",
+    "description": "Reproduced failure across 2 executions with identical context.",
+    "action": "Review Loop iteration 1 reviewer 2 completed",
+    "symptoms": []
+  }
+}
