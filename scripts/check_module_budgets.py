@@ -4,34 +4,36 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
-import subprocess
 import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+try:
+    from scripts.module_budget_base import (
+        DISCOVERY_ROOTS,
+        discover_source_modules,
+        resolve_base_ref,
+        verify_frozen_config,
+    )
+except ModuleNotFoundError:
+    from module_budget_base import (
+        DISCOVERY_ROOTS,
+        discover_source_modules,
+        resolve_base_ref,
+        verify_frozen_config,
+    )
+
 DEFAULT_CONFIG_REL_PATH = "holon-config/hygiene/module_budgets.json"
-DISCOVERY_ROOTS = ("src", "scripts")
-
-
-def _run_git(repo_root: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["git", *args], cwd=repo_root, capture_output=True, text=True, check=False)
-
-
-def _is_test_path(rel_path: str) -> bool:
-    posix = PurePosixPath(rel_path)
-    return "tests" in posix.parts or posix.name.startswith("test_")
-
-
-def discover_source_modules(repo_root: Path) -> list[str]:
-    res = _run_git(repo_root, ["ls-files", "-z", "--", *DISCOVERY_ROOTS])
-    if res.returncode != 0:
-        return []
-    modules = []
-    for raw in res.stdout.split("\0"):
-        rel = raw.strip().replace("\\", "/")
-        if rel and rel.endswith(".py") and not _is_test_path(rel) and (repo_root / rel).is_file():
-            modules.append(rel)
-    return sorted(modules)
+__all__ = [
+    "DEFAULT_CONFIG_REL_PATH",
+    "DISCOVERY_ROOTS",
+    "check_repo_budgets",
+    "discover_source_modules",
+    "evaluate_budgets",
+    "load_config",
+    "main",
+    "verify_frozen_config",
+]
 
 
 def _is_positive_int(value: Any) -> bool:
@@ -116,46 +118,6 @@ def evaluate_budgets(repo_root: Path, config: dict[str, Any], modules: list[str]
     return errors, notices
 
 
-def _resolve_base_ref(repo_root: Path, base_ref: str | None) -> str | None:
-    if base_ref:
-        return base_ref
-    for candidate in ("origin/main", "main"):
-        if _run_git(repo_root, ["rev-parse", "--verify", "--quiet", candidate]).returncode == 0:
-            return candidate
-    return None
-
-
-def verify_frozen_config(
-    repo_root: Path,
-    config_rel_path: str,
-    current_config: dict[str, Any],
-    base_ref: str,
-) -> list[str]:
-    mb = _run_git(repo_root, ["merge-base", base_ref, "HEAD"])
-    if mb.returncode != 0 or not mb.stdout.strip():
-        return []
-    show = _run_git(repo_root, ["show", f"{mb.stdout.strip()}:{config_rel_path}"])
-    if show.returncode != 0:
-        return []
-    try:
-        base_config = json.loads(show.stdout)
-    except json.JSONDecodeError:
-        return []
-    errors: list[str] = []
-    base_default = base_config.get("default_max_lines", 0)
-    cur_default = current_config["default_max_lines"]
-    if cur_default > base_default:
-        errors.append(f"Frozen config violation: default_max_lines raised ({base_default} -> {cur_default})")
-    base_overrides: dict[str, int] = base_config.get("overrides", {})
-    for rel_path, limit in sorted(current_config.get("overrides", {}).items()):
-        if rel_path not in base_overrides:
-            errors.append(f"Frozen config violation: new override added for {rel_path} ({limit})")
-        elif limit > base_overrides[rel_path]:
-            prev = base_overrides[rel_path]
-            errors.append(f"Frozen config violation: override raised for {rel_path} ({prev} -> {limit})")
-    return errors
-
-
 def check_repo_budgets(
     repo_root: Path,
     config_rel_path: str = DEFAULT_CONFIG_REL_PATH,
@@ -165,10 +127,15 @@ def check_repo_budgets(
     config, config_errors = load_config(repo_root / config_rel_path)
     if config is None:
         return config_errors, []
-    errors, notices = evaluate_budgets(repo_root, config, discover_source_modules(repo_root))
+    modules, discovery_errors = discover_source_modules(repo_root)
+    if discovery_errors:
+        return discovery_errors, []
+    errors, notices = evaluate_budgets(repo_root, config, modules)
     if verify_base:
-        resolved = _resolve_base_ref(repo_root, base_ref)
-        if resolved:
+        resolved = resolve_base_ref(repo_root, base_ref)
+        if not resolved:
+            errors.append("Failed to resolve base ref for frozen config verification (tried origin/main, main).")
+        else:
             errors.extend(verify_frozen_config(repo_root, config_rel_path, config, resolved))
     return errors, notices
 

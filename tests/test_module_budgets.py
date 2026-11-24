@@ -130,7 +130,11 @@ def test_exclusion_missing_reason_fails_validation(tmp_path: Path, capsys: Any) 
 
 
 def test_frozen_config_verification_against_merge_base(tmp_path: Path, capsys: Any) -> None:
-    base_config = {"default_max_lines": 200, "exclude": [], "overrides": {"src/legacy/big.py": 250}}
+    base_config = {
+        "default_max_lines": 200,
+        "exclude": [{"pattern": "src/generated/*.py", "reason": "Generated code"}],
+        "overrides": {"src/legacy/big.py": 250},
+    }
     repo = _init_git_repo(
         tmp_path,
         base_config,
@@ -138,32 +142,76 @@ def test_frozen_config_verification_against_merge_base(tmp_path: Path, capsys: A
     )
     _git(repo, "checkout", "-b", "feat/budget-test")
 
-    _write_config(repo, {"default_max_lines": 200, "exclude": [], "overrides": {"src/legacy/big.py": 251}})
+    _write_config(repo, {**base_config, "overrides": {"src/legacy/big.py": 251}})
     assert main(["--repo-root", str(repo), "--verify-base", "--base-ref", "main"]) == 1
     assert "override raised" in capsys.readouterr().err
 
     _write_config(
         repo,
-        {
-            "default_max_lines": 200,
-            "exclude": [],
-            "overrides": {"src/legacy/big.py": 250, "src/legacy/small.py": 210},
-        },
+        {**base_config, "overrides": {"src/legacy/big.py": 250, "src/legacy/small.py": 210}},
     )
     assert main(["--repo-root", str(repo), "--verify-base", "--base-ref", "main"]) == 1
     assert "new override added" in capsys.readouterr().err
 
-    _write_config(repo, {"default_max_lines": 210, "exclude": [], "overrides": {"src/legacy/big.py": 250}})
+    _write_config(repo, {**base_config, "default_max_lines": 210})
     assert main(["--repo-root", str(repo), "--verify-base", "--base-ref", "main"]) == 1
     assert "default_max_lines raised" in capsys.readouterr().err
 
+    _write_config(
+        repo,
+        {
+            **base_config,
+            "exclude": [
+                {"pattern": "src/generated/*.py", "reason": "Generated code"},
+                {"pattern": "src/legacy/*.py", "reason": "Bypass attempt"},
+            ],
+        },
+    )
+    assert main(["--repo-root", str(repo), "--verify-base", "--base-ref", "main"]) == 1
+    assert "new exclude pattern added" in capsys.readouterr().err
+
     (repo / "src/legacy/big.py").write_text(_lines(240), encoding="utf-8")
-    _write_config(repo, {"default_max_lines": 200, "exclude": [], "overrides": {"src/legacy/big.py": 240}})
+    _write_config(repo, {**base_config, "overrides": {"src/legacy/big.py": 240}})
     assert main(["--repo-root", str(repo), "--verify-base", "--base-ref", "main"]) == 0
 
     (repo / "src/legacy/big.py").write_text(_lines(180), encoding="utf-8")
     _write_config(repo, {"default_max_lines": 200, "exclude": [], "overrides": {}})
     assert main(["--repo-root", str(repo), "--verify-base", "--base-ref", "main"]) == 0
+
+
+def test_discover_source_modules_fails_closed_on_git_error(tmp_path: Path, capsys: Any) -> None:
+    non_git = tmp_path / "not_a_repo"
+    non_git.mkdir()
+    _write_config(non_git, {"default_max_lines": 200, "exclude": [], "overrides": {}})
+    assert main(["--repo-root", str(non_git)]) == 1
+    assert "git ls-files" in capsys.readouterr().err
+
+
+def test_verify_base_fails_closed_on_missing_ref_or_invalid_base_json(tmp_path: Path, capsys: Any) -> None:
+    repo = tmp_path / "no_main_repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "trunk")
+    _write_config(repo, {"default_max_lines": 200, "exclude": [], "overrides": {}})
+    _write_files(repo, {"src/app/mod.py": _lines(20)})
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "initial")
+
+    assert main(["--repo-root", str(repo), "--verify-base"]) == 1
+    assert "Failed to resolve base ref" in capsys.readouterr().err
+
+    assert main(["--repo-root", str(repo), "--verify-base", "--base-ref", "nonexistent"]) == 1
+    assert "merge-base" in capsys.readouterr().err
+
+    bad_repo = tmp_path / "bad_base_json"
+    bad_repo.mkdir()
+    _git(bad_repo, "init", "-b", "main")
+    _write_files(bad_repo, {DEFAULT_CONFIG_REL_PATH: "{invalid json", "src/app/mod.py": _lines(20)})
+    _git(bad_repo, "add", ".")
+    _git(bad_repo, "commit", "-m", "bad config")
+    _git(bad_repo, "checkout", "-b", "feat/fix-json")
+    _write_config(bad_repo, {"default_max_lines": 200, "exclude": [], "overrides": {}})
+    assert main(["--repo-root", str(bad_repo), "--verify-base", "--base-ref", "main"]) == 1
+    assert "Failed to parse base config" in capsys.readouterr().err
 
 
 def test_frozen_config_bootstrap_when_absent_on_base(tmp_path: Path) -> None:
