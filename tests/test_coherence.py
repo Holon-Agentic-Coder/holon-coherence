@@ -1,5 +1,3 @@
-"""Unit tests for holon-coherence components."""
-
 import os
 import tempfile
 import unittest
@@ -52,9 +50,7 @@ class TestHolonCoherence(unittest.TestCase):
                 "model": "gemini-3.8-flash-high",
                 "messages": [{"role": "user", "content": "Explain architecture."}],
             }
-            # Put entry
             cache.put(payload, "Architectural RFC details", provider="gemini")
-            # Retrieve entry
             retrieved = cache.get(payload, provider="gemini")
             self.assertEqual(retrieved, "Architectural RFC details")
 
@@ -79,13 +75,11 @@ class TestHolonCoherence(unittest.TestCase):
     def test_ringer_orchestrator_dynamic_env_resolution(self):
         from unittest.mock import patch
 
-        # 1. Default fallback without env vars
         with patch.dict(os.environ, {}, clear=True):
             ringer_default = RingerOrchestrator()
             self.assertEqual(ringer_default.architect_model, "claude-3-5-sonnet")
             self.assertEqual(ringer_default.executor_model, "gemini-3.5-flash")
 
-        # 2. Dynamic environment variable overrides
         with patch.dict(
             os.environ,
             {
@@ -217,8 +211,7 @@ class TestHolonCoherence(unittest.TestCase):
     def test_secret_redaction(self):
         from holon_coherence.mitm_addon import scrub_headers, scrub_payload
 
-        # Standalone auth, credential, credentials, client_secret, refresh_token
-        test_payload = {
+        payload_with_secrets = {
             "auth": "secret_auth_token_xyz",
             "credential": "secret_credential_val",
             "credentials": {"nested_key": "val123"},
@@ -237,7 +230,7 @@ class TestHolonCoherence(unittest.TestCase):
             ],
         }
 
-        scrubbed = scrub_payload(test_payload)
+        scrubbed = scrub_payload(payload_with_secrets)
         self.assertEqual(scrubbed["auth"], "[REDACTED]")
         self.assertEqual(scrubbed["credential"], "[REDACTED]")
         self.assertEqual(scrubbed["credentials"], "[REDACTED]")
@@ -248,27 +241,24 @@ class TestHolonCoherence(unittest.TestCase):
         self.assertEqual(scrubbed["Client_Secret"], "[REDACTED]")
         self.assertEqual(scrubbed["REFRESH_TOKEN"], "[REDACTED]")
         self.assertEqual(scrubbed["AUTH"], "[REDACTED]")
-        # Non-credential keys must not be redacted
         self.assertEqual(scrubbed["author"], "John Doe")
         self.assertEqual(scrubbed["authenticity"], "high")
-        # Nested list dictionary
         self.assertEqual(scrubbed["nested"][1]["auth"], "[REDACTED]")
         self.assertEqual(scrubbed["nested"][1]["credential"], "[REDACTED]")
 
-        # Headers scrubbing
-        test_headers = {
+        headers_with_secrets = {
             "Auth": "bearer_abc",
             "Credential": "cred_value",
             "Credentials": "creds_value",
             "Authorization": "Bearer 123",
             "Content-Type": "application/json",
         }
-        scrubbed_h = scrub_headers(test_headers)
-        self.assertEqual(scrubbed_h["auth"], "[REDACTED]")
-        self.assertEqual(scrubbed_h["credential"], "[REDACTED]")
-        self.assertEqual(scrubbed_h["credentials"], "[REDACTED]")
-        self.assertEqual(scrubbed_h["authorization"], "[REDACTED]")
-        self.assertEqual(scrubbed_h["content-type"], "application/json")
+        scrubbed_headers = scrub_headers(headers_with_secrets)
+        self.assertEqual(scrubbed_headers["auth"], "[REDACTED]")
+        self.assertEqual(scrubbed_headers["credential"], "[REDACTED]")
+        self.assertEqual(scrubbed_headers["credentials"], "[REDACTED]")
+        self.assertEqual(scrubbed_headers["authorization"], "[REDACTED]")
+        self.assertEqual(scrubbed_headers["content-type"], "application/json")
 
     def test_active_optimization_default(self):
         from unittest.mock import patch
@@ -287,43 +277,52 @@ class TestHolonCoherence(unittest.TestCase):
         with patch.dict(os.environ, {"COHERENCE_TOKEN_REDUCTION": "1", "HOLON_PASSIVE_MONITORING": "0"}, clear=True):
             self.assertFalse(is_passive_monitoring())
 
-    def test_session_wide_tool_deduplication_anthropic(self):
-        cleaner = JSONContextCleaner(enable_deduplication=True, max_turns=60)
-        status_line = "On branch main\nYour branch is up to date with 'origin/main'.\nnothing to commit\n"
-        large_status_output = status_line * 10
+    def _build_repetitive_anthropic_tool_messages(self, repeated_output: str) -> list[dict]:
         messages = [{"role": "user", "content": "Start session"}]
-
-        # Create a 24-turn conversation simulating repetitive git status runs across turns
-        for i in range(1, 23, 2):
-            messages.append({"role": "assistant", "content": f"Running step {i}"})
+        for turn_index in range(1, 23, 2):
+            messages.append({"role": "assistant", "content": f"Running step {turn_index}"})
             messages.append(
                 {
                     "role": "user",
                     "content": [
                         {
                             "type": "tool_result",
-                            "tool_use_id": f"tool_use_{i}",
-                            "content": large_status_output,
+                            "tool_use_id": f"tool_use_{turn_index}",
+                            "content": repeated_output,
                         }
                     ],
                 }
             )
         messages.append({"role": "assistant", "content": "Final step"})
+        return messages
 
-        payload = {"messages": messages}
-        res = cleaner.process_payload_with_stats(payload, provider="anthropic")
-        # Tool outputs in older turns (from turn 4 onwards up to turn 20) should be deduplicated
-        self.assertGreaterEqual(res.tool_outputs_omitted, 5)
-        self.assertGreater(res.chars_saved, 1000)
-
-        # Invariant: tool_use_id and tool_result structure must be preserved
-        cleaned_msgs = res.payload["messages"]
-        for msg in cleaned_msgs:
+    def _assert_anthropic_tool_result_ids_preserved(self, cleaned_messages: list[dict]) -> None:
+        for msg in cleaned_messages:
             if isinstance(msg.get("content"), list):
                 for block in msg["content"]:
                     if block.get("type") == "tool_result":
                         self.assertIn("tool_use_id", block)
                         self.assertTrue(block["tool_use_id"].startswith("tool_use_"))
+
+    def _assert_gemini_function_response_names_preserved(
+        self, cleaned_contents: list[dict], expected_name: str
+    ) -> None:
+        for turn in cleaned_contents:
+            for part in turn.get("parts", []):
+                if "functionResponse" in part:
+                    self.assertEqual(part["functionResponse"]["name"], expected_name)
+
+    def test_session_wide_tool_deduplication_anthropic(self):
+        cleaner = JSONContextCleaner(enable_deduplication=True, max_turns=60)
+        status_line = "On branch main\nYour branch is up to date with 'origin/main'.\nnothing to commit\n"
+        large_status_output = status_line * 10
+        messages = self._build_repetitive_anthropic_tool_messages(large_status_output)
+
+        payload = {"messages": messages}
+        res = cleaner.process_payload_with_stats(payload, provider="anthropic")
+        self.assertGreaterEqual(res.tool_outputs_omitted, 5)
+        self.assertGreater(res.chars_saved, 1000)
+        self._assert_anthropic_tool_result_ids_preserved(res.payload["messages"])
 
     def test_session_wide_tool_deduplication_openai(self):
         cleaner = JSONContextCleaner(enable_deduplication=True, max_turns=60)
@@ -383,49 +382,41 @@ class TestHolonCoherence(unittest.TestCase):
         payload = {"contents": contents}
         res = cleaner.process_payload_with_stats(payload, provider="gemini")
         self.assertGreaterEqual(res.tool_outputs_omitted, 5)
-
-        # Invariant: functionResponse name is preserved
-        cleaned_contents = res.payload["contents"]
-        for turn in cleaned_contents:
-            for part in turn.get("parts", []):
-                if "functionResponse" in part:
-                    self.assertEqual(part["functionResponse"]["name"], "list_files")
+        self._assert_gemini_function_response_names_preserved(res.payload["contents"], "list_files")
 
     def test_deduplication_disabled_openai_and_gemini(self):
         cleaner = JSONContextCleaner(enable_deduplication=False, max_turns=60)
 
-        # 1. OpenAI: verify tool outputs and repeated content are not omitted
         build_line = "Compiling src/core.rs...\nFinished release [optimized] target(s) in 2.34s\n"
         build_log = build_line * 10
-        messages = [{"role": "user", "content": "Execute build"}]
+        openai_messages = [{"role": "user", "content": "Execute build"}]
         for i in range(1, 11, 2):
-            messages.append(
+            openai_messages.append(
                 {
                     "role": "assistant",
                     "content": None,
                     "tool_calls": [{"id": f"call_{i}", "type": "function", "function": {"name": "run_build"}}],
                 }
             )
-            messages.append(
+            openai_messages.append(
                 {
                     "role": "tool",
                     "tool_call_id": f"call_{i}",
                     "content": build_log,
                 }
             )
-        messages.append({"role": "assistant", "content": "All builds complete."})
-        res_openai = cleaner.process_payload_with_stats({"messages": messages}, provider="openai")
+        openai_messages.append({"role": "assistant", "content": "All builds complete."})
+        res_openai = cleaner.process_payload_with_stats({"messages": openai_messages}, provider="openai")
         self.assertEqual(res_openai.tool_outputs_omitted, 0)
         for msg in res_openai.payload["messages"]:
             if msg.get("role") == "tool":
                 self.assertEqual(msg["content"], build_log)
 
-        # 2. Gemini: verify functionResponse and repeated text are not omitted
         dir_listing = {"files": [f"file_{k}.py" for k in range(50)], "status": "ok"}
-        contents = [{"role": "user", "parts": [{"text": "List files"}]}]
+        gemini_contents = [{"role": "user", "parts": [{"text": "List files"}]}]
         for _i in range(1, 11, 2):
-            contents.append({"role": "model", "parts": [{"functionCall": {"name": "list_files"}}]})
-            contents.append(
+            gemini_contents.append({"role": "model", "parts": [{"functionCall": {"name": "list_files"}}]})
+            gemini_contents.append(
                 {
                     "role": "function",
                     "parts": [
@@ -438,8 +429,8 @@ class TestHolonCoherence(unittest.TestCase):
                     ],
                 }
             )
-        contents.append({"role": "model", "parts": [{"text": "Done."}]})
-        res_gemini = cleaner.process_payload_with_stats({"contents": contents}, provider="gemini")
+        gemini_contents.append({"role": "model", "parts": [{"text": "Done."}]})
+        res_gemini = cleaner.process_payload_with_stats({"contents": gemini_contents}, provider="gemini")
         self.assertEqual(res_gemini.tool_outputs_omitted, 0)
         for turn in res_gemini.payload["contents"]:
             for part in turn.get("parts", []):
@@ -459,29 +450,26 @@ class TestHolonCoherence(unittest.TestCase):
             compute_tail_prefill_tps,
         )
 
-        # Prefill throughput
-        val1 = compute_prefill_tps(1000, 2.0)
-        val2 = compute_prefill_throughput(1000, 2.0)
-        val3 = compute_prompt_prefill_speed(1000, 2.0)
-        self.assertEqual(val1, 500.0)
-        self.assertEqual(val2, 500.0)
-        self.assertEqual(val3, 500.0)
+        prefill_tps = compute_prefill_tps(1000, 2.0)
+        prefill_throughput = compute_prefill_throughput(1000, 2.0)
+        prompt_prefill_speed = compute_prompt_prefill_speed(1000, 2.0)
+        self.assertEqual(prefill_tps, 500.0)
+        self.assertEqual(prefill_throughput, 500.0)
+        self.assertEqual(prompt_prefill_speed, 500.0)
 
-        # Tail prefill throughput
-        tval1 = compute_tail_prefill_tps(200, 1.0)
-        tval2 = compute_tail_prefill_throughput(200, 1.0)
-        tval3 = compute_tail_prefill_speed(200, 1.0)
-        self.assertEqual(tval1, 200.0)
-        self.assertEqual(tval2, 200.0)
-        self.assertEqual(tval3, 200.0)
+        tail_prefill_tps = compute_tail_prefill_tps(200, 1.0)
+        tail_prefill_throughput = compute_tail_prefill_throughput(200, 1.0)
+        tail_prefill_speed = compute_tail_prefill_speed(200, 1.0)
+        self.assertEqual(tail_prefill_tps, 200.0)
+        self.assertEqual(tail_prefill_throughput, 200.0)
+        self.assertEqual(tail_prefill_speed, 200.0)
 
-        # Decode throughput
-        dval1 = compute_decode_tps(120, 2.0, streaming=True)
-        dval2 = compute_decode_throughput(120, 2.0, streaming=True)
-        dval3 = compute_decode_speed(120, 2.0, streaming=True)
-        self.assertEqual(dval1, 60.0)
-        self.assertEqual(dval2, 60.0)
-        self.assertEqual(dval3, 60.0)
+        decode_tps = compute_decode_tps(120, 2.0, streaming=True)
+        decode_throughput = compute_decode_throughput(120, 2.0, streaming=True)
+        decode_speed = compute_decode_speed(120, 2.0, streaming=True)
+        self.assertEqual(decode_tps, 60.0)
+        self.assertEqual(decode_throughput, 60.0)
+        self.assertEqual(decode_speed, 60.0)
 
 
 if __name__ == "__main__":
