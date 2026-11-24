@@ -1,8 +1,7 @@
-"""Local response cache: serve hits on the request path, store misses on the response path."""
-
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from holon_coherence.proxy.steps._compat import _get_log_telemetry, resolve_response_cls
 from holon_coherence.proxy.steps._headers import writable_headers
@@ -20,8 +19,15 @@ _HIT_TIMING_HEADERS = (
 )
 
 
+def _inject_cache_hit_headers(flow: Any, rate: float) -> None:
+    out_headers = writable_headers(flow)
+    if out_headers is not None:
+        out_headers["X-Holon-Cache-Hit-Rate"] = f"{rate:.4f}"
+        for name, value in _HIT_TIMING_HEADERS:
+            out_headers[name] = value
+
+
 def serve_cached(ctx: RequestContext) -> Outcome:
-    """Answer the request from the local cache when the interceptor found a cached response."""
     cached_resp = ctx.cached_resp
     if not cached_resp:
         return Outcome.CONTINUE
@@ -35,13 +41,8 @@ def serve_cached(ctx: RequestContext) -> Outcome:
     if response_cls and hasattr(response_cls, "make"):
         flow.response = response_cls.make(200, json.dumps(cached_resp).encode("utf-8"), headers)
 
-    # Inject telemetry headers on cache hit
     rate = hit_rate(addon)
-    out_headers = writable_headers(flow)
-    if out_headers is not None:
-        out_headers["X-Holon-Cache-Hit-Rate"] = f"{rate:.4f}"
-        for name, value in _HIT_TIMING_HEADERS:
-            out_headers[name] = value
+    _inject_cache_hit_headers(flow, rate)
 
     log_msg = (
         f"📊 [TELEMETRY] Provider: {ctx.provider.upper()} | "
@@ -51,16 +52,12 @@ def serve_cached(ctx: RequestContext) -> Outcome:
     )
     _get_log_telemetry()(log_msg)
 
-    # Dump wire transaction for cache hit
     addon._dump_flow_transaction(flow, resp_data=cached_resp, status_code=200, is_hit=True)
     return Outcome.HALT
 
 
 def store_response(ctx: ResponseContext) -> Outcome:
-    """Record a successful non-streaming response in the local cache."""
-    # Note: Response caching is explicitly bypassed for SSE streams (is_sse is True)
-    # because streaming responses cannot be served statically from cache, but telemetry
-    # metrics (token counts, TTFT, TPS) are still calculated and logged.
-    if not ctx.is_sse:
+    is_non_streaming_response = not ctx.is_sse
+    if is_non_streaming_response:
         ctx.addon.interceptor.intercept_response(ctx.url, ctx.req_data, ctx.resp_data, status_code=ctx.status_code)
     return Outcome.CONTINUE

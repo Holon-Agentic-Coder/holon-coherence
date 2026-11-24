@@ -1,12 +1,9 @@
-"""Self-contained HTML/CSS/JavaScript dashboard for proxy telemetry."""
-
 from __future__ import annotations
 
 __all__ = ["render_dashboard_html"]
 
 
 def render_dashboard_html() -> str:
-    """Renders the self-contained HTML/CSS/JS dashboard for /holon/."""
     return """<!DOCTYPE html>
 <html lang="en">
 <head>

@@ -1,5 +1,3 @@
-"""Unit tests for flow timing resolution and turn ID calculation."""
-
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -32,22 +30,20 @@ def test_wall_clock_seconds() -> None:
 
 
 def test_derive_turn_id_precedence() -> None:
-    # 1. Header precedence
-    headers = {"X-Holon-Turn-Id": "5"}
-    assert derive_turn_id(headers, None, fallback_id=1) == 5
+    headers_with_turn_id = {"X-Holon-Turn-Id": "5"}
+    turn_id_from_header = derive_turn_id(headers_with_turn_id, None, fallback_id=1)
+    assert turn_id_from_header == 5
 
-    # 2. Message tree assistant count
-    payload_openai = {
+    openai_payload_with_one_assistant_turn = {
         "messages": [
             {"role": "user"},
             {"role": "assistant"},
             {"role": "user"},
         ]
     }
-    assert derive_turn_id({}, payload_openai, fallback_id=1) == 2
+    assert derive_turn_id({}, openai_payload_with_one_assistant_turn, fallback_id=1) == 2
 
-    # Gemini contents model count
-    payload_gemini = {
+    gemini_payload_with_two_model_turns = {
         "contents": [
             {"role": "user"},
             {"role": "model"},
@@ -55,10 +51,10 @@ def test_derive_turn_id_precedence() -> None:
             {"role": "model"},
         ]
     }
-    assert derive_turn_id({}, payload_gemini, fallback_id=1) == 3
+    assert derive_turn_id({}, gemini_payload_with_two_model_turns, fallback_id=1) == 3
 
-    # 3. Fallback ID
-    assert derive_turn_id({}, {}, fallback_id=99) == 99
+    empty_payload_using_fallback_id: dict[str, object] = {}
+    assert derive_turn_id({}, empty_payload_using_fallback_id, fallback_id=99) == 99
 
 
 def test_get_header_case_insensitive() -> None:

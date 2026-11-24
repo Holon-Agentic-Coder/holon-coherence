@@ -1,5 +1,3 @@
-"""Bidirectional translation between Gemini v1beta and OpenAI protocols."""
-
 from __future__ import annotations
 
 from holon_coherence.providers.translation import (

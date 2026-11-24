@@ -1,5 +1,3 @@
-"""Background asynchronous wire logging infrastructure."""
-
 from __future__ import annotations
 
 import atexit
@@ -44,13 +42,11 @@ WIRE_LOG_DIR = os.getenv("WIRE_LOG_DIR", DEFAULT_WIRE_LOG_DIR)
 
 
 def is_wire_logging_enabled() -> bool:
-    """Checks whether wire logging is enabled via environment configuration."""
     flag = os.getenv("ENABLE_WIRE_LOGGING", "1").lower().strip()
     return flag not in ("0", "false", "no", "off")
 
 
 def is_passive_monitoring() -> bool:
-    """Checks whether proxy operates in passive monitoring mode (logging only, no reduction/caching)."""
     flag = os.getenv("HOLON_PASSIVE_MONITORING", "0").lower().strip()
     if flag in ("1", "true", "yes", "on"):
         return True
@@ -59,7 +55,6 @@ def is_passive_monitoring() -> bool:
 
 
 def is_flow_passive(flow: Any, default_passive: bool | None = None) -> bool:
-    """Checks whether the flow should be handled in passive monitoring mode (baseline)."""
     try:
         if flow and hasattr(flow, "request") and hasattr(flow.request, "headers"):
             headers = flow.request.headers
@@ -133,7 +128,6 @@ def _write_transaction_sync(record: dict[str, Any], wire_log_dir: str) -> None:
 
 
 def dump_wire_transaction(record: dict[str, Any], wire_log_dir: str | None = None) -> concurrent.futures.Future:
-    """Asynchronously writes turn-scoped JSON dump and atomic JSONL entry."""
     target_dir = wire_log_dir or os.getenv("WIRE_LOG_DIR", WIRE_LOG_DIR)
     if not is_wire_logging_enabled() or not target_dir:
         dummy: concurrent.futures.Future = concurrent.futures.Future()
@@ -153,7 +147,6 @@ def _discard_pending_future(future: concurrent.futures.Future) -> None:
 
 
 def flush_wire_logs(timeout: float = 5.0) -> None:
-    """Blocks until all queued background wire log writes complete."""
     with _wire_log_lock:
         pending = list(_pending_wire_log_futures)
     if pending:
@@ -161,7 +154,6 @@ def flush_wire_logs(timeout: float = 5.0) -> None:
 
 
 def shutdown_wire_logs(wait: bool = True, timeout: float = 5.0) -> None:
-    """Blocks until pending wire log writes finish and cleanly shuts down the ThreadPoolExecutor."""
     global _wire_log_executor
     flush_wire_logs(timeout=timeout)
     with _wire_log_lock:
@@ -176,18 +168,20 @@ def shutdown_wire_logs(wait: bool = True, timeout: float = 5.0) -> None:
 atexit.register(shutdown_wire_logs)
 
 
+def _try_log_via_mitmproxy_ctx(active_ctx: Any, msg: str) -> bool:
+    if active_ctx and hasattr(active_ctx, "log") and hasattr(active_ctx.log, "info"):
+        with contextlib.suppress(Exception):
+            active_ctx.log.info(msg)
+            return True
+    return False
+
+
 def log_telemetry(msg: str) -> None:
-    """Logs telemetry message to mitmproxy console context if available, falling back to standard logger."""
     active_ctx = ctx
     mod = sys.modules.get("holon_coherence.mitm_addon")
     if mod is not None and hasattr(mod, "ctx"):
         active_ctx = mod.ctx
-    if active_ctx and hasattr(active_ctx, "log") and hasattr(active_ctx.log, "info"):
-        try:
-            active_ctx.log.info(msg)
-            return
-        except Exception:
-            # mitmproxy context is unavailable or inactive in this execution context
-            pass
+    if _try_log_via_mitmproxy_ctx(active_ctx, msg):
+        return
 
     logger.info(msg)

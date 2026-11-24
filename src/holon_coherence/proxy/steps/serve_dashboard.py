@@ -1,5 +1,3 @@
-"""Control-plane endpoints the proxy answers itself: metrics, mode switch and the web dashboard."""
-
 from __future__ import annotations
 
 import json
@@ -16,7 +14,6 @@ _MODE_PATHS = ("/holon/api/mode", "/_holon/mode")
 
 
 def serve_metrics(ctx: RequestContext) -> Outcome:
-    """GET /holon/api/metrics or /_holon/metrics: cumulative metrics snapshot."""
     if ctx.method != "GET" or ctx.path_clean not in _METRICS_PATHS:
         return Outcome.CONTINUE
     metrics_bytes = json.dumps(ctx.addon.metrics.to_dict(), indent=2).encode("utf-8")
@@ -65,7 +62,6 @@ def _mode_get(ctx: RequestContext) -> None:
 
 
 def serve_mode(ctx: RequestContext) -> Outcome:
-    """POST/GET /holon/api/mode or /_holon/mode; any other method falls through to the proxy path."""
     if ctx.path_clean not in _MODE_PATHS:
         return Outcome.CONTINUE
     if ctx.method == "POST":
@@ -78,7 +74,6 @@ def serve_mode(ctx: RequestContext) -> Outcome:
 
 
 def serve_html(ctx: RequestContext) -> Outcome:
-    """GET /holon or /holon/: the live web dashboard."""
     if ctx.method != "GET" or ctx.path_clean != "/holon":
         return Outcome.CONTINUE
     dashboard_bytes = render_dashboard_html().encode("utf-8")
@@ -92,7 +87,6 @@ def serve_html(ctx: RequestContext) -> Outcome:
 
 
 def serve_dashboard(ctx: RequestContext) -> Outcome:
-    """Answer proxy control-plane endpoints locally, halting the pipeline when one matched."""
     for handler in (serve_metrics, serve_mode, serve_html):
         if handler(ctx) is Outcome.HALT:
             return Outcome.HALT

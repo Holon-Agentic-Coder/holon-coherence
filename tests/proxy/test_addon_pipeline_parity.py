@@ -1,20 +1,3 @@
-"""Characterization (parity) suite for the ``MitmproxyAddon`` hook pipelines.
-
-Each scenario drives a real ``MitmproxyAddon`` through ``request`` / ``responseheaders`` /
-``response`` and reduces every observable side effect -- the response written to the flow, the flow
-attributes the hooks set, the addon counters, the cumulative metrics snapshot, the wire-log records in
-``transactions.jsonl``, the telemetry lines and the addon log records -- into a JSON-serialisable
-observation. Timing-dependent values are masked to their formatting class. The observations are
-compared against ``fixtures/addon_parity_golden.json``, which was captured from the pre-refactor
-monolithic hooks, so any drift in wire-level behaviour fails here.
-
-The payloads below are functional regression inputs only. No token-reduction efficacy, scorecard or
-benchmark number is derived from them, which is the use the zero-synthetic-data rule restricts.
-
-Regenerate the golden file (only when a behaviour change is intended) with an inline variable:
-``HOLON_PARITY_REGEN=1 uv run pytest tests/proxy/test_addon_pipeline_parity.py``.
-"""
-
 from __future__ import annotations
 
 import json
@@ -60,8 +43,6 @@ _ENV_TO_CLEAR = (
 
 
 class ParityRequest:
-    """Duck-typed ``mitmproxy.http.Request`` whose ``pretty_url`` follows host/port/path edits."""
-
     def __init__(self, url: str, method: str = "POST", text: str = "", headers: dict[str, str] | None = None):
         parts = urlsplit(url)
         self.scheme = parts.scheme
@@ -115,11 +96,6 @@ class ParityFlow:
         self.response: Any = None
 
 
-# --------------------------------------------------------------------------------------------------
-# Observation helpers
-# --------------------------------------------------------------------------------------------------
-
-
 def _mask_header(name: str, value: str) -> str:
     if name.lower() in _TIMING_HEADERS:
         match = _FLOAT_RE.match(value)
@@ -145,9 +121,8 @@ def _response_of(flow: Any) -> dict[str, Any] | None:
         body = f"<get_text raised {type(exc).__name__}>"
     headers = _headers_of(resp)
     if headers is not None and "content-length" in headers:
-        # The value tracks the body (which may embed the per-run tmp path), so pin consistency instead.
-        consistent = int(headers["content-length"]) == len(body.encode("utf-8"))
-        headers["content-length"] = "<body length>" if consistent else headers["content-length"]
+        content_length_matches_utf8_body = int(headers["content-length"]) == len(body.encode("utf-8"))
+        headers["content-length"] = "<body length>" if content_length_matches_utf8_body else headers["content-length"]
     return {
         "type": type(resp).__name__,
         "status": resp.status_code,
@@ -222,8 +197,6 @@ def _wire_records(wire_dir: Path) -> list[dict[str, Any]]:
 
 
 class Harness:
-    """Owns one addon, captures telemetry/logs and turns a scenario into an observation."""
-
     def __init__(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture):
         self.tmp_path = tmp_path
         self.wire_dir = tmp_path / "wire"
@@ -272,10 +245,6 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogC
     monkeypatch.setattr("holon_coherence.mitm_addon.ctx", None)
     return Harness(tmp_path, monkeypatch, caplog)
 
-
-# --------------------------------------------------------------------------------------------------
-# Scenarios
-# --------------------------------------------------------------------------------------------------
 
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
@@ -745,11 +714,6 @@ def test_addon_wire_parity(name: str, harness: Harness, monkeypatch: pytest.Monk
 
 def test_golden_has_no_orphans() -> None:
     assert set(_load_golden()) == set(SCENARIOS)
-
-
-# --------------------------------------------------------------------------------------------------
-# Explicit quirk pins (readable assertions on top of the golden comparison)
-# --------------------------------------------------------------------------------------------------
 
 
 def test_bridge_exception_propagates_out_of_request(harness: Harness) -> None:

@@ -1,5 +1,3 @@
-"""Protocol translation adapters (Gemini <-> OpenAI)."""
-
 from __future__ import annotations
 
 from holon_coherence.proxy.translation.gemini_openai import (

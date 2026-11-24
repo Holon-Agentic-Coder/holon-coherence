@@ -1,5 +1,3 @@
-"""Unit tests for secret scrubbing module."""
-
 from __future__ import annotations
 
 from holon_coherence.proxy.scrubbing import scrub_headers, scrub_payload, scrub_string

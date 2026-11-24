@@ -1,5 +1,3 @@
-"""Unit tests for routing heuristics and mock response generation."""
-
 from __future__ import annotations
 
 from unittest.mock import MagicMock

@@ -1,5 +1,3 @@
-"""Routing heuristics and host-local target detection."""
-
 from __future__ import annotations
 
 from typing import Any
@@ -17,9 +15,19 @@ from holon_coherence.host_local import (
 
 __all__ = ["_make_http_response", "is_local_target"]
 
+LOCAL_LOOPBACK_HOSTS = (
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    "127.0.0.1.nip.io",
+    "localhost.nip.io",
+    GATEWAY_HOSTNAME,
+)
+ANTHROPIC_CLOUD_HOSTS = ("api.anthropic.com", "anthropic.com")
+GEMINI_CLOUD_HOST_SUFFIXES = ("generativelanguage.googleapis.com", "googleapis.com")
+
 
 def _make_http_response(flow: Any, status_code: int, content: bytes, headers: dict[str, str]) -> Any:
-    """Creates an HTTP response object compatible with both live mitmproxy and mock test harnesses."""
     response_cls = getattr(http, "Response", None) or getattr(flow, "Response", None) or globals().get("Response")
     if response_cls and hasattr(response_cls, "make"):
         return response_cls.make(status_code, content, headers)
@@ -42,7 +50,6 @@ def _make_http_response(flow: Any, status_code: int, content: bytes, headers: di
 
 
 def is_local_target(flow: Any) -> bool:
-    """Checks whether flow is directed to a local or non-cloud target."""
     req = getattr(flow, "request", None)
     if req is None:
         return False
@@ -53,7 +60,7 @@ def is_local_target(flow: Any) -> bool:
         host = parsed.hostname or ""
 
     host_lower = host.lower()
-    if host_lower in ("localhost", "127.0.0.1", "::1", "127.0.0.1.nip.io", "localhost.nip.io", GATEWAY_HOSTNAME):
+    if host_lower in LOCAL_LOOPBACK_HOSTS:
         return True
 
     targets = targets_from_env()
@@ -68,10 +75,12 @@ def is_local_target(flow: Any) -> bool:
         ):
             return True
 
-    cloud_anthropic = ("api.anthropic.com", "anthropic.com")
     provider = getattr(flow, "provider", "unknown")
-    if provider == "anthropic" and host_lower and host_lower not in cloud_anthropic:
+    if provider == "anthropic" and host_lower and host_lower not in ANTHROPIC_CLOUD_HOSTS:
         return True
 
-    cloud_gemini = ("generativelanguage.googleapis.com", "googleapis.com")
-    return bool(provider == "gemini" and host_lower and not any(host_lower.endswith(c) for c in cloud_gemini))
+    return bool(
+        provider == "gemini"
+        and host_lower
+        and not any(host_lower.endswith(suffix) for suffix in GEMINI_CLOUD_HOST_SUFFIXES)
+    )
