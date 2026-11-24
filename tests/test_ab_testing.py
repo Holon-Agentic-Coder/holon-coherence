@@ -1,5 +1,3 @@
-"""Unit and integration tests for holon-coherence A/B testing suite."""
-
 from __future__ import annotations
 
 import json
@@ -16,15 +14,18 @@ from holon_coherence.commands.ab_test import (
     load_transactions_from_path,
 )
 
+REPETITIVE_FILE_CONTENT_REPEATS = 30
+LOW_PASSING_REDUCTION_THRESHOLD_PCT = 5.0
+UNREALISTIC_FAILING_REDUCTION_THRESHOLD_PCT = 95.0
+
 
 @pytest.fixture
 def sample_trace_records() -> list[dict]:
-    """Sample authentic trace records representing multi-turn agent tool executions."""
     large_file_content = (
         "def compute_hash(data: str) -> str:\n"
         "    import hashlib\n"
         "    return hashlib.sha256(data.encode()).hexdigest()\n"
-    ) * 30  # ~2.4KB content
+    ) * REPETITIVE_FILE_CONTENT_REPEATS
 
     return [
         {
@@ -110,7 +111,6 @@ def sample_trace_records() -> list[dict]:
 
 @pytest.fixture
 def jsonl_trace_file(tmp_path: Path, sample_trace_records: list[dict]) -> Path:
-    """Create a temporary .jsonl trace file with sample transactions."""
     trace_path = tmp_path / "transactions.jsonl"
     with open(trace_path, "w", encoding="utf-8") as f:
         for rec in sample_trace_records:
@@ -120,7 +120,6 @@ def jsonl_trace_file(tmp_path: Path, sample_trace_records: list[dict]) -> Path:
 
 @pytest.fixture
 def json_array_trace_file(tmp_path: Path, sample_trace_records: list[dict]) -> Path:
-    """Create a temporary .json array trace file with sample transactions."""
     trace_path = tmp_path / "transactions.json"
     with open(trace_path, "w", encoding="utf-8") as f:
         json.dump(sample_trace_records, f)
@@ -128,8 +127,6 @@ def json_array_trace_file(tmp_path: Path, sample_trace_records: list[dict]) -> P
 
 
 class TestTraceLoading:
-    """Tests for authentic trace loading across formats."""
-
     def test_load_jsonl_trace(self, jsonl_trace_file: Path) -> None:
         records = load_trace_transactions(str(jsonl_trace_file))
         assert len(records) == 2
@@ -173,8 +170,6 @@ class TestTraceLoading:
 
 
 class TestOfflineABEvaluation:
-    """Tests for differential A/B evaluation mechanics."""
-
     def test_evaluate_token_reduction_on_repetitive_tool_calls(self, sample_trace_records: list[dict]) -> None:
         scorecard = evaluate_offline_ab_run(
             transactions=sample_trace_records,
@@ -191,7 +186,6 @@ class TestOfflineABEvaluation:
         assert scorecard.semantic_parity_verified is True
         assert scorecard.passed_threshold is True
         assert scorecard.baseline_ttft_ms is not None
-        # Rule 10 Invariant: Zero synthetic TTFT in offline mode (no upstream API calls dispatched)
         assert scorecard.optimized_ttft_ms is None
         assert scorecard.ttft_delta_ms is None
         assert scorecard.cache_control_injected > 0
@@ -207,17 +201,15 @@ class TestOfflineABEvaluation:
         assert scorecard_3.optimized_input_tokens == scorecard_1.optimized_input_tokens * 3
 
     def test_fail_under_reduction_threshold(self, sample_trace_records: list[dict]) -> None:
-        # Should pass when threshold is low (e.g. 5%)
         passing_scorecard = evaluate_offline_ab_run(
             sample_trace_records,
-            fail_under_reduction=5.0,
+            fail_under_reduction=LOW_PASSING_REDUCTION_THRESHOLD_PCT,
         )
         assert passing_scorecard.passed_threshold is True
 
-        # Should fail when threshold is unrealistically high (e.g. 95%)
         failing_scorecard = evaluate_offline_ab_run(
             sample_trace_records,
-            fail_under_reduction=95.0,
+            fail_under_reduction=UNREALISTIC_FAILING_REDUCTION_THRESHOLD_PCT,
         )
         assert failing_scorecard.passed_threshold is False
 
@@ -234,9 +226,9 @@ class TestOfflineABEvaluation:
             def process_payload_with_stats(self, payload: dict, provider: str = "anthropic") -> Any:
                 from holon_coherence.payload_cleaner import CleaningResult
 
-                # Intentionally strips all messages to break semantic parity
+                empty_messages_payload: dict[str, Any] = {"messages": []}
                 return CleaningResult(
-                    payload={"messages": []},
+                    payload=empty_messages_payload,
                     tool_outputs_omitted=0,
                     turns_summarized=0,
                     cache_control_injected=0,
@@ -262,9 +254,9 @@ class TestOfflineABEvaluation:
             def process_payload_with_stats(self, payload: dict, provider: str = "anthropic") -> Any:
                 from holon_coherence.payload_cleaner import CleaningResult
 
-                # Drops messages key completely
+                payload_missing_messages_key: dict[str, Any] = {}
                 return CleaningResult(
-                    payload={},
+                    payload=payload_missing_messages_key,
                     tool_outputs_omitted=0,
                     turns_summarized=0,
                     cache_control_injected=0,
@@ -294,11 +286,12 @@ class TestOfflineABEvaluation:
             def process_payload_with_stats(self, payload: dict, provider: str = "anthropic") -> Any:
                 from holon_coherence.payload_cleaner import CleaningResult
 
+                mutated_user_role_response = {"role": "user", "content": "Response 1"}
                 return CleaningResult(
                     payload={
                         "messages": [
                             {"role": "user", "content": "Task 1"},
-                            {"role": "user", "content": "Response 1"},  # Role mutated from assistant to user
+                            mutated_user_role_response,
                         ]
                     },
                     tool_outputs_omitted=0,
@@ -312,8 +305,6 @@ class TestOfflineABEvaluation:
 
 
 class TestScorecardPresentation:
-    """Tests for human-readable and machine-readable scorecard presentation."""
-
     def test_scorecard_render_table(self, sample_trace_records: list[dict]) -> None:
         scorecard = evaluate_offline_ab_run(
             sample_trace_records,
@@ -345,8 +336,6 @@ class TestScorecardPresentation:
 
 
 class TestABTestCLI:
-    """Integration tests for the holon-coherence ab-test CLI command."""
-
     def test_cli_ab_test_json_output(self, jsonl_trace_file: Path, capsys: pytest.CaptureFixture) -> None:
         with pytest.raises(SystemExit) as exc_info:
             main(["ab-test", "--trace-file", str(jsonl_trace_file), "--json"])
@@ -410,7 +399,6 @@ class TestABTestCLI:
         with pytest.raises(SystemExit) as exc_info:
             main(["ab-test", "-f", str(jsonl_trace_file), "--fail-under-reduction", "invalid"])
 
-        # argparse catches non-float before handler
         assert exc_info.value.code != 0
 
     def test_cli_no_args_shows_error(self, capsys: pytest.CaptureFixture) -> None:
@@ -501,8 +489,6 @@ class TestABTestCLI:
 
 
 class TestPathAndDirectoryLoading:
-    """Tests for load_transactions_from_path supporting directories and files."""
-
     def test_load_from_directory_with_transactions_jsonl(self, tmp_path: Path) -> None:
         dir_path = tmp_path / "run_logs"
         dir_path.mkdir()
@@ -539,8 +525,6 @@ class TestPathAndDirectoryLoading:
 
 
 class TestRealTrafficRunsEvaluation:
-    """Tests for evaluate_runs comparing authentic baseline and optimized runs."""
-
     def test_evaluate_runs_authentic_metrics(self) -> None:
         base_txs = [
             {

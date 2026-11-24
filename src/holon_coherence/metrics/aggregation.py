@@ -1,5 +1,3 @@
-"""Offline wire-log metrics aggregation and cumulative statistical calculation."""
-
 from __future__ import annotations
 
 import json
@@ -16,11 +14,13 @@ from holon_coherence.metrics_math import (
     positive_seconds,
 )
 
+MILLISECONDS_PER_SECOND = 1000.0
+CHARS_PER_ESTIMATED_TOKEN = 4
+WIRE_LOG_FILENAME = "transactions.jsonl"
+
 
 @dataclass
 class OfflineMetricsAccumulator:
-    """Container holding accumulated metric counters and rates across wire-log records."""
-
     total_requests: int = 0
     cache_hits: int = 0
     tool_calls_pruned: int = 0
@@ -49,30 +49,21 @@ class OfflineMetricsAccumulator:
 
 
 def _milliseconds_to_seconds(value: Any) -> float | None:
-    """Convert a wire-log millisecond reading to seconds, passing ``None`` through untouched."""
     if value is None:
         return None
     try:
-        return float(value) / 1000.0
+        return float(value) / MILLISECONDS_PER_SECOND
     except (TypeError, ValueError):
         return None
 
 
 def _stored_rate(stored: Any, derived: float | None) -> float | None:
-    """Resolve a wire-log rate against the same rate re-derived from raw timings.
-
-    A stored positive number wins. A stored ``0.0`` (or any other unusable number) is *unmeasured*
-    under this project's rate contract, so it stays unmeasured instead of being silently replaced by
-    a re-derivation. A missing or ``null`` value means the writer had no rate to store, so the
-    derived value is used -- which is what lets legacy records still report prefill speed.
-    """
     if stored is not None and not isinstance(stored, bool):
         return positive_rate(stored)
     return derived
 
 
 def _process_record_cache_and_deltas(record: dict[str, Any], state: OfflineMetricsAccumulator) -> None:
-    """Extract turn ID, cache status, and delta savings from record."""
     state.total_requests += 1
     turn_id = record.get("turn_id")
     if turn_id is not None:
@@ -90,7 +81,6 @@ def _process_record_cache_and_deltas(record: dict[str, Any], state: OfflineMetri
 
 
 def _process_record_usage(record: dict[str, Any], state: OfflineMetricsAccumulator) -> tuple[int, int, int]:
-    """Safely extract token usage counters and accumulate into state."""
     resp = record.get("response", {})
     if not isinstance(resp, dict):
         return 0, 0, 0
@@ -120,7 +110,6 @@ def _process_record_timing(
     cache_read_toks: int,
     state: OfflineMetricsAccumulator,
 ) -> None:
-    """Extract and accumulate TTFT, prefill, and decode timings from record."""
     timing = record.get("timing", {})
     if not isinstance(timing, dict):
         timing = {}
@@ -128,11 +117,11 @@ def _process_record_timing(
     ttft_sec = positive_seconds(_milliseconds_to_seconds(timing.get("ttft_ms")))
     total_sec = positive_seconds(_milliseconds_to_seconds(timing.get("total_ms")))
     if ttft_sec is not None:
-        state.sum_ttft_ms += ttft_sec * 1000.0
+        state.sum_ttft_ms += ttft_sec * MILLISECONDS_PER_SECOND
         state.count_ttft += 1
-        state.latest_ttft_ms = ttft_sec * 1000.0
+        state.latest_ttft_ms = ttft_sec * MILLISECONDS_PER_SECOND
     if total_sec is not None:
-        state.latest_total_time_ms = total_sec * 1000.0
+        state.latest_total_time_ms = total_sec * MILLISECONDS_PER_SECOND
 
     prefill_tps = _stored_rate(timing.get("prefill_tps"), compute_prefill_tps(in_toks, ttft_sec))
     if prefill_tps is not None:
@@ -161,7 +150,6 @@ def _process_record_timing(
 
 
 def _compute_metrics_summary(state: OfflineMetricsAccumulator) -> dict[str, Any]:
-    """Calculate derived summary statistics and return dictionary payload."""
     total_requests = state.total_requests
     cache_hit_rate = (state.cache_hits / total_requests) if total_requests > 0 else 0.0
     provider_cache_hit_rate = (
@@ -171,7 +159,7 @@ def _compute_metrics_summary(state: OfflineMetricsAccumulator) -> dict[str, Any]
     avg_decode_throughput_tps = average(state.sum_decode_throughput_tps, state.count_decode)
     avg_prefill_throughput_tps = average(state.sum_prefill_throughput_tps, state.count_prefill)
     avg_tail_prefill_tps = average(state.sum_tail_prefill_tps, state.count_tail_prefill)
-    tokens_reduced = state.chars_saved // 4
+    tokens_reduced = state.chars_saved // CHARS_PER_ESTIMATED_TOKEN
 
     return {
         "total_turns": len(state.seen_turn_ids) or total_requests,
@@ -205,8 +193,7 @@ def _compute_metrics_summary(state: OfflineMetricsAccumulator) -> dict[str, Any]
 
 
 def read_offline_metrics(wire_log_dir: str) -> dict[str, Any] | None:
-    """Calculates cumulative metrics from persisted transactions.jsonl when proxy is offline."""
-    jsonl_path = os.path.join(wire_log_dir, "transactions.jsonl")
+    jsonl_path = os.path.join(wire_log_dir, WIRE_LOG_FILENAME)
     if not os.path.exists(jsonl_path):
         return None
 

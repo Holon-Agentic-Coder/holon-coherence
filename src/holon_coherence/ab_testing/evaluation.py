@@ -1,5 +1,3 @@
-"""A/B testing evaluation domain models and differential benchmark scoring logic."""
-
 from __future__ import annotations
 
 import contextlib
@@ -14,11 +12,16 @@ from holon_coherence.payload_cleaner import JSONContextCleaner
 
 logger = logging.getLogger(__name__)
 
+SCORECARD_BORDER_WIDTH = 68
+CHARS_PER_ESTIMATED_TOKEN = 4
+DEFAULT_PROVIDER = "anthropic"
+REAL_TRAFFIC_MODE_LABEL = "Real Intercepted Traffic"
+OFFLINE_REPLAY_MODE_LABEL = "Offline Differential Replay (Trace File)"
+TRANSACTIONS_JSONL_FILENAME = "transactions.jsonl"
+
 
 @dataclass
 class ABRunConfig:
-    """Configuration for an A/B benchmark run."""
-
     trace_file: str | None = None
     command: str | None = None
     baseline_path: str | None = None
@@ -30,14 +33,11 @@ class ABRunConfig:
     timeout: float = 30.0
 
 
-# Domain alias
 AbRun = ABRunConfig
 
 
 @dataclass
 class ABTurnMetrics:
-    """Per-turn metrics for Variant A and Variant B."""
-
     turn_id: str | int
     provider: str
     baseline_input_tokens: int
@@ -56,11 +56,9 @@ class ABTurnMetrics:
 
 @dataclass
 class ABComparisonScorecard:
-    """Comprehensive statistical scorecard comparing baseline vs optimized runs."""
-
     total_turns: int = 0
     rounds: int = 1
-    mode_label: str = "Real Intercepted Traffic"
+    mode_label: str = REAL_TRAFFIC_MODE_LABEL
     baseline_input_tokens: int = 0
     optimized_input_tokens: int = 0
     tokens_reduced: int = 0
@@ -84,7 +82,6 @@ class ABComparisonScorecard:
     turn_details: list[ABTurnMetrics] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert scorecard to structured dictionary for JSON serialization."""
         return {
             "summary": {
                 "mode": self.mode_label,
@@ -118,10 +115,45 @@ class ABComparisonScorecard:
             "turns": [asdict(t) for t in self.turn_details],
         }
 
+    def _format_ttft_comparison_lines(self) -> list[str]:
+        if self.baseline_ttft_ms is not None and self.optimized_ttft_ms is not None:
+            delta = (
+                self.ttft_delta_ms
+                if self.ttft_delta_ms is not None
+                else (self.baseline_ttft_ms - self.optimized_ttft_ms)
+            )
+            pct = (
+                ((self.baseline_ttft_ms - self.optimized_ttft_ms) / self.baseline_ttft_ms * 100.0)
+                if self.baseline_ttft_ms > 0
+                else 0.0
+            )
+            delta_sign = "-" if delta <= 0 else "+"
+            base_ms = f"{self.baseline_ttft_ms:.1f}ms"
+            opt_ms = f"{self.optimized_ttft_ms:.1f}ms"
+            faster_str = f" ({pct:.1f}% faster)" if pct >= 0 else ""
+            return [
+                f"  ⏱️  Avg TTFT:                   Baseline: {base_ms} | Optimized: {opt_ms}",
+                f"  ⚡ TTFT Delta:                  {delta_sign}{abs(delta):.1f}ms{faster_str}",
+            ]
+        if self.baseline_ttft_ms is not None:
+            base_ms = f"{self.baseline_ttft_ms:.1f}ms"
+            return [f"  ⏱️  Baseline TTFT (Recorded):    {base_ms} (Variant B: offline evaluation)"]
+        return []
+
+    def _format_ci_reduction_gate_lines(self, thin_sep: str) -> list[str]:
+        if self.threshold_min_reduction_pct is None:
+            return []
+        status_str = "✅ PASSED" if self.passed_threshold else "❌ FAILED"
+        req_str = f">={self.threshold_min_reduction_pct:.2f}%"
+        gate_line = (
+            f"  🎯 CI Reduction Gate:           {status_str} "
+            f"(Observed: {self.token_reduction_pct:.2f}% | Required: {req_str})"
+        )
+        return [thin_sep, gate_line]
+
     def render_table(self) -> str:
-        """Render human-readable terminal comparison scorecard."""
-        sep = "=" * 68
-        thin_sep = "-" * 68
+        sep = "=" * SCORECARD_BORDER_WIDTH
+        thin_sep = "-" * SCORECARD_BORDER_WIDTH
         lines = [
             sep,
             "               HOLON COHERENCE A/B BENCHMARK SCORECARD",
@@ -142,31 +174,7 @@ class ABComparisonScorecard:
             lines.append(f"  🎯 Cache Hit Rate:              {self.cache_hit_rate:.1f}% ({hit_str})")
 
         lines.append(thin_sep)
-
-        if self.baseline_ttft_ms is not None and self.optimized_ttft_ms is not None:
-            delta = (
-                self.ttft_delta_ms
-                if self.ttft_delta_ms is not None
-                else (self.baseline_ttft_ms - self.optimized_ttft_ms)
-            )
-            pct = (
-                ((self.baseline_ttft_ms - self.optimized_ttft_ms) / self.baseline_ttft_ms * 100.0)
-                if self.baseline_ttft_ms > 0
-                else 0.0
-            )
-            delta_sign = "-" if delta <= 0 else "+"
-            base_ms = f"{self.baseline_ttft_ms:.1f}ms"
-            opt_ms = f"{self.optimized_ttft_ms:.1f}ms"
-            faster_str = f" ({pct:.1f}% faster)" if pct >= 0 else ""
-            lines.extend(
-                [
-                    f"  ⏱️  Avg TTFT:                   Baseline: {base_ms} | Optimized: {opt_ms}",
-                    f"  ⚡ TTFT Delta:                  {delta_sign}{abs(delta):.1f}ms{faster_str}",
-                ]
-            )
-        elif self.baseline_ttft_ms is not None:
-            base_ms = f"{self.baseline_ttft_ms:.1f}ms"
-            lines.append(f"  ⏱️  Baseline TTFT (Recorded):    {base_ms} (Variant B: offline evaluation)")
+        lines.extend(self._format_ttft_comparison_lines())
 
         if self.baseline_decode_tps is not None and self.optimized_decode_tps is not None:
             base_tps = f"{self.baseline_decode_tps:.1f} t/s"
@@ -179,34 +187,18 @@ class ABComparisonScorecard:
             parity_str = "❌ FAILED (Discrepancy Detected)"
         lines.append(f"  🔍 Semantic Parity Check:       {parity_str}")
 
-        if self.threshold_min_reduction_pct is not None:
-            status_str = "✅ PASSED" if self.passed_threshold else "❌ FAILED"
-            req_str = f">={self.threshold_min_reduction_pct:.2f}%"
-            gate_line = (
-                f"  🎯 CI Reduction Gate:           {status_str} "
-                f"(Observed: {self.token_reduction_pct:.2f}% | Required: {req_str})"
-            )
-            lines.extend(
-                [
-                    thin_sep,
-                    gate_line,
-                ]
-            )
-
+        lines.extend(self._format_ci_reduction_gate_lines(thin_sep))
         lines.append(sep)
         return "\n".join(lines)
 
     def format_console(self) -> str:
-        """Alias for render_table."""
         return self.render_table()
 
 
-# Domain alias
 AbEvaluation = ABComparisonScorecard
 
 
 def _peek_first_char(f: Any) -> str:
-    """Read first non-whitespace character from open stream, resetting position afterwards."""
     pos = f.tell()
     first_char = ""
     while True:
@@ -221,7 +213,6 @@ def _peek_first_char(f: Any) -> str:
 
 
 def _parse_json_array_stream(file_obj: Any, file_path: str) -> list[dict[str, Any]]:
-    """Parse JSON array transaction stream."""
     try:
         data = json.load(file_obj)
         if isinstance(data, list):
@@ -232,7 +223,6 @@ def _parse_json_array_stream(file_obj: Any, file_path: str) -> list[dict[str, An
 
 
 def _parse_jsonl_stream(file_obj: Any, file_path: str) -> list[dict[str, Any]]:
-    """Parse JSON Lines transaction stream."""
     transactions: list[dict[str, Any]] = []
     for line_idx, line in enumerate(file_obj, 1):
         line_str = line.strip()
@@ -248,7 +238,6 @@ def _parse_jsonl_stream(file_obj: Any, file_path: str) -> list[dict[str, Any]]:
 
 
 def load_trace_transactions(file_path: str) -> list[dict[str, Any]]:
-    """Load authentic trace transactions from a .jsonl or .json file."""
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Trace file not found: {file_path}")
 
@@ -266,7 +255,6 @@ def load_trace_transactions(file_path: str) -> list[dict[str, Any]]:
 
 
 def _load_single_trace_candidate(file_path: str) -> list[dict[str, Any]]:
-    """Attempt loading trace transactions from a candidate file."""
     if file_path.endswith(".jsonl"):
         with contextlib.suppress(Exception):
             return load_trace_transactions(file_path)
@@ -279,8 +267,7 @@ def _load_single_trace_candidate(file_path: str) -> list[dict[str, Any]]:
 
 
 def _load_trace_directory(dir_path: str) -> list[dict[str, Any]]:
-    """Scan and load trace transactions from a directory."""
-    jsonl_path = os.path.join(dir_path, "transactions.jsonl")
+    jsonl_path = os.path.join(dir_path, TRANSACTIONS_JSONL_FILENAME)
     if os.path.isfile(jsonl_path):
         return load_trace_transactions(jsonl_path)
     txs: list[dict[str, Any]] = []
@@ -293,7 +280,6 @@ def _load_trace_directory(dir_path: str) -> list[dict[str, Any]]:
 
 
 def load_transactions_from_path(path: str) -> list[dict[str, Any]]:
-    """Load authentic trace transactions from a file or directory."""
     if not os.path.exists(path):
         raise FileNotFoundError(f"Trace path not found: {path}")
 
@@ -304,7 +290,6 @@ def load_transactions_from_path(path: str) -> list[dict[str, Any]]:
 
 
 def _extract_request_payload(tx: dict[str, Any]) -> dict[str, Any] | None:
-    """Extract inner request dictionary from a transaction record."""
     raw_req = tx.get("raw_request") or {}
     payload = raw_req.get("request") if isinstance(raw_req, dict) and "request" in raw_req else raw_req
     if not isinstance(payload, dict) or not payload:
@@ -313,15 +298,13 @@ def _extract_request_payload(tx: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _extract_baseline_tokens(resp: dict[str, Any], baseline_chars: int) -> int:
-    """Extract or estimate baseline input tokens."""
     resp_usage = resp.get("usage") if isinstance(resp, dict) else {}
     if isinstance(resp_usage, dict) and ("input_tokens" in resp_usage or "prompt_tokens" in resp_usage):
         return safe_int(resp_usage.get("input_tokens") or resp_usage.get("prompt_tokens"))
-    return max(1, baseline_chars // 4)
+    return max(1, baseline_chars // CHARS_PER_ESTIMATED_TOKEN)
 
 
 def _check_semantic_parity(orig_payload: dict[str, Any], opt_payload: dict[str, Any]) -> bool:
-    """Verify semantic parity between original and optimized request payloads."""
     if "messages" in orig_payload:
         if "messages" not in opt_payload:
             return False
@@ -346,12 +329,11 @@ def _check_semantic_parity(orig_payload: dict[str, Any], opt_payload: dict[str, 
 def _evaluate_single_offline_turn(
     tx: dict[str, Any], cleaner: JSONContextCleaner, round_num: int, idx: int
 ) -> tuple[ABTurnMetrics | None, float | None, bool]:
-    """Process a single turn offline, returning metrics, TTFT sample, and cache hit indicator."""
     payload_data = _extract_request_payload(tx)
     if payload_data is None:
         return None, None, False
 
-    provider = str(tx.get("provider") or "anthropic").lower()
+    provider = str(tx.get("provider") or DEFAULT_PROVIDER).lower()
     resp = tx.get("response") or {}
     timing = tx.get("timing") or {}
     turn_id = tx.get("turn_id") or f"r{round_num}-t{idx}"
@@ -407,7 +389,6 @@ def _aggregate_offline_turns(
     rounds: int,
     fail_under: float | None,
 ) -> ABComparisonScorecard:
-    """Aggregate offline evaluation turns into a comprehensive comparison scorecard."""
     total_base_tokens = sum(t.baseline_input_tokens for t in turns)
     total_opt_tokens = sum(t.optimized_input_tokens for t in turns)
     tokens_reduced = max(0, total_base_tokens - total_opt_tokens)
@@ -426,7 +407,7 @@ def _aggregate_offline_turns(
     return ABComparisonScorecard(
         total_turns=len(turns),
         rounds=rounds,
-        mode_label="Offline Differential Replay (Trace File)",
+        mode_label=OFFLINE_REPLAY_MODE_LABEL,
         baseline_input_tokens=total_base_tokens,
         optimized_input_tokens=total_opt_tokens,
         tokens_reduced=tokens_reduced,
@@ -455,11 +436,6 @@ def evaluate_offline_ab_run(
     rounds: int = 1,
     fail_under_reduction: float | None = None,
 ) -> ABComparisonScorecard:
-    """Run an offline differential A/B benchmark evaluation over trace transactions.
-
-    Variant A: Unmodified baseline raw requests.
-    Variant B: Context-cleaned and deduplicated optimized requests.
-    """
     if cleaner is None:
         cleaner = JSONContextCleaner(enable_deduplication=True, enable_prompt_caching=True)
 
@@ -483,7 +459,6 @@ def evaluate_offline_ab_run(
 def _pair_baseline_and_optimized_runs(
     base_txs: list[dict[str, Any]], opt_txs: list[dict[str, Any]]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Filter and validate baseline and optimized transaction runs for pairing."""
     base_list = [tx for tx in base_txs if tx.get("mode") != "optimized"] or base_txs
     opt_list = [tx for tx in opt_txs if tx.get("mode") != "baseline"] or opt_txs
     if not base_list or not opt_list:
@@ -492,19 +467,17 @@ def _pair_baseline_and_optimized_runs(
 
 
 def _extract_turn_tokens_and_chars(tx: dict[str, Any], is_baseline: bool) -> tuple[int, int]:
-    """Extract tokens and characters from transaction record."""
     usage = (tx.get("response") or {}).get("usage") or {}
     raw = (tx.get("raw_request") or {}) if is_baseline else (tx.get("cleaned_request") or tx.get("raw_request") or {})
     chars = estimate_chars(raw)
     if isinstance(usage, dict) and ("input_tokens" in usage or "prompt_tokens" in usage):
         tokens = safe_int(usage.get("input_tokens") or usage.get("prompt_tokens"))
     else:
-        tokens = max(1, chars // 4)
+        tokens = max(1, chars // CHARS_PER_ESTIMATED_TOKEN)
     return tokens, chars
 
 
 def _extract_recorded_timing(timing: dict[str, Any]) -> tuple[float | None, float | None]:
-    """Extract TTFT and decode throughput from timing dictionary."""
     ttft: float | None = None
     tps: float | None = None
     if isinstance(timing, dict):
@@ -518,7 +491,6 @@ def _extract_recorded_timing(timing: dict[str, Any]) -> tuple[float | None, floa
 
 
 def _verify_paired_semantic_parity(base_tx: dict[str, Any], opt_tx: dict[str, Any]) -> bool:
-    """Verify semantic parity between paired baseline and optimized turns."""
     base_status = (base_tx.get("response") or {}).get("status", 200)
     opt_status = (opt_tx.get("response") or {}).get("status", 200)
     if base_status not in (200, None) or opt_status not in (200, None):
@@ -539,8 +511,7 @@ def _verify_paired_semantic_parity(base_tx: dict[str, Any], opt_tx: dict[str, An
 def _evaluate_paired_turn(
     base_tx: dict[str, Any], opt_tx: dict[str, Any], round_num: int, idx: int
 ) -> tuple[ABTurnMetrics, dict[str, Any]]:
-    """Evaluate one paired turn across baseline and optimized runs."""
-    provider = str(opt_tx.get("provider") or base_tx.get("provider") or "anthropic").lower()
+    provider = str(opt_tx.get("provider") or base_tx.get("provider") or DEFAULT_PROVIDER).lower()
     turn_id = opt_tx.get("turn_id") or base_tx.get("turn_id") or f"r{round_num}-t{idx + 1}"
 
     base_tokens, base_chars = _extract_turn_tokens_and_chars(base_tx, is_baseline=True)
@@ -595,7 +566,6 @@ def _aggregate_dual_scorecard(
     cache_hits: int,
     fail_under: float | None,
 ) -> None:
-    """Aggregate paired turns and timing samples into dual-run comparison scorecard."""
     total_base_toks = sum(t.baseline_input_tokens for t in turns)
     total_opt_toks = sum(t.optimized_input_tokens for t in turns)
     scorecard.total_turns = len(turns)
@@ -640,9 +610,8 @@ def evaluate_runs(
     optimized_transactions: list[dict[str, Any]],
     rounds: int = 1,
     fail_under_reduction: float | None = None,
-    mode_label: str = "Real Intercepted Traffic",
+    mode_label: str = REAL_TRAFFIC_MODE_LABEL,
 ) -> ABComparisonScorecard:
-    """Evaluate authentic intercepted baseline vs optimized transactions."""
     base_list, opt_list = _pair_baseline_and_optimized_runs(baseline_transactions, optimized_transactions)
     num_turns = min(len(base_list), len(opt_list))
 
