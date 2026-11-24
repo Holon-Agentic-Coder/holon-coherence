@@ -7,7 +7,7 @@ import logging
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
-from holon_coherence.parsers.tokens import TokenCounts, estimate_chars, safe_int
+from holon_coherence.parsers.tokens import TokenCounts, estimate_chars, estimate_tokens_from_chars, safe_int
 from holon_coherence.providers.base import ProviderFormat
 
 if TYPE_CHECKING:
@@ -18,15 +18,10 @@ logger = logging.getLogger(__name__)
 MIN_BLOCK_DEDUP_CHARS = 100
 MIN_STRING_MESSAGE_DEDUP_CHARS = 200
 RECENT_UNTOUCHED_TURNS = 2
-CHARS_PER_ESTIMATED_TOKEN = 4
 DEFAULT_MAX_TURNS = 40
 DEFAULT_RECENT_TURNS_TO_KEEP = 10
 SSE_DATA_PREFIX = "data:"
 SSE_DONE_SENTINEL = "[DONE]"
-
-
-def _estimate_tokens_from_chars(char_count: int) -> int:
-    return max(1, char_count // CHARS_PER_ESTIMATED_TOKEN) if char_count > 0 else 0
 
 
 def _hash_content(content: str | list[Any]) -> str | None:
@@ -620,9 +615,9 @@ class AnthropicProvider(ProviderFormat):
                 acc_len += clen
                 acc_thinking += tlen
 
-        input_tokens = inp_tok if inp_tok is not None else _estimate_tokens_from_chars(estimate_chars(req_data))
-        output_tokens = out_tok if out_tok is not None else _estimate_tokens_from_chars(acc_len)
-        reasoning_tokens = reasoning or _estimate_tokens_from_chars(acc_thinking)
+        input_tokens = inp_tok if inp_tok is not None else estimate_tokens_from_chars(estimate_chars(req_data))
+        output_tokens = out_tok if out_tok is not None else estimate_tokens_from_chars(acc_len)
+        reasoning_tokens = reasoning or estimate_tokens_from_chars(acc_thinking)
 
         return TokenCounts(
             input_tokens,
@@ -655,8 +650,8 @@ class AnthropicProvider(ProviderFormat):
                 "Provider usage dictionary missing or invalid for %s; estimating token counts from payload characters",
                 "anthropic",
             )
-            input_tokens = _estimate_tokens_from_chars(estimate_chars(req_data))
-            output_tokens = _estimate_tokens_from_chars(estimate_chars(resp_data))
+            input_tokens = estimate_tokens_from_chars(estimate_chars(req_data))
+            output_tokens = estimate_tokens_from_chars(estimate_chars(resp_data))
 
         return TokenCounts(
             input_tokens,

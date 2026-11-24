@@ -7,7 +7,7 @@ import logging
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
-from holon_coherence.parsers.tokens import TokenCounts, estimate_chars, safe_int
+from holon_coherence.parsers.tokens import TokenCounts, estimate_chars, estimate_tokens_from_chars, safe_int
 from holon_coherence.providers.anthropic import merge_consecutive_roles
 from holon_coherence.providers.base import ProviderFormat
 
@@ -18,13 +18,8 @@ logger = logging.getLogger(__name__)
 
 MIN_PART_DEDUP_CHARS = 100
 RECENT_UNTOUCHED_TURNS = 2
-CHARS_PER_ESTIMATED_TOKEN = 4
 DEFAULT_MAX_TURNS = 40
 DEFAULT_RECENT_TURNS_TO_KEEP = 10
-
-
-def _estimate_tokens_from_chars(char_count: int) -> int:
-    return max(1, char_count // CHARS_PER_ESTIMATED_TOKEN) if char_count > 0 else 0
 
 
 def _iter_sse_chunks(resp_text: str) -> Iterator[dict[str, Any]]:
@@ -324,8 +319,8 @@ class GeminiProvider(ProviderFormat):
             if isinstance(candidates, list):
                 acc_len += sum(_process_gemini_candidate_len(c) for c in candidates)
 
-        input_tokens = inp_tok if inp_tok is not None else _estimate_tokens_from_chars(estimate_chars(req_data))
-        output_tokens = out_tok if out_tok is not None else _estimate_tokens_from_chars(acc_len)
+        input_tokens = inp_tok if inp_tok is not None else estimate_tokens_from_chars(estimate_chars(req_data))
+        output_tokens = out_tok if out_tok is not None else estimate_tokens_from_chars(acc_len)
 
         return TokenCounts(
             input_tokens,
@@ -353,8 +348,8 @@ class GeminiProvider(ProviderFormat):
                 "Provider usage dictionary missing or invalid for %s; estimating token counts from payload characters",
                 "gemini",
             )
-            input_tokens = _estimate_tokens_from_chars(estimate_chars(req_data))
-            output_tokens = _estimate_tokens_from_chars(estimate_chars(resp_data))
+            input_tokens = estimate_tokens_from_chars(estimate_chars(req_data))
+            output_tokens = estimate_tokens_from_chars(estimate_chars(resp_data))
 
         return TokenCounts(
             input_tokens,

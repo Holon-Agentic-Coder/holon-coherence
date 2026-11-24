@@ -20,7 +20,7 @@ PAYLOAD_TEXT_CONTAINER_KEYS: tuple[str, ...] = (
 )
 
 
-def _estimate_tokens_from_char_count(char_count: int) -> int:
+def estimate_tokens_from_chars(char_count: int) -> int:
     return max(1, char_count // CHARS_PER_ESTIMATED_TOKEN) if char_count > 0 else 0
 
 

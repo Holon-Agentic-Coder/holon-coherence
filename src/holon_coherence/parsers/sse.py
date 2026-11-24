@@ -11,7 +11,11 @@ DEFAULT_MAX_TRAVERSAL_DEPTH = 10
 ANTHROPIC_PROVIDER_NAME = "anthropic"
 
 
-def find_nested_key(data: Any, target_keys: tuple[str, ...] | str, max_depth: int = 10) -> Any:  # noqa: C901, PLR0912
+def find_nested_key(  # noqa: C901, PLR0912
+    data: Any,
+    target_keys: tuple[str, ...] | str,
+    max_depth: int = DEFAULT_MAX_TRAVERSAL_DEPTH,
+) -> Any:
     if not isinstance(data, (dict, list)):
         return None
     if max_depth <= 0 or not data:
