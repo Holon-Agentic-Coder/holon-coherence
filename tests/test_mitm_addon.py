@@ -378,6 +378,77 @@ class TestAnthropicNormalizer:
         assert modified is False
         assert "thinking" in cleaned
 
+    def test_addon_request_normalizes_anthropic_multi_block_system_cache_control_ttl(self, tmp_path: Path) -> None:
+        """End-to-end MitmproxyAddon.request() regression test for system.2.cache_control.ttl ordering."""
+        addon = MitmproxyAddon(cache_dir=str(tmp_path / "cache"), wire_log_dir=str(tmp_path / "logs"))
+        repeated_tool_output = "identical tool result payload " * 10
+        req_payload = {
+            "model": "claude-sonnet-4-20250514",
+            "tools": [
+                {"name": "run_command", "description": "Execute shell command"},
+            ],
+            "system": [
+                {"type": "text", "text": "System instruction block 0", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "System instruction block 1"},
+                {
+                    "type": "text",
+                    "text": "System instruction block 2",
+                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                },
+            ],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": repeated_tool_output}],
+                },
+                {"role": "assistant", "content": [{"type": "text", "text": "First check complete."}]},
+                {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "call_2", "content": repeated_tool_output}],
+                },
+                {"role": "assistant", "content": [{"type": "text", "text": "Second check complete."}]},
+                {"role": "user", "content": [{"type": "text", "text": "Continue execution."}]},
+            ],
+        }
+        flow = DummyFlow(
+            request=DummyRequest(
+                url="https://api.anthropic.com/v1/messages",
+                host="api.anthropic.com",
+                port=443,
+                path="/v1/messages",
+                headers={"Content-Type": "application/json"},
+                text=json.dumps(req_payload),
+            )
+        )
+
+        addon.request(flow)
+
+        forwarded = json.loads(flow.request.get_text())
+        # Collect all cache_control dicts in Anthropic evaluation order: tools -> system -> messages
+        cc_list: list[dict[str, Any]] = []
+        for tool in forwarded.get("tools", []):
+            if "cache_control" in tool:
+                cc_list.append(tool["cache_control"])
+        for block in forwarded.get("system", []):
+            if "cache_control" in block:
+                cc_list.append(block["cache_control"])
+        for msg in forwarded.get("messages", []):
+            if "cache_control" in msg:
+                cc_list.append(msg["cache_control"])
+            content = msg.get("content", [])
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and "cache_control" in block:
+                        cc_list.append(block["cache_control"])
+
+        assert 1 <= len(cc_list) <= 4
+        ranks = [3600 if cc.get("ttl") == "1h" else 300 for cc in cc_list]
+        assert ranks == sorted(ranks, reverse=True), f"TTL ranks must be non-increasing, got {ranks}"
+        assert forwarded["system"][2]["cache_control"] == {"type": "ephemeral"}
+        # Verify tool output deduplication still ran on the older duplicate turn
+        second_tool_out = forwarded["messages"][2]["content"][0]["content"]
+        assert "[Tool output omitted:" in second_tool_out
+
 
 class TestGeminiOpenAIBridge:
     """Unit tests for bidirectional Gemini v1beta <-> OpenAI ChatCompletions bridge."""
