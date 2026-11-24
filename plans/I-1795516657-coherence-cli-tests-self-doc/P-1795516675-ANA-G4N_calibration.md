@@ -6,12 +6,13 @@
 - **Execution Branch:** `I-1795516657-coherence-cli-tests-self-doc/P-1795516675-ANA-G4N/E-1795516949-ANA-G4N/_`
 - **Intent Branch:** `I-1795516657-coherence-cli-tests-self-doc/_`
 - **Evaluating Agent:** `antigravity-agent/gemini-4-neon`
-- **Evaluation Timestamp:** `2026-11-24T10:54:30.000Z`
-- **Evaluated Commit SHA:** `9f11e20be64661e7ab64db836519049de0b3c030`
-- **Base SHA:** `0029e921972caf93f4356776b08b8c9bbadbe322`
-- **Merge-Base SHA:** `0029e921972caf93f4356776b08b8c9bbadbe322`
-- **Merged Commits:** `0`
-- **Patch Size Base:** `plan`
+- **Evaluation Timestamp:** `2026-11-24T11:01:53.000Z`
+- **Evaluated Commit SHA:** `b38fd3431a1a86f691a8d6f0b5e2577facc14116`
+- **Base SHA:** `c38beea5ac762922024e9ca1c59758d40576735f`
+- **Merge-Base SHA:** `c38beea5ac762922024e9ca1c59758d40576735f`
+- **Merged Commits:** `1`
+- **Patch Size Base:** `target_merge_base` (merge-base `c38beea5ac762922024e9ca1c59758d40576735f` with the target
+  branch)
 
 ---
 
