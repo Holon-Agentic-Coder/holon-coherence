@@ -1,5 +1,3 @@
-"""Unit tests for the dedicated stop command module."""
-
 from __future__ import annotations
 
 import argparse
@@ -13,8 +11,6 @@ from holon_coherence.container.lifecycle import ProxyLifecycle
 
 
 class TestStopCommand:
-    """`holon-coherence stop` registers, dispatches and tears down through ProxyLifecycle."""
-
     def test_register_and_defaults(self) -> None:
         parser = argparse.ArgumentParser()
         subparsers = parser.add_subparsers(dest="command")

@@ -1,5 +1,3 @@
-"""Unit tests for metrics CLI command, table rendering, and wire log telemetry reporting."""
-
 from __future__ import annotations
 
 import argparse
@@ -19,8 +17,6 @@ from holon_coherence.mitm_addon import CumulativeMetrics
 
 
 class TestMetricsCLICommandSuite:
-    """Tests for metrics fetching and display in live and offline modes."""
-
     def test_handle_metrics_live_formatted(self, capsys: pytest.CaptureFixture[str]) -> None:
         mock_payload = json.dumps(
             {
@@ -102,8 +98,6 @@ class TestMetricsCLICommandSuite:
 
 
 class TestMetricsRegistrationAndDispatch:
-    """Tests for metrics subparser registration and command handling."""
-
     def test_register_and_defaults(self) -> None:
         parser = argparse.ArgumentParser()
         subparsers = parser.add_subparsers(dest="command")
@@ -129,11 +123,8 @@ class TestMetricsRegistrationAndDispatch:
 
 
 class TestCLIMetricsCommand:
-    """Tests for holon-coherence metrics command and status integration."""
-
     @pytest.fixture(autouse=True)
     def _no_docker_queries(self) -> Iterator[None]:
-        """Endpoint rows query Docker for the container's ports; these tests run with no container."""
         with patch("holon_coherence.commands.endpoints.is_container_running", return_value=False):
             yield
 
@@ -271,9 +262,9 @@ class TestCLIMetricsCommand:
         assert ret == 0
         data = json.loads(capsys.readouterr().out)
         assert data["source"] == "offline_wire_log"
-        assert data["avg_prefill_throughput_tps"] == 500.0  # 100 / 0.2s
-        assert data["avg_tail_prefill_tps"] == 400.0  # 80 / 0.2s
-        assert data["avg_decode_throughput_tps"] == 50.0  # 50 / 1.0s
+        assert data["avg_prefill_throughput_tps"] == 500.0
+        assert data["avg_tail_prefill_tps"] == 400.0
+        assert data["avg_decode_throughput_tps"] == 50.0
         assert data["total_cache_creation_tokens"] == 10
         assert data["total_reasoning_tokens"] == 5
 
@@ -304,7 +295,7 @@ class TestCLIMetricsCommand:
         assert ret == 0
         data = json.loads(capsys.readouterr().out)
         assert data["source"] == "offline_wire_log"
-        assert data["avg_prefill_throughput_tps"] == 500.0  # 100 / 0.2s
+        assert data["avg_prefill_throughput_tps"] == 500.0
 
     def test_handle_metrics_no_offline_logs_hint_names_default_wire_log_dir(
         self,
@@ -388,8 +379,6 @@ class TestCLIMetricsCommand:
 
 
 class TestOfflineTelemetryThroughput:
-    """Offline wire-log throughput arithmetic must mirror the live proxy."""
-
     @staticmethod
     def _write_records(tmp_path: Path, records: list[dict[str, Any]]) -> str:
         jsonl = tmp_path / "transactions.jsonl"
@@ -399,7 +388,6 @@ class TestOfflineTelemetryThroughput:
         return str(tmp_path)
 
     def test_legacy_non_streaming_window_below_floor_is_not_sampled(self, tmp_path: Path) -> None:
-        """A 1.5ms ``total - ttft`` window is socket parse time, not 1,000,000 tokens/sec."""
         log_dir = self._write_records(
             tmp_path,
             [
@@ -419,12 +407,10 @@ class TestOfflineTelemetryThroughput:
         assert data["decode_samples"] == 0
         assert data["avg_decode_throughput_tps"] == 0.0
         assert data["latest_decode_throughput_tps"] == 0.0
-        # Prefill still uses the genuine TTFT: 1,200,000 tokens over 0.5s.
         assert data["avg_prefill_throughput_tps"] == 2_400_000.0
         assert data["avg_ttft_ms"] == 500.0
 
     def test_legacy_plausible_window_is_still_admitted(self, tmp_path: Path) -> None:
-        """Pre-0097 logs keep contributing decode samples when the window is physically credible."""
         log_dir = self._write_records(
             tmp_path,
             [
@@ -448,13 +434,10 @@ class TestOfflineTelemetryThroughput:
         data = _read_offline_metrics(log_dir)
 
         assert data is not None
-        # Only the 1.0s window is admitted (50 tokens / 1.0s), so the 1,500,000 tok/s artefact never
-        # enters the average.
         assert data["decode_samples"] == 1
         assert data["avg_decode_throughput_tps"] == 50.0
 
     def test_streaming_decode_rate_is_honoured_and_non_streaming_ignored(self, tmp_path: Path) -> None:
-        """Post-0097 records carry an explicit ``streaming`` flag plus the admitted rate."""
         log_dir = self._write_records(
             tmp_path,
             [
@@ -503,7 +486,6 @@ class TestOfflineTelemetryThroughput:
         assert data["latest_total_time_ms"] == 401.0
 
     def test_unmeasured_prefill_rate_falls_back_to_recorded_ttft(self, tmp_path: Path) -> None:
-        """Records with ``prefill_tps: null`` still derive prefill speed from a real TTFT."""
         log_dir = self._write_records(
             tmp_path,
             [
@@ -520,11 +502,10 @@ class TestOfflineTelemetryThroughput:
         data = _read_offline_metrics(log_dir)
 
         assert data is not None
-        assert data["avg_prefill_throughput_tps"] == 3000.0  # 900 / 0.3s
-        assert data["avg_tail_prefill_tps"] == 2000.0  # 600 uncached / 0.3s
+        assert data["avg_prefill_throughput_tps"] == 3000.0
+        assert data["avg_tail_prefill_tps"] == 2000.0
 
     def test_stored_zero_rate_stays_unmeasured_instead_of_re_derived(self, tmp_path: Path) -> None:
-        """A stored ``0.0`` rate is *unmeasured* and must not be re-derived from the recorded TTFT."""
         log_dir = self._write_records(
             tmp_path,
             [
@@ -560,15 +541,12 @@ class TestOfflineTelemetryThroughput:
         data = _read_offline_metrics(log_dir)
 
         assert data is not None
-        # The 0.0 record contributes its timing only, never a rate, so the average is the 5000 t/s
-        # sample alone -- not (3000 derived + 5000) / 2 = 4000.
         assert data["avg_prefill_throughput_tps"] == 5000.0
         assert data["avg_tail_prefill_tps"] == 5000.0
         assert data["latest_prefill_tps"] == 5000.0
-        assert data["avg_ttft_ms"] == 250.0  # (300 + 200) / 2
+        assert data["avg_ttft_ms"] == 250.0
 
     def test_live_and_offline_metric_surfaces_agree(self, tmp_path: Path) -> None:
-        """The in-memory proxy and the offline parser must publish identical numbers."""
         log_dir = self._write_records(
             tmp_path,
             [

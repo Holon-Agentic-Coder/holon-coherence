@@ -1,5 +1,3 @@
-"""``stop`` command: tear down the holon-coherence proxy container."""
-
 from __future__ import annotations
 
 import argparse
@@ -14,7 +12,6 @@ def handle_stop(
     *,
     stopper_fn: Callable[[str | None], object] | None = None,
 ) -> int:
-    """Stop and remove running holon-coherence Docker container."""
     stopper = stopper_fn or ProxyLifecycle().stop
     target_container = getattr(args, "name", None) or get_container_name()
     stopper(target_container)
@@ -22,12 +19,10 @@ def handle_stop(
 
 
 def handle(args: Any) -> int:
-    """Handle stop command."""
     return handle_stop(args)
 
 
 def register(subparsers: Any) -> argparse.ArgumentParser:
-    """Register stop subparser."""
     stop_parser = subparsers.add_parser("stop", help="Stop and remove running holon-coherence Docker container")
     stop_parser.add_argument(
         "--name",

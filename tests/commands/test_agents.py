@@ -1,5 +1,3 @@
-"""Unit tests for agent discovery, runner flags extraction, and execution orchestration."""
-
 from __future__ import annotations
 
 import argparse
@@ -20,8 +18,6 @@ from holon_coherence.commands.docker_ops import CONTAINER_NAME, stop_proxy_conta
 
 
 class TestRunnerFlagsExtractionSuite:
-    """Tests for runner CLI flag parsing."""
-
     def test_default_flags(self) -> None:
         flags = extract_runner_flags(["arg1", "arg2"])
         assert flags.ephemeral is False
@@ -41,8 +37,6 @@ class TestRunnerFlagsExtractionSuite:
 
 
 class TestAgentBinaryResolutionSuite:
-    """Tests for locating agent binaries on PATH."""
-
     def test_resolve_existing_binary(self) -> None:
         with patch("shutil.which", side_effect=lambda x: f"/usr/local/bin/{x}"):
             assert resolve_agent_binary("agy") == "/usr/local/bin/agy"
@@ -51,8 +45,6 @@ class TestAgentBinaryResolutionSuite:
 
 
 class TestBuildAgentEnvSuite:
-    """Tests for environment variable mapping and credential propagation."""
-
     def test_credential_mapping_claude(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HOLON_AGENT_KEY", "secret-key-123")
         env = build_agent_env("claude", port=8080)
@@ -66,8 +58,6 @@ class TestBuildAgentEnvSuite:
 
 
 class TestRunAgentSuite:
-    """Tests for run_agent lifecycle and subprocess invocation."""
-
     def test_run_agent_missing_binary(self, capsys: pytest.CaptureFixture[str]) -> None:
         with patch("holon_coherence.commands.agents.resolve_agent_binary", return_value=None):
             code = run_agent("claude", [])
@@ -88,8 +78,6 @@ class TestRunAgentSuite:
 
 
 class TestAgentsRegistrationAndDispatch:
-    """Tests for run-agent and alias subparser registration and command handling."""
-
     def test_register_and_defaults(self) -> None:
         parser = argparse.ArgumentParser()
         subparsers = parser.add_subparsers(dest="command")
@@ -128,8 +116,6 @@ class TestAgentsRegistrationAndDispatch:
 
 
 class TestExtractRunnerFlags:
-    """Tests for CLI runner flag extraction."""
-
     def test_default_flags(self) -> None:
         flags = extract_runner_flags(["arg1", "arg2"])
         assert flags.ephemeral is False
@@ -202,8 +188,6 @@ class TestExtractRunnerFlags:
 
 
 class TestResolveAgentBinary:
-    """Tests for resolving agent binaries on PATH."""
-
     def test_resolve_existing_binary(self) -> None:
         with patch("shutil.which", side_effect=lambda x: f"/usr/local/bin/{x}"):
             assert resolve_agent_binary("agy") == "/usr/local/bin/agy"
@@ -227,8 +211,6 @@ class TestResolveAgentBinary:
 
 
 class TestCredentialMappingAndNativeAuth:
-    """Tests for HOLON_AGENT_KEY mapping and native auth fallback."""
-
     def test_credential_mapping_agy(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HOLON_AGENT_KEY", "secret-test-key-123")
         env = build_agent_env("agy", port=8080)
@@ -276,8 +258,6 @@ class TestCredentialMappingAndNativeAuth:
 
 
 class TestProxyLifecycleAndStopCommand:
-    """Tests for daemon mode vs --ephemeral proxy lifecycle and stop command."""
-
     def test_daemon_mode_leaves_proxy_running(self) -> None:
         with (
             patch("holon_coherence.commands.agents.resolve_agent_binary", return_value="/bin/dummy-agent"),
@@ -367,15 +347,12 @@ class TestProxyLifecycleAndStopCommand:
 
     def test_stop_proxy_container_suppresses_os_error(self, capsys: pytest.CaptureFixture[str]) -> None:
         with patch("subprocess.run", side_effect=FileNotFoundError("docker not found")):
-            # Should not raise exception
             stop_proxy_container()
         captured = capsys.readouterr()
         assert "⚠️  Failed to remove container: docker not found" in captured.out
 
 
 class TestLocalLlmRunnerFlagsAndEnvs:
-    """Tests for --model and local LLM runner flags/environments."""
-
     def test_extract_runner_flags_model(self) -> None:
         flags = extract_runner_flags(["--model", "qwen2.5-coder", "run.py"])
         assert flags.model == "qwen2.5-coder"
@@ -404,7 +381,6 @@ class TestLocalLlmRunnerFlagsAndEnvs:
         monkeypatch.setenv("HOLON_AGENT_KEY", "test-agy-key")
         monkeypatch.delenv("USER", raising=False)
         env = build_agent_env("agy", port=8080, model="gemini-flash", local_llm_base="localhost:11434")
-        # Local LLM runner sets AGY_GATEWAY_URL with non-loopback alias (NOT GOOGLE_GEMINI_BASE_URL)
         assert env["AGY_GATEWAY_URL"] == "http://127.0.0.1.nip.io:8080"
         assert "GOOGLE_GEMINI_BASE_URL" not in env
         assert env["AGY_MODEL"] == "gemini-flash"
@@ -424,7 +400,6 @@ class TestLocalLlmRunnerFlagsAndEnvs:
     def test_build_agent_env_cloud_preservation(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("HOLON_LOCAL_LLM_BASE", raising=False)
         monkeypatch.setenv("HOLON_AGENT_KEY", "test-key")
-        # When local_llm_base is None, local override env vars must NOT be present
         claude_env = build_agent_env("claude", port=8080)
         assert "ANTHROPIC_BASE_URL" not in claude_env
         assert "CLAUDE_SUPPRESS_FALLBACK" not in claude_env

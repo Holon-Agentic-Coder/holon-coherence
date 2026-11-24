@@ -1,5 +1,3 @@
-"""Agent command dispatchers and runner wrappers."""
-
 from __future__ import annotations
 
 import argparse
@@ -33,10 +31,11 @@ AGENT_BINARY_MAP: dict[str, list[str]] = {
     "pi": ["pi"],
 }
 
+MIN_TCP_PORT = 1
+MAX_TCP_PORT = 65535
+
 
 class RunnerFlags(NamedTuple):
-    """Parsed runner flags extracted from raw argv before argparse takes over."""
-
     ephemeral: bool
     port: int | None
     agent_args: list[str]
@@ -47,8 +46,6 @@ class RunnerFlags(NamedTuple):
 
 @dataclass
 class _RunnerFlagAccumulator:
-    """Mutable state while ``extract_runner_flags`` walks argv."""
-
     ephemeral: bool = False
     port: int | None = None
     help_requested: bool = False
@@ -71,13 +68,11 @@ _LOCAL_LLM_FLAGS = ("--local-llm-base", "--local-llm-endpoint")
 
 
 def _usage_error(message: str) -> NoReturn:
-    """Print a runner flag error to stderr and exit with status 1."""
     print(message, file=sys.stderr)
     sys.exit(1)
 
 
 def _parse_flag_value(argv: list[str], idx: int, flag_name: str, error: str) -> tuple[str, int]:
-    """Value of the option at ``argv[idx]`` (``--flag value`` or ``--flag=value``) and the next index."""
     arg = argv[idx]
     if arg.startswith(f"{flag_name}="):
         value = arg.split("=", 1)[1]
@@ -90,19 +85,17 @@ def _parse_flag_value(argv: list[str], idx: int, flag_name: str, error: str) -> 
 
 
 def _parse_port_flag(argv: list[str], idx: int) -> tuple[int, int]:
-    """Parse ``--port`` into a TCP port in 1-65535; returns ``(port, next_index)``."""
     raw, next_idx = _parse_flag_value(argv, idx, "--port", "Error: Option --port requires an argument.")
     try:
         port = int(raw)
     except ValueError:
         _usage_error(f"Error: Argument to --port must be an integer, got '{raw}'.")
-    if not (1 <= port <= 65535):
-        _usage_error(f"Error: Port must be between 1 and 65535, got {port}.")
+    if not (MIN_TCP_PORT <= port <= MAX_TCP_PORT):
+        _usage_error(f"Error: Port must be between {MIN_TCP_PORT} and {MAX_TCP_PORT}, got {port}.")
     return port, next_idx
 
 
 def _consume_runner_arg(argv: list[str], idx: int, acc: _RunnerFlagAccumulator) -> int:
-    """Record the runner flag (or agent argument) at ``argv[idx]``; returns the next index."""
     arg = argv[idx]
     flag_name = arg.split("=", 1)[0]
     if arg == "--ephemeral":
@@ -117,8 +110,8 @@ def _consume_runner_arg(argv: list[str], idx: int, acc: _RunnerFlagAccumulator) 
         return next_idx
     if flag_name == "--model":
         acc.model, next_idx = _parse_flag_value(argv, idx, flag_name, "Error: Option --model requires an argument.")
-        # The agent needs --model too, in the exact form the user typed it.
-        acc.agent_args.extend(argv[idx:next_idx])
+        forwarded_model_args = argv[idx:next_idx]
+        acc.agent_args.extend(forwarded_model_args)
         return next_idx
     if flag_name == "--port":
         acc.port, next_idx = _parse_port_flag(argv, idx)
@@ -128,7 +121,6 @@ def _consume_runner_arg(argv: list[str], idx: int, acc: _RunnerFlagAccumulator) 
 
 
 def extract_runner_flags(argv: list[str]) -> RunnerFlags:
-    """Extract runner flags and ``--help`` from arguments, preserving agent argument order."""
     acc = _RunnerFlagAccumulator()
     idx = 0
     while idx < len(argv):
@@ -140,7 +132,6 @@ def extract_runner_flags(argv: list[str]) -> RunnerFlags:
 
 
 def resolve_agent_binary(agent_name: str) -> str | None:
-    """Find the executable binary for the specified agent on the host PATH."""
     candidates = AGENT_BINARY_MAP.get(agent_name, [agent_name])
     for candidate in candidates:
         path = shutil.which(candidate)
@@ -158,7 +149,6 @@ _AGENT_KEY_ENV_VARS: dict[str, tuple[str, ...]] = {
 
 
 def _apply_proxy_and_ca_env(env: dict[str, str], port: int, drop_no_proxy: tuple[str, ...]) -> None:
-    """Route the agent through the proxy; drop CA variables unless the full trust bundle is available."""
     proxy_env = build_proxy_env(f"http://127.0.0.1:{port}", drop_no_proxy=drop_no_proxy)
     env.update(proxy_env)
     if not all(var in proxy_env for var in CA_ENV_VARS):
@@ -169,7 +159,6 @@ def _apply_proxy_and_ca_env(env: dict[str, str], port: int, drop_no_proxy: tuple
 def _apply_local_llm_env(
     env: dict[str, str], agent_name: str, port: int, model: str | None, holon_key: str | None
 ) -> None:
-    """Point the agent's provider base URL (and model) at the proxy for a host-local model server."""
     env.setdefault("USER", "holon")
     if agent_name == "claude":
         env["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{port}"
@@ -192,7 +181,6 @@ def _apply_local_llm_env(
 
 
 def _apply_auth_key_env(env: dict[str, str], agent_name: str, holon_key: str) -> None:
-    """Map the universal ``HOLON_AGENT_KEY`` onto the agent's own credential variables."""
     if agent_name == "claude":
         env.setdefault("ANTHROPIC_API_KEY", holon_key)
         return
@@ -207,7 +195,6 @@ def build_agent_env(
     model: str | None = None,
     local_llm_base: str | None = None,
 ) -> dict[str, str]:
-    """Construct environment variables for the child agent subprocess."""
     env = os.environ.copy()
     _apply_proxy_and_ca_env(env, port, drop_no_proxy)
     holon_key = env.get("HOLON_AGENT_KEY")
@@ -219,8 +206,6 @@ def build_agent_env(
 
 
 class AgentRunOptions(TypedDict, total=False):
-    """Keyword options accepted by :func:`run_agent`."""
-
     ephemeral: bool
     port: int | None
     local_llm_base: str | None
@@ -228,10 +213,9 @@ class AgentRunOptions(TypedDict, total=False):
 
 
 def _resolve_agent_port(port: int | None) -> int | None:
-    """Validate an explicit ``--port`` or fall back to ``HOLON_PROXY_PORT`` / the default; None if invalid."""
     if port is not None:
-        if not (1 <= port <= 65535):
-            print(f"Error: Port must be between 1 and 65535, got {port}.", file=sys.stderr)
+        if not (MIN_TCP_PORT <= port <= MAX_TCP_PORT):
+            print(f"Error: Port must be between {MIN_TCP_PORT} and {MAX_TCP_PORT}, got {port}.", file=sys.stderr)
             return None
         return port
     env_port = os.getenv("HOLON_PROXY_PORT")
@@ -241,14 +225,13 @@ def _resolve_agent_port(port: int | None) -> int | None:
         parsed_port = int(env_port)
     except ValueError:
         parsed_port = 0
-    if 1 <= parsed_port <= 65535:
+    if MIN_TCP_PORT <= parsed_port <= MAX_TCP_PORT:
         return parsed_port
     print(f"⚠️  Invalid HOLON_PROXY_PORT '{env_port}', falling back to {DEFAULT_PROXY_PORT}.", file=sys.stderr)
     return DEFAULT_PROXY_PORT
 
 
 def _report_missing_binary(agent_name: str) -> None:
-    """Explain which agent executable is missing from PATH."""
     primary_bin = AGENT_BINARY_MAP.get(agent_name, [agent_name])[0]
     print(
         f"Error: Agent CLI binary '{primary_bin}' not found on PATH.\n"
@@ -258,7 +241,6 @@ def _report_missing_binary(agent_name: str) -> None:
 
 
 def _resolve_local_llm_base(local_llm_base: str | None) -> str | None:
-    """Explicit ``--local-llm-base`` wins; otherwise a non-blank ``HOLON_LOCAL_LLM_BASE``."""
     if local_llm_base is not None:
         return local_llm_base
     return (os.getenv("HOLON_LOCAL_LLM_BASE") or "").strip() or None
@@ -267,7 +249,6 @@ def _resolve_local_llm_base(local_llm_base: str | None) -> str | None:
 def _plan_agent_route(
     local_llm_base: str | None, port: int, plan_route: Callable[[str], LocalLlmRoute | None]
 ) -> tuple[bool, LocalLlmRoute | None]:
-    """Plan the host-local route; ``(False, None)`` after reporting an unusable endpoint."""
     if local_llm_base is None:
         return True, None
     route = plan_route(local_llm_base)
@@ -289,7 +270,6 @@ def _plan_agent_route(
 
 
 def _setup_agent_local_route(route: LocalLlmRoute | None) -> tuple[str, ...]:
-    """Probe the host-local endpoint from the container and return the NO_PROXY entries to drop."""
     if route is None:
         return ()
     if route.target.port is None:
@@ -305,7 +285,6 @@ def _setup_agent_local_route(route: LocalLlmRoute | None) -> tuple[str, ...]:
 
 
 def _execute_agent_with_cleanup(cmd: list[str], env: dict[str, str], teardown: bool) -> int:
-    """Run the agent; with ``teardown`` remove the proxy container this run started, even on failure."""
     try:
         return execute_interactive_process(cmd, env)
     finally:
@@ -318,11 +297,6 @@ def run_agent(
     agent_args: list[str],
     **options: Unpack[AgentRunOptions],
 ) -> int:
-    """Launch the optimization proxy and execute the requested coding agent with full telemetry.
-
-    ``options`` carries ``ephemeral``, ``port``, ``local_llm_base`` and ``model``; any other keyword
-    (such as the retired ``resolve_bin_fn`` / ``exec_proc_fn``) raises ``TypeError``.
-    """
     unknown = sorted(set(options) - AgentRunOptions.__optional_keys__ - AgentRunOptions.__required_keys__)
     if unknown:
         raise TypeError(f"run_agent() got unexpected keyword argument(s): {', '.join(unknown)}")
@@ -354,7 +328,6 @@ def run_agent(
 
 
 def _print_agent_help(agent_name: str) -> None:
-    """Print help information for running an agent."""
     print(
         f"usage: holon-coherence {agent_name} [--ephemeral] [--port PORT] "
         "[--model MODEL] [--local-llm-base BASE] [--local-llm-endpoint ENDPOINT] [--] [agent_args ...]\n"
@@ -376,7 +349,6 @@ def _print_agent_help(agent_name: str) -> None:
 
 
 def _print_run_agent_help() -> None:
-    """Print help information for run-agent command."""
     agents_str = ", ".join(sorted(set(SUPPORTED_AGENTS)))
     print(
         "usage: holon-coherence run-agent <agent> [--ephemeral] [--port PORT] "
@@ -400,7 +372,6 @@ def _print_run_agent_help() -> None:
 
 
 def handle(args: Any) -> int:
-    """Dispatch agent execution from parsed arguments."""
     cmd = getattr(args, "command", None)
     agent_name = getattr(args, "agent", None) if cmd == "run-agent" else cmd
     if not agent_name:
@@ -417,7 +388,6 @@ def handle(args: Any) -> int:
 
 
 def register(subparsers: Any) -> list[argparse.ArgumentParser]:
-    """Register run-agent and agent alias subparsers."""
     run_agent_parser = subparsers.add_parser("run-agent", help="Run a coding agent with automated background proxy")
     run_agent_parser.add_argument("agent", choices=sorted(set(SUPPORTED_AGENTS)), help="Target agent")
     run_agent_parser.add_argument(

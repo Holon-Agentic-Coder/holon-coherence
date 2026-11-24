@@ -1,5 +1,3 @@
-"""A/B testing suite and benchmark runner for holon-coherence context optimization."""
-
 from __future__ import annotations
 
 import argparse
@@ -31,7 +29,16 @@ from holon_coherence.parsers.tokens import safe_int
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_REPLAY_ENDPOINT = "https://api.anthropic.com/v1/messages"
+DEFAULT_REPLAY_HOST = "api.anthropic.com"
+DEFAULT_REPLAY_PROVIDER = "anthropic"
+PROXY_MODE_TIMEOUT_SECONDS = 3.0
+
 __all__ = [
+    "DEFAULT_REPLAY_ENDPOINT",
+    "DEFAULT_REPLAY_HOST",
+    "DEFAULT_REPLAY_PROVIDER",
+    "PROXY_MODE_TIMEOUT_SECONDS",
     "ABComparisonScorecard",
     "ABRunConfig",
     "ABTurnMetrics",
@@ -51,7 +58,6 @@ __all__ = [
 
 
 def set_proxy_mode(mode: str, port: int = 8080, wire_log_dir: str | None = None) -> bool:
-    """Set the monitoring/optimization mode and optional wire log dir of the live proxy."""
     try:
         url = f"http://127.0.0.1:{port}/holon/api/mode"
         payload: dict[str, Any] = {"mode": mode}
@@ -63,7 +69,7 @@ def set_proxy_mode(mode: str, port: int = 8080, wire_log_dir: str | None = None)
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=3.0) as resp:
+        with urllib.request.urlopen(req, timeout=PROXY_MODE_TIMEOUT_SECONDS) as resp:
             return resp.status == 200
     except Exception:
         return False
@@ -73,7 +79,6 @@ def run_workload_ab_test(
     config: ABRunConfig,
     proxy_port: int = 8080,
 ) -> ABComparisonScorecard:
-    """Execute a real agent command workload twice through the proxy with authentic LLM traffic."""
     from holon_coherence.commands.runner import build_proxy_env
 
     command_str = config.command
@@ -109,7 +114,6 @@ def run_workload_ab_test(
     if res_b.returncode != 0:
         print(f"⚠️  Optimized workload exited with code {res_b.returncode}", file=sys.stderr)
 
-    # Ingest authentic transactions
     baseline_txs = load_transactions_from_path(baseline_dir)
     optimized_txs = load_transactions_from_path(optimized_dir)
 
@@ -123,19 +127,18 @@ def run_workload_ab_test(
 
 
 def _prepare_live_replay_request(tx: dict[str, Any]) -> dict[str, Any] | None:
-    """Extract payload, endpoint, and HTTP headers for live replay."""
     raw_req = tx.get("raw_request") or {}
     payload = raw_req.get("request") if isinstance(raw_req, dict) and "request" in raw_req else raw_req
     if not isinstance(payload, dict) or not payload:
         return None
 
-    endpoint = tx.get("endpoint") or "https://api.anthropic.com/v1/messages"
+    endpoint = tx.get("endpoint") or DEFAULT_REPLAY_ENDPOINT
     parsed = urllib.parse.urlparse(endpoint if "://" in endpoint else f"http://{endpoint}")
     headers = tx.get("headers") or {}
     clean_headers: dict[str, str] = {
         k: str(v) for k, v in headers.items() if not k.lower().startswith("content-length")
     }
-    clean_headers["Host"] = parsed.netloc or "api.anthropic.com"
+    clean_headers["Host"] = parsed.netloc or DEFAULT_REPLAY_HOST
     clean_headers["Content-Type"] = "application/json"
     return {"payload": payload, "endpoint": endpoint, "headers": clean_headers}
 
@@ -146,7 +149,6 @@ def _dispatch_proxy_http_turn(
     proxy_port: int,
     timeout: float,
 ) -> tuple[int, dict[str, Any], float]:
-    """Execute a single HTTP request through proxy and measure latency."""
     headers = dict(req_info["headers"])
     headers["X-Holon-Mode"] = mode
     req_bytes = json.dumps(req_info["payload"]).encode("utf-8")
@@ -171,13 +173,12 @@ def _execute_live_turn(
     proxy_port: int,
     timeout: float,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    """Run baseline and optimized passes for a single trace transaction."""
     req_info = _prepare_live_replay_request(tx)
     if req_info is None:
         return None, None
 
     turn_id = tx.get("turn_id") or f"live-t{idx}"
-    provider = tx.get("provider") or "anthropic"
+    provider = tx.get("provider") or DEFAULT_REPLAY_PROVIDER
 
     base_status, base_usage, t_base = _dispatch_proxy_http_turn(req_info, "baseline", proxy_port, timeout)
     base_tx = {
@@ -206,7 +207,6 @@ def run_live_replay_ab_test(
     config: ABRunConfig,
     proxy_port: int = 8080,
 ) -> ABComparisonScorecard:
-    """Replay authentic trace requests as live HTTP traffic through proxy against real upstream LLM endpoints."""
     if not config.trace_file:
         raise ValueError("No trace file specified for live replay.")
 
@@ -230,7 +230,6 @@ def run_live_replay_ab_test(
 
 
 def _parse_ab_run_config(args: argparse.Namespace) -> ABRunConfig | None:
-    """Extract ABRunConfig from argparse arguments."""
     workload_cmd = getattr(args, "workload_cmd", None)
     trace_path = getattr(args, "trace_file", None)
     baseline_path = getattr(args, "baseline", None)
@@ -258,7 +257,6 @@ def _parse_ab_run_config(args: argparse.Namespace) -> ABRunConfig | None:
 
 
 def _dispatch_trace_file_ab_test(config: ABRunConfig) -> ABComparisonScorecard:
-    """Dispatch evaluation of a trace file in mixed or offline mode."""
     if not config.trace_file:
         raise ValueError("No trace file specified.")
 
@@ -283,7 +281,6 @@ def _dispatch_trace_file_ab_test(config: ABRunConfig) -> ABComparisonScorecard:
 
 
 def _dispatch_ab_test(config: ABRunConfig) -> ABComparisonScorecard:
-    """Route benchmark execution according to configured mode."""
     if config.command:
         return run_workload_ab_test(config)
 
@@ -308,7 +305,6 @@ def _dispatch_ab_test(config: ABRunConfig) -> ABComparisonScorecard:
 
 
 def _render_and_gate_ab_test(scorecard: ABComparisonScorecard, config: ABRunConfig) -> int:
-    """Render scorecard to stdout and enforce gating constraints."""
     if config.output_json:
         print(json.dumps(scorecard.to_dict(), indent=2))
     else:
@@ -330,7 +326,6 @@ def _render_and_gate_ab_test(scorecard: ABComparisonScorecard, config: ABRunConf
 
 
 def handle_ab_test(args: argparse.Namespace) -> int:
-    """Handle holon-coherence ab-test command execution across real traffic and offline modes."""
     config = _parse_ab_run_config(args)
     if config is None:
         return 1
@@ -348,12 +343,10 @@ def handle_ab_test(args: argparse.Namespace) -> int:
 
 
 def handle(args: Any) -> int:
-    """Handle ab-test command."""
     return handle_ab_test(args)
 
 
 def register(subparsers: Any) -> argparse.ArgumentParser:
-    """Register ab-test subparser."""
     ab_parser = subparsers.add_parser(
         "ab-test",
         help="Run real-traffic A/B benchmark comparing baseline vs optimized runs",

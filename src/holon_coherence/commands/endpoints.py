@@ -1,13 +1,3 @@
-"""Exposed endpoint resolution and reporting shared by ``start``, ``status`` and ``metrics``.
-
-Every command that tells the user where the proxy lives prints the same three rows: the proxy listen
-address, the Coherence live dashboard under ``/holon/`` and the plain mitmweb raw request/response
-inspector. Ports are always the host ports actually resolved (after any fallback), never the
-requested defaults, and an inspector that is not running is reported as such rather than with a
-stale URL from ``~/.holon/web-token``. The inspector token is read from the container's own
-environment, so with several named containers each URL carries the token that container accepts.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -22,6 +12,7 @@ from holon_coherence.commands.docker_ops import (
 PROXY_CONTAINER_PORT = 8080
 INSPECTOR_CONTAINER_PORT = 8081
 ENDPOINT_LABEL_WIDTH = 28
+ENDPOINT_TABLE_RULE_WIDTH = 64
 
 PROXY_LABEL = "Proxy Listen Address"
 DASHBOARD_LABEL = "Coherence Live Dashboard"
@@ -30,30 +21,20 @@ INSPECTOR_LABEL = "mitmweb Req/Resp Inspector"
 
 @dataclass(frozen=True)
 class ExposedEndpoints:
-    """Host ports (and the inspector token) a proxy session exposes; ``None`` means not running."""
-
     proxy_port: int | None
     web_port: int | None
     web_token: str | None
 
 
 def format_table_row(label: str, value: str, label_width: int = ENDPOINT_LABEL_WIDTH) -> str:
-    """Format a ``label : value`` row in the terminal table style used by ``metrics``."""
     return f"  {label:<{label_width}} : {value}"
 
 
 def inspector_url(web_port: int, token: str) -> str:
-    """Return the token-authenticated mitmweb inspector URL for a host port."""
     return f"http://127.0.0.1:{web_port}/?token={token}"
 
 
 def token_recovery_command(container_name: str) -> str:
-    """Return the command that prints a container's own saved inspector token (never the token itself).
-
-    The in-container ``start`` saves the token it hands mitmweb to ``~/.holon/web-token`` inside the
-    container, so a manual ``docker run ... start --web`` without ``HOLON_COHERENCE_WEB_PASSWORD``
-    (whose token ``status`` therefore cannot read from the container environment) can still recover it.
-    """
     return f"docker exec {container_name} sh -c 'cat \"$HOME/.holon/web-token\"'"
 
 
@@ -65,13 +46,6 @@ def resolve_container_endpoints(
     get_mapped_port_fn: Callable[[str, int], int | None] | None = None,
     get_token_fn: Callable[[str], str | None] | None = None,
 ) -> ExposedEndpoints:
-    """Resolve the endpoints a proxy container really exposes from its Docker port mappings.
-
-    A container that is not running exposes nothing. A running container without an inspector port
-    mapping is a headless (mitmdump-only) start, so no token is read and no inspector URL is built.
-    The token comes from the container itself, never from the shared ``~/.holon/web-token``, which
-    every host ``start`` overwrites regardless of ``--name``.
-    """
     is_running = is_running_fn or is_container_running
     get_mapped_port = get_mapped_port_fn or get_container_mapped_port
     get_token = get_token_fn or get_container_web_token
@@ -89,7 +63,6 @@ def format_endpoint_rows(
     label_width: int = ENDPOINT_LABEL_WIDTH,
     container_name: str = "<container>",
 ) -> list[str]:
-    """Render the proxy, Coherence dashboard and mitmweb inspector rows for terminal output."""
     if endpoints.proxy_port is not None:
         proxy_value = f"127.0.0.1:{endpoints.proxy_port}"
         dashboard_value = f"http://127.0.0.1:{endpoints.proxy_port}/holon/"
@@ -118,9 +91,8 @@ def format_endpoint_rows(
 def print_endpoints(
     endpoints: ExposedEndpoints, header: str = "Exposed Endpoints", container_name: str = "<container>"
 ) -> None:
-    """Print the endpoint rows framed by a rule, as ``start`` and ``status`` report them."""
-    print("-" * 64)
+    print("-" * ENDPOINT_TABLE_RULE_WIDTH)
     print(f"  {header}")
     for row in format_endpoint_rows(endpoints, container_name=container_name):
         print(row)
-    print("-" * 64)
+    print("-" * ENDPOINT_TABLE_RULE_WIDTH)
