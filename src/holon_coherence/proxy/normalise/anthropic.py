@@ -35,6 +35,7 @@ def normalize_anthropic_request(  # noqa: C901, PLR0912
     if isinstance(messages, list):
         for msg in messages:
             if isinstance(msg, dict):
+                msg.pop("cache_control", None)
                 content = msg.get("content")
                 if isinstance(content, list):
                     for part in content:

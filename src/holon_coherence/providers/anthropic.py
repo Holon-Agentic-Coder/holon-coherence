@@ -214,35 +214,104 @@ def merge_consecutive_roles(messages: list[dict[str, Any]]) -> list[dict[str, An
     return merged
 
 
-def _count_system_cache_controls(system: Any) -> int:
+MAX_CACHE_BREAKPOINTS = 4
+TTL_RANK_5M = 300
+TTL_RANK_1H = 3600
+_VALID_TTLS = ("5m", "1h")
+
+
+def _parse_ttl_rank(cc: Any) -> int:
+    if isinstance(cc, dict) and cc.get("ttl") == "1h":
+        return TTL_RANK_1H
+    return TTL_RANK_5M
+
+
+def _sanitize_cache_control_block(block: dict[str, Any]) -> bool:
+    cc = block.get("cache_control")
+    if not isinstance(cc, dict) or cc.get("type") != "ephemeral":
+        block.pop("cache_control", None)
+        return False
+    if "ttl" in cc and cc["ttl"] not in _VALID_TTLS:
+        cc.pop("ttl", None)
+    return True
+
+
+def _iter_tools_holders(tools: Any) -> Iterator[dict[str, Any]]:
+    if isinstance(tools, list):
+        for tool in tools:
+            if isinstance(tool, dict) and "cache_control" in tool:
+                yield tool
+
+
+def _iter_system_holders(system: Any) -> Iterator[dict[str, Any]]:
     if isinstance(system, list):
-        return sum(1 for b in system if isinstance(b, dict) and "cache_control" in b)
-    if isinstance(system, dict) and "cache_control" in system:
-        return 1
-    return 0
+        for block in system:
+            if isinstance(block, dict) and "cache_control" in block:
+                yield block
+    elif isinstance(system, dict) and "cache_control" in system:
+        yield system
+
+
+def _iter_single_message_holders(msg: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    if "cache_control" in msg:
+        yield msg
+    content = msg.get("content")
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and "cache_control" in block:
+                yield block
+    elif isinstance(content, dict) and "cache_control" in content:
+        yield content
+
+
+def _iter_messages_holders(messages: Any) -> Iterator[dict[str, Any]]:
+    if not isinstance(messages, list):
+        return
+    for msg in messages:
+        if isinstance(msg, dict):
+            yield from _iter_single_message_holders(msg)
+
+
+def _iter_cache_control_holders(payload: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    """Yields dicts carrying cache_control in Anthropic prefix order (tools -> system -> messages)."""
+    yield from _iter_tools_holders(payload.get("tools"))
+    yield from _iter_system_holders(payload.get("system"))
+    yield from _iter_messages_holders(payload.get("messages"))
+
+
+def sanitize_and_normalize_cache_controls(payload: dict[str, Any]) -> dict[str, Any]:
+    """Sanitizes cache_control blocks, enforces <= 4 breakpoints, and normalizes non-increasing TTL order."""
+    raw_holders = list(_iter_cache_control_holders(payload))
+    valid_holders = [h for h in raw_holders if _sanitize_cache_control_block(h)]
+
+    for extra in valid_holders[MAX_CACHE_BREAKPOINTS:]:
+        extra.pop("cache_control", None)
+    kept_holders = valid_holders[:MAX_CACHE_BREAKPOINTS]
+
+    max_allowed_rank = TTL_RANK_1H
+    for holder in kept_holders:
+        cc = holder.get("cache_control")
+        if not isinstance(cc, dict):
+            continue
+        rank = _parse_ttl_rank(cc)
+        if rank > max_allowed_rank:
+            cc.pop("ttl", None)
+            rank = TTL_RANK_5M
+        if rank < max_allowed_rank:
+            max_allowed_rank = rank
+    return payload
+
+
+def _count_system_cache_controls(system: Any) -> int:
+    return sum(1 for _ in _iter_system_holders(system))
 
 
 def _count_tools_cache_controls(tools: Any) -> int:
-    if isinstance(tools, list):
-        return sum(1 for t in tools if isinstance(t, dict) and "cache_control" in t)
-    return 0
+    return sum(1 for _ in _iter_tools_holders(tools))
 
 
 def _count_message_cache_controls(messages: Any) -> int:
-    if not isinstance(messages, list):
-        return 0
-    count = 0
-    for msg in messages:
-        if not isinstance(msg, dict):
-            continue
-        if "cache_control" in msg:
-            count += 1
-        content = msg.get("content")
-        if isinstance(content, list):
-            count += sum(1 for b in content if isinstance(b, dict) and "cache_control" in b)
-        elif isinstance(content, dict) and "cache_control" in content:
-            count += 1
-    return count
+    return sum(1 for _ in _iter_messages_holders(messages))
 
 
 def count_existing_cache_controls(payload: dict[str, Any]) -> int:
@@ -254,15 +323,29 @@ def count_existing_cache_controls(payload: dict[str, Any]) -> int:
     )
 
 
+def _assign_injected_cache_control(payload: dict[str, Any], target_block: dict[str, Any]) -> None:
+    target_block["cache_control"] = {"type": "ephemeral"}
+    holders = list(_iter_cache_control_holders(payload))
+    idx = next((i for i, h in enumerate(holders) if h is target_block), -1)
+    if idx < 0:
+        return
+    upstream_all_1h = all(_parse_ttl_rank(h.get("cache_control")) == TTL_RANK_1H for h in holders[:idx])
+    downstream_has_1h = any(_parse_ttl_rank(h.get("cache_control")) == TTL_RANK_1H for h in holders[idx + 1 :])
+    if upstream_all_1h and downstream_has_1h:
+        target_block["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
+
+
 def _inject_system_cache(payload: dict[str, Any]) -> bool:
     system = payload.get("system")
     if isinstance(system, list) and system:
         last_sys = system[-1]
         if isinstance(last_sys, dict) and "cache_control" not in last_sys:
-            last_sys["cache_control"] = {"type": "ephemeral"}
+            _assign_injected_cache_control(payload, last_sys)
             return True
     elif isinstance(system, str):
-        payload["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+        block: dict[str, Any] = {"type": "text", "text": system}
+        payload["system"] = [block]
+        _assign_injected_cache_control(payload, block)
         return True
     return False
 
@@ -272,7 +355,7 @@ def _inject_tools_cache(payload: dict[str, Any]) -> bool:
     if isinstance(tools, list) and tools:
         last_tool = tools[-1]
         if isinstance(last_tool, dict) and "cache_control" not in last_tool:
-            last_tool["cache_control"] = {"type": "ephemeral"}
+            _assign_injected_cache_control(payload, last_tool)
             return True
     return False
 
@@ -281,23 +364,26 @@ def _inject_messages_cache(payload: dict[str, Any]) -> bool:
     messages = payload.get("messages", [])
     if isinstance(messages, list) and len(messages) >= 2:
         target_msg = messages[-2]
-        if isinstance(target_msg, dict):
+        if isinstance(target_msg, dict) and "cache_control" not in target_msg:
             content = target_msg.get("content")
             if isinstance(content, list) and content:
                 last_block = content[-1]
                 if isinstance(last_block, dict) and "cache_control" not in last_block:
-                    last_block["cache_control"] = {"type": "ephemeral"}
+                    _assign_injected_cache_control(payload, last_block)
                     return True
             elif isinstance(content, str):
-                target_msg["content"] = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
+                block: dict[str, Any] = {"type": "text", "text": content}
+                target_msg["content"] = [block]
+                _assign_injected_cache_control(payload, block)
                 return True
     return False
 
 
 def inject_anthropic_cache_control(payload: dict[str, Any], stats: dict[str, int] | None = None) -> dict[str, Any]:
     """Injects ephemeral prompt cache controls into Anthropic payload within budget."""
+    sanitize_and_normalize_cache_controls(payload)
     existing_count = count_existing_cache_controls(payload)
-    budget = 4 - existing_count
+    budget = MAX_CACHE_BREAKPOINTS - existing_count
     if budget <= 0:
         return payload
 
@@ -314,6 +400,7 @@ def inject_anthropic_cache_control(payload: dict[str, Any], stats: dict[str, int
         budget -= 1
         injected += 1
 
+    sanitize_and_normalize_cache_controls(payload)
     if stats is not None:
         stats["cache_control_injected"] += injected
     return payload
@@ -477,7 +564,7 @@ class AnthropicProvider(ProviderFormat):
         """Cleans Anthropic request payloads (tool dedup, summarization, prompt cache breakpoints)."""
         messages = payload.get("messages", [])
         if not isinstance(messages, list):
-            return payload
+            return sanitize_and_normalize_cache_controls(payload)
 
         if getattr(cleaner, "enable_deduplication", True):
             messages = deduplicate_anthropic_tool_outputs(messages, seen_content_hashes, stats=stats)
@@ -492,6 +579,8 @@ class AnthropicProvider(ProviderFormat):
 
         if getattr(cleaner, "enable_prompt_caching", True):
             payload = inject_anthropic_cache_control(payload, stats=stats)
+        else:
+            payload = sanitize_and_normalize_cache_controls(payload)
 
         return payload
 
