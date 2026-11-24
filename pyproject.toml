@@ -40,7 +40,8 @@ holon-coherence = "holon_coherence.cli:main"
 [tool.taskipy.tasks]
 test = "pytest -m 'not integration_test'"
 test-docker = "pytest -m 'integration_test'"
-lint = "ruff check . && ruff format --check ."
+lint = "ruff check . && ruff format --check . && python scripts/check_module_budgets.py"
+check-budgets = "python scripts/check_module_budgets.py"
 fix-ruff = "ruff check --fix . && ruff format ."
 clean = "rm -rf build dist *.egg-info .pytest_cache .ruff_cache .coverage htmlcov && find . -type d -name __pycache__ -exec rm -rf {} +"
 
