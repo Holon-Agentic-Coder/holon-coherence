@@ -1,8 +1,9 @@
-"""Unit tests for offline wire log metrics aggregation domain module."""
-
 from __future__ import annotations
 
+import ast
+import io
 import json
+import tokenize
 from pathlib import Path
 
 from holon_coherence.ab_testing.evaluation import (
@@ -21,9 +22,60 @@ from holon_coherence.metrics.aggregation import (
     read_offline_metrics,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+METRICS_AND_AB_SELF_DOC_FILES = (
+    "src/holon_coherence/metrics/__init__.py",
+    "src/holon_coherence/metrics/aggregation.py",
+    "src/holon_coherence/metrics_math.py",
+    "src/holon_coherence/ab_testing/__init__.py",
+    "src/holon_coherence/ab_testing/evaluation.py",
+    "tests/test_metrics_aggregation.py",
+    "tests/test_ab_testing_domain.py",
+    "tests/test_ab_testing.py",
+)
+
+ALLOWED_COMMENT_PREFIXES = (
+    "# noqa",
+    "# type: ignore",
+    "# pragma: no cover",
+    "# pyright:",
+    "# mypy:",
+    "#!",
+    "# -*-",
+    "# vim:",
+    "# SPDX-License-Identifier:",
+)
+
+
+def _find_docstring_violations(source: str, rel_path: str) -> list[str]:
+    tree = ast.parse(source, filename=rel_path)
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            doc = ast.get_docstring(node, clean=False)
+            if doc is not None:
+                lineno = getattr(node, "lineno", 1)
+                name = getattr(node, "name", "<module>")
+                violations.append(f"{rel_path}:{lineno} ({name})")
+    return violations
+
+
+def _is_allowed_comment(comment_text: str) -> bool:
+    stripped = comment_text.strip()
+    return any(stripped.startswith(prefix) for prefix in ALLOWED_COMMENT_PREFIXES)
+
+
+def _find_disallowed_comments(source: str, rel_path: str) -> list[str]:
+    violations: list[str] = []
+    tokens = tokenize.generate_tokens(io.StringIO(source).readline)
+    for tok_type, tok_str, (lineno, _), _, _ in tokens:
+        if tok_type == tokenize.COMMENT and not _is_allowed_comment(tok_str):
+            violations.append(f"{rel_path}:{lineno}: {tok_str}")
+    return violations
+
 
 def test_ab_testing_domain_aliases() -> None:
-    """Verify that domain aliases and format_console work correctly."""
     assert AbRun is not None
     scorecard = AbEvaluation(total_turns=2, baseline_input_tokens=1000, optimized_input_tokens=800)
     assert isinstance(scorecard, ABComparisonScorecard)
@@ -33,7 +85,6 @@ def test_ab_testing_domain_aliases() -> None:
 
 
 def test_milliseconds_to_seconds_and_stored_rate() -> None:
-    """Verify timing helper conversions and stored rate resolution."""
     assert _milliseconds_to_seconds(None) is None
     assert _milliseconds_to_seconds("invalid") is None
     assert _milliseconds_to_seconds(1500) == 1.5
@@ -44,19 +95,16 @@ def test_milliseconds_to_seconds_and_stored_rate() -> None:
 
 
 def test_read_offline_metrics_nonexistent(tmp_path: Path) -> None:
-    """Missing transactions.jsonl returns None."""
     assert read_offline_metrics(str(tmp_path / "nonexistent")) is None
 
 
 def test_read_offline_metrics_empty(tmp_path: Path) -> None:
-    """Empty transactions.jsonl returns None."""
     log_file = tmp_path / "transactions.jsonl"
     log_file.write_text("\n\n   \n", encoding="utf-8")
     assert read_offline_metrics(str(tmp_path)) is None
 
 
 def test_read_offline_metrics_authentic_records(tmp_path: Path) -> None:
-    """Aggregate authentic wire-log records with multi-turn counters and throughput."""
     records = [
         {
             "turn_id": "turn-1",
@@ -111,9 +159,9 @@ def test_read_offline_metrics_authentic_records(tmp_path: Path) -> None:
     ]
 
     log_file = tmp_path / "transactions.jsonl"
+    unparseable_jsonl_line = "{invalid json line\n"
     with log_file.open("w", encoding="utf-8") as f:
-        # Include an unparseable line to verify error resilience
-        f.write("{invalid json line\n")
+        f.write(unparseable_jsonl_line)
         for r in records:
             f.write(json.dumps(r) + "\n")
 
@@ -141,7 +189,6 @@ def test_read_offline_metrics_authentic_records(tmp_path: Path) -> None:
 
 
 def test_offline_metrics_accumulator_subroutines() -> None:
-    """Directly test subroutines handling delta, usage, and timing."""
     state = OfflineMetricsAccumulator()
     rec = {
         "turn_id": "test-1",
@@ -165,3 +212,36 @@ def test_offline_metrics_accumulator_subroutines() -> None:
     summary = _compute_metrics_summary(state)
     assert summary["tokens_reduced"] == 200
     assert summary["avg_ttft_ms"] == 100.0
+
+
+def test_ast_and_tokenize_self_doc_classifiers() -> None:
+    code_with_docstrings = '"""Module doc."""\n\ndef fn():\n    """Fn doc."""\n    return 1\n'
+    doc_violations = _find_docstring_violations(code_with_docstrings, "sample.py")
+    assert len(doc_violations) == 2
+
+    code_without_docstrings = 'def fn():\n    return "# hash inside string literal"\n'
+    assert _find_docstring_violations(code_without_docstrings, "sample.py") == []
+    assert _find_disallowed_comments(code_without_docstrings, "sample.py") == []
+
+    code_with_pragmas_and_prose = (
+        "x = 1  # type: ignore[arg-type]\n"
+        "y = 2  # noqa: F401\n"
+        "z = 3  # pragma: no cover\n"
+        "w = 4  # explanatory prose comment\n"
+    )
+    comment_violations = _find_disallowed_comments(code_with_pragmas_and_prose, "sample.py")
+    assert len(comment_violations) == 1
+    assert "explanatory prose comment" in comment_violations[0]
+
+
+def test_metrics_and_ab_testing_files_are_self_documenting() -> None:
+    docstring_violations: list[str] = []
+    comment_violations: list[str] = []
+    for rel_path in METRICS_AND_AB_SELF_DOC_FILES:
+        file_path = REPO_ROOT / rel_path
+        source = file_path.read_text(encoding="utf-8")
+        docstring_violations.extend(_find_docstring_violations(source, rel_path))
+        comment_violations.extend(_find_disallowed_comments(source, rel_path))
+
+    assert not docstring_violations, f"Docstrings found in self-doc scope: {docstring_violations}"
+    assert not comment_violations, f"Disallowed comments found in self-doc scope: {comment_violations}"

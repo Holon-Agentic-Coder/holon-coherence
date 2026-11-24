@@ -1,5 +1,3 @@
-"""Offline wire log metrics aggregation and telemetry calculation."""
-
 from __future__ import annotations
 
 from holon_coherence.metrics.aggregation import (
