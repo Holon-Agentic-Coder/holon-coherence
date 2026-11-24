@@ -1,5 +1,3 @@
-"""Unit tests for the ProxyLifecycle domain class (CA material, readiness, start and teardown)."""
-
 from __future__ import annotations
 
 import ast
@@ -39,8 +37,6 @@ def _mode(path: Path) -> int:
 
 
 class TestProxyLifecycleCA:
-    """ensure_ca(): mounted directories and root CA generation."""
-
     def test_creates_private_directories(self, tmp_path: Path) -> None:
         lifecycle = ProxyLifecycle(_config(tmp_path))
         with patch(f"{LIFECYCLE}.generate_root_ca"):
@@ -74,7 +70,8 @@ class TestProxyLifecycleCA:
     def test_generates_ca_when_files_missing(self, tmp_path: Path) -> None:
         ca_dir = tmp_path / "proxy-ca"
         ca_dir.mkdir()
-        (ca_dir / CA_CERT_FILENAME).write_text("cert")  # key half missing
+        cert_only_without_pem_key = ca_dir / CA_CERT_FILENAME
+        cert_only_without_pem_key.write_text("cert")
         with patch(f"{LIFECYCLE}.generate_root_ca") as mock_gen:
             ProxyLifecycle(_config(tmp_path)).ensure_ca()
         mock_gen.assert_called_once_with(output_dir=str(ca_dir))
@@ -93,8 +90,6 @@ class TestProxyLifecycleCA:
 
 
 class TestProxyLifecycleWaitUntilReady:
-    """wait_until_ready(): HTTP readiness polling with container fail-fast."""
-
     def test_immediate_200(self) -> None:
         with (
             patch(f"{LIFECYCLE}.is_container_running", return_value=True),
@@ -142,8 +137,6 @@ class TestProxyLifecycleWaitUntilReady:
 
 
 class TestProxyLifecycleStart:
-    """start(): managed background container start, reuse and recreation."""
-
     def test_docker_unavailable_exits(self, capsys: pytest.CaptureFixture[str]) -> None:
         with (
             patch(f"{LIFECYCLE}.check_docker_daemon", return_value=(False, "Error: Docker daemon is not running.")),
@@ -279,8 +272,6 @@ class TestProxyLifecycleStart:
 
 
 class TestProxyLifecycleLaunchAndServe:
-    """launch() for `holon-coherence start` and serve_in_container() inside the image."""
-
     def test_launch_attached_with_inspector(self, tmp_path: Path) -> None:
         config = _config(tmp_path, port=8080, web_port=8090, web_password="tok", detach=False, passive=True)
         with patch("subprocess.run") as mock_run:
@@ -324,8 +315,6 @@ class TestProxyLifecycleLaunchAndServe:
 
 
 class TestProxyLifecycleStop:
-    """stop(): docker rm -f teardown."""
-
     def test_clean_removal(self, capsys: pytest.CaptureFixture[str]) -> None:
         with patch("subprocess.run", return_value=MagicMock(returncode=0)) as mock_run:
             assert ProxyLifecycle(ProxyLifecycleConfig(container_name="box")).stop() is True
@@ -360,7 +349,6 @@ def _imported_modules(path: Path) -> set[str]:
 
 
 def test_commands_and_container_do_not_import_proxy_engine() -> None:
-    """CLI commands and the container lifecycle must not depend on the ``proxy`` engine package."""
     src = Path(__file__).resolve().parents[1] / "src" / "holon_coherence"
     files = [*sorted((src / "commands").glob("*.py")), *sorted((src / "container").glob("*.py")), src / "cli.py"]
     offenders = {
@@ -373,8 +361,6 @@ def test_commands_and_container_do_not_import_proxy_engine() -> None:
 
 
 class TestProxyLifecycleDelegation:
-    """The start-command facades hand container work to ProxyLifecycle."""
-
     def test_ensure_proxy_running_delegates_to_lifecycle_start(self) -> None:
         captured: list[ProxyLifecycleConfig] = []
 
