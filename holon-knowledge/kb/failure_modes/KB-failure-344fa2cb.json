@@ -1,0 +1,31 @@
+{
+  "kb_id": "KB-failure-344fa2cb",
+  "kb_type": "failure_mode",
+  "version": "1.0",
+  "created_ts": "2026-11-24T19:59:48.724220+00:00",
+  "updated_ts": "2026-11-24T19:59:48.724220+00:00",
+  "created_by": "holon-promotion-engine",
+  "status": "active",
+  "evidence": {
+    "ledger_refs": [
+      "ACT-FIND-1795549872-21370a25",
+      "ACT-FIND-1795549870-9e4fc146"
+    ],
+    "success_count": 0,
+    "failure_count": 2,
+    "ladder_state": "repeated"
+  },
+  "tags": [
+    "code",
+    "veto"
+  ],
+  "human_approved": false,
+  "payload": {
+    "name": "Failure mode in I-1795548977-coherence-final-self-doc/P-1795548994-ANA-G4N/E-1795549182-ANA-G4N/_",
+    "description": "Reproduced failure across 2 executions with identical context.",
+    "action": "Review Loop iteration 1 finding detected: FIND-R2-001-01",
+    "symptoms": [
+      "EXCLUDED_DIRS omits gitignored transient/build directories (such as tmp, build, dist, scratch, .sandbox, .holon, .holon-cache), so untracked local scripts can fail the self-doc gate."
+    ]
+  }
+}

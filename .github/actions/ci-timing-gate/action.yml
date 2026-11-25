@@ -26,7 +26,6 @@ runs:
       run: |
         CI_JOB_START_EPOCH=$(date +%s)
         echo "CI_JOB_START_EPOCH=${CI_JOB_START_EPOCH}" >> "$GITHUB_ENV"
-        # Maintain backward compatibility with CI_TIMING_STARTED_AT consumers
         echo "CI_TIMING_STARTED_AT=${CI_JOB_START_EPOCH}" >> "$GITHUB_ENV"
 
     - name: CI Timing Gate (Check)

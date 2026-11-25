@@ -1,0 +1,31 @@
+{
+  "kb_id": "KB-failure-edd28637",
+  "kb_type": "failure_mode",
+  "version": "1.0",
+  "created_ts": "2026-11-24T19:59:48.725192+00:00",
+  "updated_ts": "2026-11-24T19:59:48.725192+00:00",
+  "created_by": "holon-promotion-engine",
+  "status": "active",
+  "evidence": {
+    "ledger_refs": [
+      "ACT-FIND-1795549872-666f3904",
+      "ACT-FIND-1795549871-69ecabb6"
+    ],
+    "success_count": 0,
+    "failure_count": 2,
+    "ladder_state": "repeated"
+  },
+  "tags": [
+    "code",
+    "veto"
+  ],
+  "human_approved": false,
+  "payload": {
+    "name": "Failure mode in I-1795548977-coherence-final-self-doc/P-1795548994-ANA-G4N/E-1795549182-ANA-G4N/_",
+    "description": "Reproduced failure across 2 executions with identical context.",
+    "action": "Review Loop iteration 1 finding detected: FIND-R3-001-01",
+    "symptoms": [
+      "_discover_python_files and _discover_build_and_shell_files use unpruned rglob that traverses .venv/.git at collection time and fails to exclude gitignored directories (e.g. tmp, scratch, build, dist, .holon); prune directories with os.walk or use git ls-files."
+    ]
+  }
+}

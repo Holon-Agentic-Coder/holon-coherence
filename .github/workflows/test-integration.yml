@@ -11,8 +11,8 @@ on:
 
 permissions:
   contents: read
-  actions: write # Buildx GHA cache; also lists CI timing artefacts
-  pull-requests: read # CI timing gate reads the acceptance label
+  actions: write
+  pull-requests: read
 
 jobs:
   integration:
@@ -20,7 +20,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Docker cannot run on macos-latest runners (see .github/macos-docker.md)
         os: [ubuntu-latest]
 
     steps:

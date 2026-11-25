@@ -11,8 +11,8 @@ on:
 
 permissions:
   contents: read
-  actions: read # CI timing gate lists main timing artefacts
-  pull-requests: read # CI timing gate reads the acceptance label
+  actions: read
+  pull-requests: read
 
 jobs:
   unit:
