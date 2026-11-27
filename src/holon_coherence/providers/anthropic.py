@@ -7,7 +7,15 @@ import logging
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
-from holon_coherence.parsers.tokens import TokenCounts, estimate_chars, estimate_tokens_from_chars, safe_int
+from holon_coherence.providers._common import (
+    TokenCounts,
+    estimate_chars,
+    estimate_tokens_from_chars,
+    extract_user_content,
+    iter_sse_chunks,
+    merge_consecutive_roles,
+    safe_int,
+)
 from holon_coherence.providers.base import ProviderFormat
 
 if TYPE_CHECKING:
@@ -20,8 +28,7 @@ MIN_STRING_MESSAGE_DEDUP_CHARS = 200
 RECENT_UNTOUCHED_TURNS = 2
 DEFAULT_MAX_TURNS = 40
 DEFAULT_RECENT_TURNS_TO_KEEP = 10
-SSE_DATA_PREFIX = "data:"
-SSE_DONE_SENTINEL = "[DONE]"
+ANTHROPIC_CLOUD_HOSTS: tuple[str, ...] = ("api.anthropic.com", "anthropic.com")
 
 
 def _hash_content(content: str | list[Any]) -> str | None:
@@ -176,45 +183,6 @@ def summarize_anthropic_history(
     summary_text = f"[Summary of omitted {len(middle)} intermediate conversation turns]"
     summary_msg = {"role": "assistant", "content": summary_text}
     return [*prefix, summary_msg, *suffix]
-
-
-def _to_content_blocks(content: Any) -> list[dict[str, Any]]:
-    if isinstance(content, list):
-        return copy.deepcopy(content)
-    if isinstance(content, str):
-        return [{"type": "text", "text": content}]
-    return []
-
-
-def _merge_two_messages(prev: dict[str, Any], curr: dict[str, Any]) -> None:
-    if "content" in prev or "content" in curr:
-        prev_content = prev.get("content")
-        curr_content = curr.get("content")
-        if isinstance(prev_content, list) or isinstance(curr_content, list):
-            prev["content"] = _to_content_blocks(prev_content) + _to_content_blocks(curr_content)
-        else:
-            prev["content"] = f"{prev_content}\n\n{curr_content}"
-
-    if "parts" in prev or "parts" in curr:
-        prev_parts = prev.get("parts", [])
-        curr_parts = curr.get("parts", [])
-        if isinstance(prev_parts, list) and isinstance(curr_parts, list):
-            prev["parts"] = copy.deepcopy(prev_parts) + copy.deepcopy(curr_parts)
-
-
-def merge_consecutive_roles(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    if not messages:
-        return []
-    merged: list[dict[str, Any]] = []
-    for msg in messages:
-        if not isinstance(msg, dict):
-            merged.append(copy.deepcopy(msg))
-            continue
-        if not merged or not isinstance(merged[-1], dict) or merged[-1].get("role") != msg.get("role"):
-            merged.append(copy.deepcopy(msg))
-        else:
-            _merge_two_messages(merged[-1], msg)
-    return merged
 
 
 MAX_CACHE_BREAKPOINTS = 4
@@ -405,22 +373,6 @@ def inject_anthropic_cache_control(payload: dict[str, Any], stats: dict[str, int
     return payload
 
 
-def _iter_sse_chunks(resp_text: str) -> Iterator[dict[str, Any]]:
-    for line in resp_text.splitlines():
-        line = line.strip()
-        if not line.startswith(SSE_DATA_PREFIX):
-            continue
-        json_str = line[len(SSE_DATA_PREFIX) :].strip()
-        if not json_str or json_str == SSE_DONE_SENTINEL:
-            continue
-        try:
-            chunk = json.loads(json_str)
-            if isinstance(chunk, dict):
-                yield chunk
-        except Exception:
-            continue
-
-
 def _parse_anthropic_sse_content_chunk(chunk: dict[str, Any], in_tool: bool, accumulated: list[str]) -> bool:
     content_block = chunk.get("content_block") or {}
     if content_block.get("type") == "tool_use":
@@ -482,57 +434,6 @@ def _parse_anthropic_block_delta(chunk: dict[str, Any]) -> tuple[int, int]:
     return content_len, thinking_len
 
 
-def _extract_item_text(item: Any) -> list[str]:
-    texts: list[str] = []
-    if isinstance(item, str):
-        texts.append(item)
-    elif isinstance(item, dict):
-        if "text" in item and isinstance(item["text"], str):
-            texts.append(item["text"])
-        if item.get("type") == "tool_result":
-            tr_content = item.get("content")
-            if isinstance(tr_content, str):
-                texts.append(tr_content)
-            elif isinstance(tr_content, list):
-                for sub in tr_content:
-                    texts.extend(_extract_item_text(sub))
-            elif isinstance(tr_content, dict):
-                texts.extend(_extract_item_text(tr_content))
-    return texts
-
-
-def _extract_single_message_user_text(msg: dict[str, Any]) -> list[str]:
-    content = msg.get("content")
-    if isinstance(content, str):
-        return [content]
-    if isinstance(content, list):
-        out: list[str] = []
-        for item in content:
-            extracted = _extract_item_text(item)
-            if extracted:
-                out.extend(extracted)
-            elif isinstance(item, str):
-                out.append(item)
-        return out
-    if isinstance(content, dict):
-        return _extract_item_text(content)
-    if content is not None:
-        return [json.dumps(content, default=str)]
-    return []
-
-
-def _extract_anthropic_user_content(messages: Any, prompt: Any, max_recent_turns: int) -> str:
-    user_texts: list[str] = []
-    if isinstance(messages, list):
-        user_msgs = [m for m in messages if isinstance(m, dict) and m.get("role") == "user"]
-        recent = user_msgs[-max_recent_turns:] if max_recent_turns > 0 else user_msgs
-        for msg in recent:
-            user_texts.extend(_extract_single_message_user_text(msg))
-    if not user_texts and isinstance(prompt, str) and prompt:
-        user_texts.append(prompt)
-    return " ".join(user_texts)
-
-
 def _extract_anthropic_system_prompt(system_val: Any) -> str:
     if system_val is None:
         return ""
@@ -551,6 +452,20 @@ def _extract_anthropic_system_prompt(system_val: Any) -> str:
 
 
 class AnthropicProvider(ProviderFormat):
+    def matches(self, url: str, payload: dict[str, Any] | None = None) -> bool:
+        url_lower = url.lower() if url else ""
+        if url_lower and ("anthropic" in url_lower or "v1/messages" in url_lower):
+            return True
+        if not isinstance(payload, dict):
+            return False
+        if "anthropic-version" in payload or "anthropic_version" in payload or "system" in payload:
+            return True
+        model = payload.get("model", "")
+        return isinstance(model, str) and "claude" in model.lower()
+
+    def is_cloud_host(self, host: str) -> bool:
+        return host.lower() in ANTHROPIC_CLOUD_HOSTS
+
     def clean(
         self,
         cleaner: JSONContextCleaner,
@@ -583,7 +498,7 @@ class AnthropicProvider(ProviderFormat):
     def extract_sse_content(self, resp_text: str) -> str:
         accumulated: list[str] = []
         in_tool = False
-        for chunk in _iter_sse_chunks(resp_text):
+        for chunk in iter_sse_chunks(resp_text):
             in_tool = _parse_anthropic_sse_content_chunk(chunk, in_tool, accumulated)
         if in_tool:
             accumulated.append(")")
@@ -598,7 +513,7 @@ class AnthropicProvider(ProviderFormat):
         acc_len = 0
         acc_thinking = 0
 
-        for chunk in _iter_sse_chunks(resp_text):
+        for chunk in iter_sse_chunks(resp_text):
             event_type = chunk.get("type")
             if event_type == "message_start":
                 i, r, c = _parse_anthropic_message_start(chunk)
@@ -668,6 +583,6 @@ class AnthropicProvider(ProviderFormat):
     ) -> tuple[str, str]:
         if not isinstance(payload, dict):
             return str(payload) if payload else "", ""
-        user_content = _extract_anthropic_user_content(payload.get("messages"), payload.get("prompt"), max_recent_turns)
+        user_content = extract_user_content(payload.get("messages"), payload.get("prompt"), max_recent_turns)
         system_prompt = _extract_anthropic_system_prompt(payload.get("system"))
         return user_content, system_prompt

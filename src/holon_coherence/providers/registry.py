@@ -1,28 +1,13 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import urlparse
 
 from holon_coherence.providers.base import ProviderFormat
+from holon_coherence.providers.gemini import GEMINI_API_HOSTNAME
+from holon_coherence.providers.openai import OPENAI_URL_PATTERNS as OPENAI_PROVIDERS
 
 DEFAULT_FALLBACK_PROVIDER_NAME = "openai"
 UNKNOWN_PROVIDER_NAME = "unknown"
-GEMINI_API_HOSTNAME = "generativelanguage.googleapis.com"
-
-OPENAI_PROVIDERS: tuple[str, ...] = (
-    "openai",
-    "openrouter",
-    "deepseek",
-    "groq",
-    "together",
-    "mistral",
-    "fireworks",
-    "ollama",
-    "vllm",
-    "lmstudio",
-    "chat/completions",
-    "v1/completions",
-)
 
 _REGISTRY: dict[str, ProviderFormat] = {}
 
@@ -54,6 +39,14 @@ def _load_default_providers() -> None:
         pass
 
 
+def _ordered_providers() -> list[tuple[str, ProviderFormat]]:
+    _load_default_providers()
+    ordered = [(name, provider) for name, provider in _REGISTRY.items() if name != DEFAULT_FALLBACK_PROVIDER_NAME]
+    if DEFAULT_FALLBACK_PROVIDER_NAME in _REGISTRY:
+        ordered.append((DEFAULT_FALLBACK_PROVIDER_NAME, _REGISTRY[DEFAULT_FALLBACK_PROVIDER_NAME]))
+    return ordered
+
+
 def get_provider(name: str) -> ProviderFormat:
     _load_default_providers()
     key = name.strip().lower() if name else ""
@@ -66,51 +59,37 @@ def get_provider(name: str) -> ProviderFormat:
     )
 
 
-def _detect_by_url(url_or_path: str) -> str | None:
-    url_lower = url_or_path.lower()
-    target = url_lower if "://" in url_lower else f"https://{url_lower}"
-    parsed = urlparse(target)
-    hostname = parsed.hostname or url_lower
-
-    if "anthropic" in url_lower or "v1/messages" in url_lower:
-        return "anthropic"
-    if (
-        hostname == GEMINI_API_HOSTNAME
-        or hostname.endswith(f".{GEMINI_API_HOSTNAME}")
-        or "gemini" in url_lower
-        or "generatecontent" in url_lower
-        or "streamgeneratecontent" in url_lower
-    ):
-        return "gemini"
-    if any(p in url_lower for p in OPENAI_PROVIDERS):
-        return DEFAULT_FALLBACK_PROVIDER_NAME
-    return None
+def registered_provider_names() -> tuple[str, ...]:
+    _load_default_providers()
+    return tuple(_REGISTRY.keys())
 
 
-def _detect_by_payload(payload: dict[str, Any]) -> str | None:
-    if "anthropic-version" in payload or "anthropic_version" in payload:
-        return "anthropic"
-    model = payload.get("model", "")
-    if isinstance(model, str) and "claude" in model.lower():
-        return "anthropic"
-    if "contents" in payload:
-        return "gemini"
-    if "system" in payload:
-        return "anthropic"
-    if "messages" in payload or "prompt" in payload:
-        return DEFAULT_FALLBACK_PROVIDER_NAME
-    return None
+def is_registered_provider(name: str) -> bool:
+    _load_default_providers()
+    return bool(name and name.strip().lower() in _REGISTRY)
+
+
+def is_non_cloud_provider_host(provider_name: str, host: str) -> bool:
+    _load_default_providers()
+    if not provider_name or not host:
+        return False
+    provider = _REGISTRY.get(provider_name.strip().lower())
+    is_cloud_host = getattr(provider, "is_cloud_host", None)
+    if callable(is_cloud_host):
+        return not bool(is_cloud_host(host.lower()))
+    return False
 
 
 def detect_provider_name(url_or_path: str, payload: dict[str, Any] | None = None) -> str:
+    ordered = _ordered_providers()
     if url_or_path:
-        detected = _detect_by_url(url_or_path)
-        if detected:
-            return detected
+        for name, provider in ordered:
+            if provider.matches(url_or_path, None):
+                return name
     if payload and isinstance(payload, dict):
-        detected = _detect_by_payload(payload)
-        if detected:
-            return detected
+        for name, provider in ordered:
+            if provider.matches(url_or_path, payload):
+                return name
     return UNKNOWN_PROVIDER_NAME
 
 
@@ -126,6 +105,9 @@ __all__ = [
     "UNKNOWN_PROVIDER_NAME",
     "detect_provider_name",
     "get_provider",
+    "is_non_cloud_provider_host",
+    "is_registered_provider",
     "register_provider",
+    "registered_provider_names",
     "resolve_provider",
 ]
