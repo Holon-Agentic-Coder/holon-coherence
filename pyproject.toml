@@ -21,9 +21,7 @@ keywords = [
     "context-cleaning",
     "holon",
 ]
-dependencies = [
-    "cryptography==48.0.1",
-]
+dependencies = []
 
 [dependency-groups]
 dev = [
