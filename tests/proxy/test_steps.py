@@ -28,8 +28,14 @@ from holon_coherence.proxy.steps import (
 from holon_coherence.proxy.steps.apply_cache import serve_cached, store_response
 from holon_coherence.proxy.steps.clean_payload import clean_payload, snapshot_request
 from holon_coherence.proxy.steps.identify_provider import identify_provider
-from holon_coherence.proxy.steps.route_local_target import route_local_target
-from holon_coherence.proxy.steps.serve_dashboard import serve_dashboard, serve_html, serve_metrics, serve_mode
+from holon_coherence.proxy.steps.route_local_target import adapt_local_protocol, route_local_target
+from holon_coherence.proxy.steps.serve_dashboard import (
+    _resolve_confined_wire_log_dir,
+    serve_dashboard,
+    serve_html,
+    serve_metrics,
+    serve_mode,
+)
 from holon_coherence.proxy.steps.wire_record import (
     WireTransaction,
     _content,
@@ -727,3 +733,71 @@ def test_mode_get_prefers_explicit_default_passive_over_env(
     assert flow.response is not None
     assert flow.response.status_code == 200
     assert json.loads(flow.response.get_text())["mode"] == expected_mode
+
+
+def test_mode_post_rejects_unknown_tilde_user_wire_log_dir(
+    addon: MitmproxyAddon, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOLON_COHERENCE_API_TOKEN", "valid-token")
+    initial_wire_dir = addon.wire_log_dir
+    bad_dir = "~nonexistent_holon_user_xyz/logs"
+    with pytest.raises(ValueError, match="Invalid wire_log_dir"):
+        _resolve_confined_wire_log_dir(addon, bad_dir)
+
+    flow = _flow(
+        url="http://127.0.0.1:8080/holon/api/mode",
+        method="POST",
+        path="/holon/api/mode",
+        text=json.dumps({"mode": "baseline", "wire_log_dir": bad_dir}),
+        headers={"Host": "127.0.0.1:8080", "Authorization": "Bearer valid-token"},
+    )
+    assert serve_mode(_req_ctx(addon, flow)) is Outcome.HALT
+    assert flow.response is not None
+    assert flow.response.status_code == 400
+    assert json.loads(flow.response.get_text()) == {"error": "Invalid wire_log_dir"}
+    assert addon.default_passive is False
+    assert addon.wire_log_dir == initial_wire_dir
+
+
+def test_wire_record_resolves_agent_identity_from_env_with_header_precedence(
+    addon: MitmproxyAddon, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOLON_AGENT_ID", "  env-agent  ")
+    monkeypatch.setenv("HOLON_ROLE", "  env-role  ")
+    flow_env = _flow(headers={})
+    flow_env.provider = "openai"
+    record_env = build_wire_record(addon, flow_env, {"ok": True}, 200, WireTransaction())
+    assert record_env["agent_id"] == "env-agent"
+    assert record_env["agent_role"] == "env-role"
+
+    flow_hdr = _flow(headers={"X-Holon-Agent-Id": "hdr-agent", "X-Holon-Agent-Role": "hdr-role"})
+    flow_hdr.provider = "openai"
+    record_hdr = build_wire_record(addon, flow_hdr, {"ok": True}, 200, WireTransaction())
+    assert record_hdr["agent_id"] == "hdr-agent"
+    assert record_hdr["agent_role"] == "hdr-role"
+
+
+def test_adapt_local_protocol_resolves_model_from_settings_dynamically(
+    addon: MitmproxyAddon, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("AGY_MODEL", raising=False)
+    monkeypatch.setenv("HOLON_LOCAL_MODEL", "  local-fallback-model  ")
+    body = {"contents": [{"role": "user", "parts": [{"text": "hello"}]}]}
+    flow_local = _flow(
+        url="http://127.0.0.1:8080/v1beta/models/url-model:generateContent",
+        path="/v1beta/models/url-model:generateContent",
+        text=json.dumps(body),
+    )
+    ctx_local = _req_ctx(addon, flow_local, provider="gemini", is_local=True, data=dict(body))
+    assert adapt_local_protocol(ctx_local) is Outcome.CONTINUE
+    assert json.loads(flow_local.request.get_text())["model"] == "local-fallback-model"
+
+    monkeypatch.setenv("AGY_MODEL", "  agy-priority-model  ")
+    flow_agy = _flow(
+        url="http://127.0.0.1:8080/v1beta/models/url-model:generateContent",
+        path="/v1beta/models/url-model:generateContent",
+        text=json.dumps(body),
+    )
+    ctx_agy = _req_ctx(addon, flow_agy, provider="gemini", is_local=True, data=dict(body))
+    assert adapt_local_protocol(ctx_agy) is Outcome.CONTINUE
+    assert json.loads(flow_agy.request.get_text())["model"] == "agy-priority-model"

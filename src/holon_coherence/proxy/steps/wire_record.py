@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -11,6 +10,7 @@ from holon_coherence.parsers import extract_detailed_token_counts, extract_sse_c
 from holon_coherence.proxy.scrubbing import scrub_headers, scrub_payload, scrub_string
 from holon_coherence.proxy.timing import derive_turn_id, get_header_case_insensitive
 from holon_coherence.proxy.wire_log import is_flow_passive
+from holon_coherence.settings import CoherenceSettings
 
 __all__ = ["WireTransaction", "build_wire_record"]
 
@@ -28,9 +28,10 @@ class WireTransaction:
 
 
 def _identity(flow: Any, flow_headers: Any) -> tuple[str, str, str]:
+    settings = CoherenceSettings.from_env()
     flow_id = getattr(flow, "id", None) or f"flow_{uuid.uuid4().hex[:8]}"
-    agent_id = get_header_case_insensitive(flow_headers, "x-holon-agent-id") or os.getenv("HOLON_AGENT_ID", "agy")
-    agent_role = get_header_case_insensitive(flow_headers, "x-holon-agent-role") or os.getenv("HOLON_ROLE", "executor")
+    agent_id = get_header_case_insensitive(flow_headers, "x-holon-agent-id") or settings.agent_id
+    agent_role = get_header_case_insensitive(flow_headers, "x-holon-agent-role") or settings.agent_role
     return flow_id, agent_id, agent_role
 
 

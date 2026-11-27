@@ -25,6 +25,7 @@ from holon_coherence.mitm_addon import (
     DEFAULT_WIRE_LOG_DIR,
     CumulativeMetrics,
     MitmproxyAddon,
+    MITMProxyInterceptor,
     dump_wire_transaction,
     flush_wire_logs,
     is_local_target,
@@ -37,6 +38,7 @@ from holon_coherence.mitm_addon import (
     translate_openai_to_gemini_response,
 )
 from holon_coherence.payload_cleaner import CleaningResult
+from holon_coherence.settings import CoherenceSettings
 
 
 class DummyHeaders(dict):
@@ -961,3 +963,37 @@ def test_wire_log_directory_env_override_wins(tmp_path: Path, monkeypatch: pytes
     dump_wire_transaction({"turn_id": 2, "flow_id": "override"}).result(timeout=10)
     assert (tmp_path / "custom" / "transactions.jsonl").is_file()
     assert not (tmp_path / ".holon").exists()
+
+
+def test_cache_dir_does_not_freeze_env_at_import_and_resolves_dynamically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = dict(os.environ)
+    env["CACHE_DIR"] = str(tmp_path / "env_cache_before_import")
+    code = (
+        "from holon_coherence.mitm_addon import CACHE_DIR; "
+        "from holon_coherence.settings import CoherenceSettings; "
+        "assert CACHE_DIR == str(CoherenceSettings().cache_dir)"
+    )
+    subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True)
+
+    cache_a = str(tmp_path / "cache_a")
+    wire_a = str(tmp_path / "wire_a")
+    monkeypatch.setenv("CACHE_DIR", cache_a)
+    monkeypatch.setenv("WIRE_LOG_DIR", wire_a)
+    addon_a = MitmproxyAddon()
+    interceptor_a = MITMProxyInterceptor()
+    assert addon_a.interceptor.cache_dir == cache_a
+    assert interceptor_a.cache_dir == cache_a
+    assert addon_a.wire_log_dir == wire_a
+
+    cache_b = str(tmp_path / "cache_b")
+    wire_b = str(tmp_path / "wire_b")
+    monkeypatch.setenv("CACHE_DIR", cache_b)
+    monkeypatch.setenv("WIRE_LOG_DIR", wire_b)
+    addon_b = MitmproxyAddon()
+    interceptor_b = MITMProxyInterceptor()
+    assert addon_b.interceptor.cache_dir == cache_b
+    assert interceptor_b.cache_dir == cache_b
+    assert addon_b.wire_log_dir == wire_b
+    assert str(CoherenceSettings().cache_dir) != cache_b
