@@ -221,8 +221,38 @@ def test_frozen_config_bootstrap_when_absent_on_base(tmp_path: Path) -> None:
     assert main(["--repo-root", str(repo), "--verify-base", "--base-ref", "main"]) == 0
 
 
-def test_live_repository_passes_module_budgets(capsys: Any) -> None:
-    assert main(["--repo-root", str(REPO_ROOT)]) == 0
+def _assert_repo_passes_module_budgets(
+    repo_root: Path,
+    capsys: Any,
+    extra_args: list[str] | None = None,
+) -> str:
+    assert main(["--repo-root", str(repo_root), *(extra_args or [])]) == 0
     captured = capsys.readouterr()
     assert captured.err == ""
-    assert captured.out == ""
+    unexpected_out = [line for line in captured.out.splitlines() if line and not line.startswith("Ratchet notice:")]
+    assert unexpected_out == []
+    return captured.out
+
+
+def test_frozen_override_shrink_passes_with_ratchet_notice_and_growth_fails(tmp_path: Path, capsys: Any) -> None:
+    config = {"default_max_lines": 200, "exclude": [], "overrides": {"src/legacy_pkg/big.py": 250}}
+    repo = _init_git_repo(tmp_path, config, {"src/legacy_pkg/big.py": _lines(250)})
+    _git(repo, "checkout", "-b", "feat/shrink-overridden")
+
+    (repo / "src/legacy_pkg/big.py").write_text(_lines(230), encoding="utf-8")
+    out_230 = _assert_repo_passes_module_budgets(repo, capsys, ["--verify-base", "--base-ref", "main"])
+    assert "Ratchet notice:" in out_230
+    assert "230" in out_230
+
+    (repo / "src/legacy_pkg/big.py").write_text(_lines(180), encoding="utf-8")
+    out_180 = _assert_repo_passes_module_budgets(repo, capsys, ["--verify-base", "--base-ref", "main"])
+    assert "Ratchet notice:" in out_180
+    assert "remove override" in out_180
+
+    (repo / "src/legacy_pkg/big.py").write_text(_lines(251), encoding="utf-8")
+    assert main(["--repo-root", str(repo), "--verify-base", "--base-ref", "main"]) == 1
+    assert "frozen override exceeded" in capsys.readouterr().err
+
+
+def test_live_repository_passes_module_budgets(capsys: Any) -> None:
+    _assert_repo_passes_module_budgets(REPO_ROOT, capsys)
