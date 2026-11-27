@@ -271,3 +271,12 @@ def test_self_doc_classifiers_detect_violations_and_allow_pragmas() -> None:
 
     yaml_good = 'name: "CI # literal"\nsteps:\n  - run: |\n      if [ "$#" -eq 0 ]; then echo "ok # literal"; fi\n'
     assert _find_yaml_comment_violations(yaml_good, "wf.yml") == []
+
+
+def test_repo_self_doc_is_the_sole_self_doc_test_file() -> None:
+    self_doc_tests = sorted(
+        path.relative_to(REPO_ROOT).as_posix()
+        for path in (REPO_ROOT / "tests").rglob("*_self_doc.py")
+        if path.is_file()
+    )
+    assert self_doc_tests == ["tests/test_repo_self_doc.py"]
