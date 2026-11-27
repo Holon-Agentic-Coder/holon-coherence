@@ -29,7 +29,7 @@ from holon_coherence.proxy.steps.apply_cache import serve_cached, store_response
 from holon_coherence.proxy.steps.clean_payload import clean_payload, snapshot_request
 from holon_coherence.proxy.steps.identify_provider import identify_provider
 from holon_coherence.proxy.steps.route_local_target import route_local_target
-from holon_coherence.proxy.steps.serve_dashboard import serve_mode
+from holon_coherence.proxy.steps.serve_dashboard import serve_dashboard, serve_html, serve_metrics, serve_mode
 from holon_coherence.proxy.steps.wire_record import (
     WireTransaction,
     _content,
@@ -60,7 +60,14 @@ def _flow(**req_attrs: Any) -> SimpleNamespace:
 
 @pytest.fixture
 def addon(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> MitmproxyAddon:
-    for name in ("HOLON_PASSIVE_MONITORING", "COHERENCE_TOKEN_REDUCTION", "HOLON_HOST_LOCAL_HOSTS"):
+    for name in (
+        "HOLON_PASSIVE_MONITORING",
+        "COHERENCE_TOKEN_REDUCTION",
+        "HOLON_HOST_LOCAL_HOSTS",
+        "HOLON_COHERENCE_API_TOKEN",
+        "HOLON_COHERENCE_WEB_PASSWORD",
+        "HOLON_WIRE_LOG_BASE_DIR",
+    ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr("holon_coherence.mitm_addon.log_telemetry", lambda _msg: None)
     return MitmproxyAddon(cache_dir=str(tmp_path / "cache"), wire_log_dir=str(tmp_path / "wire"))
@@ -405,3 +412,286 @@ def test_dump_flow_transaction_rejects_unknown_fields_quietly(
     caplog.set_level(logging.DEBUG, logger="holon_coherence.proxy.addon")
     addon._dump_flow_transaction(_flow(), resp_data={}, bogus=1)
     assert any("Failed to record flow wire transaction" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["api.openai.com", "evil.com:8080", "127.0.0.1.evil.com", "localhost.evil.com", "127.0.0.1@evil.com"],
+)
+@pytest.mark.parametrize(
+    ("path", "method", "handler"),
+    [
+        ("/holon", "GET", serve_html),
+        ("/holon/api/metrics", "GET", serve_metrics),
+        ("/_holon/metrics", "GET", serve_metrics),
+        ("/holon/api/mode", "GET", serve_mode),
+        ("/_holon/mode", "POST", serve_mode),
+    ],
+)
+def test_external_host_is_never_intercepted(
+    addon: MitmproxyAddon, host: str, path: str, method: str, handler: Any
+) -> None:
+    flow = _flow(
+        url=f"http://127.0.0.1:8080{path}",
+        method=method,
+        path=path,
+        headers={"Host": host},
+    )
+    ctx = _req_ctx(addon, flow)
+    assert handler(ctx) is Outcome.CONTINUE
+    assert serve_dashboard(ctx) is Outcome.CONTINUE
+    assert flow.response is None
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["127.0.0.1", "127.0.0.1:8080", "localhost", "localhost:8080", "::1", "[::1]", "[::1]:8080"],
+)
+def test_loopback_host_is_intercepted(addon: MitmproxyAddon, host: str) -> None:
+    flow = _flow(
+        url="http://127.0.0.1:8080/holon/api/metrics",
+        method="GET",
+        path="/holon/api/metrics",
+        headers={"Host": host},
+    )
+    ctx = _req_ctx(addon, flow)
+    assert serve_dashboard(ctx) is Outcome.HALT
+    assert flow.response is not None
+    assert flow.response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("url", "expected_outcome"),
+    [
+        ("http://127.0.0.1:8080/holon/api/metrics", Outcome.HALT),
+        ("http://[::1]:8080/holon/api/metrics", Outcome.HALT),
+        ("https://api.openai.com/holon/api/metrics", Outcome.CONTINUE),
+    ],
+)
+def test_absent_host_header_falls_back_to_url_host(addon: MitmproxyAddon, url: str, expected_outcome: Outcome) -> None:
+    flow = _flow(url=url, method="GET", path="/holon/api/metrics", headers={})
+    ctx = _req_ctx(addon, flow)
+    assert serve_dashboard(ctx) is expected_outcome
+    if expected_outcome is Outcome.HALT:
+        assert flow.response is not None and flow.response.status_code == 200
+    else:
+        assert flow.response is None
+
+
+@pytest.mark.parametrize("path", ["/holon/api/metrics", "/_holon/metrics"])
+def test_serve_metrics_omits_wildcard_cors(addon: MitmproxyAddon, path: str) -> None:
+    flow = _flow(url=f"http://127.0.0.1:8080{path}", method="GET", path=path, headers={"Host": "127.0.0.1:8080"})
+    ctx = _req_ctx(addon, flow)
+    assert serve_metrics(ctx) is Outcome.HALT
+    assert flow.response is not None
+    assert flow.response.status_code == 200
+    header_names = {str(k).lower() for k in flow.response.headers}
+    assert "access-control-allow-origin" not in header_names
+
+
+@pytest.mark.parametrize("path", ["/holon/api/mode", "/_holon/mode"])
+def test_mode_post_fails_closed_without_configured_token(addon: MitmproxyAddon, path: str) -> None:
+    initial_wire_dir = addon.wire_log_dir
+    flow = _flow(
+        url=f"http://127.0.0.1:8080{path}",
+        method="POST",
+        path=path,
+        text=json.dumps({"mode": "baseline", "wire_log_dir": "sub"}),
+        headers={"Host": "127.0.0.1:8080", "Authorization": "Bearer any-token"},
+    )
+    assert serve_mode(_req_ctx(addon, flow)) is Outcome.HALT
+    assert flow.response is not None
+    assert flow.response.status_code == 401
+    assert addon.default_passive is False
+    assert addon.wire_log_dir == initial_wire_dir
+
+
+@pytest.mark.parametrize("auth_header", [None, "", "Basic dXNlcjpwYXNz", "Bearer ", "Bearer wrong-token"])
+def test_mode_post_rejects_invalid_bearer_token(
+    addon: MitmproxyAddon, monkeypatch: pytest.MonkeyPatch, auth_header: str | None
+) -> None:
+    monkeypatch.setenv("HOLON_COHERENCE_API_TOKEN", "secret-token")
+    initial_wire_dir = addon.wire_log_dir
+    headers = {"Host": "127.0.0.1:8080"}
+    if auth_header is not None:
+        headers["Authorization"] = auth_header
+    flow = _flow(
+        url="http://127.0.0.1:8080/holon/api/mode",
+        method="POST",
+        path="/holon/api/mode",
+        text=json.dumps({"mode": "baseline", "wire_log_dir": "sub"}),
+        headers=headers,
+    )
+    assert serve_mode(_req_ctx(addon, flow)) is Outcome.HALT
+    assert flow.response is not None
+    assert flow.response.status_code == 401
+    assert addon.default_passive is False
+    assert addon.wire_log_dir == initial_wire_dir
+
+
+@pytest.mark.parametrize("env_var", ["HOLON_COHERENCE_API_TOKEN", "HOLON_COHERENCE_WEB_PASSWORD"])
+def test_mode_post_accepts_valid_bearer_token(
+    addon: MitmproxyAddon, monkeypatch: pytest.MonkeyPatch, env_var: str
+) -> None:
+    monkeypatch.setenv(env_var, "valid-token")
+    flow = _flow(
+        url="http://127.0.0.1:8080/holon/api/mode",
+        method="POST",
+        path="/holon/api/mode",
+        text=json.dumps({"mode": "baseline"}),
+        headers={"Host": "127.0.0.1:8080", "Authorization": "Bearer valid-token"},
+    )
+    assert serve_mode(_req_ctx(addon, flow)) is Outcome.HALT
+    assert flow.response is not None
+    assert flow.response.status_code == 200
+    assert json.loads(flow.response.get_text())["mode"] == "baseline"
+    assert addon.default_passive is True
+
+
+@pytest.mark.parametrize("origin", ["https://evil.example", "http://localhost.evil.com", "null"])
+@pytest.mark.parametrize("with_token", [False, True])
+def test_mode_post_rejects_non_loopback_origin(
+    addon: MitmproxyAddon, monkeypatch: pytest.MonkeyPatch, origin: str, with_token: bool
+) -> None:
+    monkeypatch.setenv("HOLON_COHERENCE_API_TOKEN", "valid-token")
+    headers = {"Host": "127.0.0.1:8080", "Origin": origin}
+    if with_token:
+        headers["Authorization"] = "Bearer valid-token"
+    flow = _flow(
+        url="http://127.0.0.1:8080/holon/api/mode",
+        method="POST",
+        path="/holon/api/mode",
+        text=json.dumps({"mode": "baseline"}),
+        headers=headers,
+    )
+    assert serve_mode(_req_ctx(addon, flow)) is Outcome.HALT
+    assert flow.response is not None
+    assert flow.response.status_code == 403
+    assert addon.default_passive is False
+
+
+@pytest.mark.parametrize("origin", [None, "http://127.0.0.1:8080", "http://localhost:8080", "http://[::1]:8080"])
+def test_mode_post_allows_loopback_or_absent_origin(
+    addon: MitmproxyAddon, monkeypatch: pytest.MonkeyPatch, origin: str | None
+) -> None:
+    monkeypatch.setenv("HOLON_COHERENCE_API_TOKEN", "valid-token")
+    headers = {"Host": "127.0.0.1:8080", "Authorization": "Bearer valid-token"}
+    if origin is not None:
+        headers["Origin"] = origin
+    flow = _flow(
+        url="http://127.0.0.1:8080/holon/api/mode",
+        method="POST",
+        path="/holon/api/mode",
+        text=json.dumps({"mode": "baseline"}),
+        headers=headers,
+    )
+    assert serve_mode(_req_ctx(addon, flow)) is Outcome.HALT
+    assert flow.response is not None
+    assert flow.response.status_code == 200
+    assert addon.default_passive is True
+
+
+@pytest.mark.parametrize("bad_dir", ["../escape", "sub/../../escape", "/tmp/outside"])
+def test_mode_post_rejects_out_of_bounds_wire_log_dir_atomically(
+    addon: MitmproxyAddon, monkeypatch: pytest.MonkeyPatch, tmp_path: Any, bad_dir: str
+) -> None:
+    monkeypatch.setenv("HOLON_COHERENCE_API_TOKEN", "valid-token")
+    initial_wire_dir = addon.wire_log_dir
+    for target in (bad_dir, str(tmp_path / "other")):
+        flow = _flow(
+            url="http://127.0.0.1:8080/holon/api/mode",
+            method="POST",
+            path="/holon/api/mode",
+            text=json.dumps({"mode": "baseline", "wire_log_dir": target}),
+            headers={"Host": "127.0.0.1:8080", "Authorization": "Bearer valid-token"},
+        )
+        assert serve_mode(_req_ctx(addon, flow)) is Outcome.HALT
+        assert flow.response is not None
+        assert flow.response.status_code == 400
+        assert addon.default_passive is False
+        assert addon.wire_log_dir == initial_wire_dir
+
+
+def test_mode_post_allows_in_bounds_wire_log_dir_without_base_drift(
+    addon: MitmproxyAddon, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    monkeypatch.setenv("HOLON_COHERENCE_API_TOKEN", "valid-token")
+    base = (tmp_path / "wire").resolve()
+    headers = {"Host": "127.0.0.1:8080", "Authorization": "Bearer valid-token"}
+
+    first = _flow(
+        url="http://127.0.0.1:8080/holon/api/mode",
+        method="POST",
+        path="/holon/api/mode",
+        text=json.dumps({"mode": "baseline", "wire_log_dir": "run1"}),
+        headers=headers,
+    )
+    assert serve_mode(_req_ctx(addon, first)) is Outcome.HALT
+    assert first.response is not None and first.response.status_code == 200
+    assert addon.wire_log_dir == str(base / "run1")
+
+    second = _flow(
+        url="http://127.0.0.1:8080/holon/api/mode",
+        method="POST",
+        path="/holon/api/mode",
+        text=json.dumps({"mode": "optimized", "wire_log_dir": str(base / "run2")}),
+        headers=headers,
+    )
+    assert serve_mode(_req_ctx(addon, second)) is Outcome.HALT
+    assert second.response is not None and second.response.status_code == 200
+    assert addon.wire_log_dir == str(base / "run2")
+
+
+def test_mode_post_respects_wire_log_base_dir_env(
+    addon: MitmproxyAddon, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    custom_base = (tmp_path / "custom_base").resolve()
+    monkeypatch.setenv("HOLON_COHERENCE_API_TOKEN", "valid-token")
+    monkeypatch.setenv("HOLON_WIRE_LOG_BASE_DIR", str(custom_base))
+    headers = {"Host": "127.0.0.1:8080", "Authorization": "Bearer valid-token"}
+
+    allowed = _flow(
+        url="http://127.0.0.1:8080/holon/api/mode",
+        method="POST",
+        path="/holon/api/mode",
+        text=json.dumps({"wire_log_dir": "session1"}),
+        headers=headers,
+    )
+    assert serve_mode(_req_ctx(addon, allowed)) is Outcome.HALT
+    assert allowed.response is not None and allowed.response.status_code == 200
+    assert addon.wire_log_dir == str(custom_base / "session1")
+
+    rejected = _flow(
+        url="http://127.0.0.1:8080/holon/api/mode",
+        method="POST",
+        path="/holon/api/mode",
+        text=json.dumps({"wire_log_dir": str(tmp_path / "wire" / "sub")}),
+        headers=headers,
+    )
+    assert serve_mode(_req_ctx(addon, rejected)) is Outcome.HALT
+    assert rejected.response is not None and rejected.response.status_code == 400
+    assert addon.wire_log_dir == str(custom_base / "session1")
+
+
+@pytest.mark.parametrize(
+    ("default_passive", "expected_mode"),
+    [(False, "optimized"), (True, "baseline"), (None, "baseline")],
+)
+def test_mode_get_prefers_explicit_default_passive_over_env(
+    addon: MitmproxyAddon,
+    monkeypatch: pytest.MonkeyPatch,
+    default_passive: bool | None,
+    expected_mode: str,
+) -> None:
+    monkeypatch.setenv("HOLON_PASSIVE_MONITORING", "1")
+    addon.default_passive = default_passive
+    flow = _flow(
+        url="http://127.0.0.1:8080/holon/api/mode",
+        method="GET",
+        path="/holon/api/mode",
+        headers={"Host": "127.0.0.1:8080"},
+    )
+    assert serve_mode(_req_ctx(addon, flow)) is Outcome.HALT
+    assert flow.response is not None
+    assert flow.response.status_code == 200
+    assert json.loads(flow.response.get_text())["mode"] == expected_mode
