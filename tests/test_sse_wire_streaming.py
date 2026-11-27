@@ -18,6 +18,7 @@ from holon_coherence.mitm_addon import (
     extract_sse_content,
     flush_wire_logs,
 )
+from holon_coherence.providers.translation import translate_openai_to_gemini_response
 from holon_coherence.proxy.steps.sse_tap import install_sse_tap
 
 
@@ -338,3 +339,50 @@ def test_sse_tap_respects_max_buffer_bytes_and_existing_stream() -> None:
     assert flow.sse_chunks == [b"abcd"]
     assert flow.sse_bytes == _MAX_SSE_BUFFER_BYTES + 4
     assert seen == [b"abcd", b"efgh", b""]
+
+
+@pytest.mark.parametrize("finish_reason", ["stop", "length", "content_filter"])
+def test_bridged_sse_finish_reason_parity_with_non_streaming(finish_reason: str) -> None:
+    expected = translate_openai_to_gemini_response(
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "done"},
+                    "finish_reason": finish_reason,
+                }
+            ]
+        }
+    )["candidates"][0]["finishReason"]
+
+    flow = _make_sse_tflow(
+        "http://localhost:11434/v1beta/models/gemma:streamGenerateContent?alt=sse",
+        {"contents": [{"role": "user", "parts": [{"text": "parity"}]}]},
+        bridged=True,
+    )
+    install_sse_tap(flow, flow.response)
+
+    trailing_line = (
+        "data: "
+        + json.dumps(
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": "done"},
+                        "finish_reason": finish_reason,
+                    }
+                ]
+            }
+        )
+    ).encode("utf-8")
+
+    assert flow.response.stream(trailing_line[:19]) == b""
+    assert flow.response.stream(trailing_line[19:]) == b""
+    assert flow.sse_chunks == []
+
+    flushed = flow.response.stream(b"")
+    events = _parse_gemini_sse_events(flushed)
+    assert len(events) == 1
+    assert events[0]["candidates"][0]["finishReason"] == expected
+    assert flow.response.stream(b"") == b""
