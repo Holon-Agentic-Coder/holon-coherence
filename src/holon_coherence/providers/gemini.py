@@ -4,11 +4,17 @@ import copy
 import hashlib
 import json
 import logging
-from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
-from holon_coherence.parsers.tokens import TokenCounts, estimate_chars, estimate_tokens_from_chars, safe_int
-from holon_coherence.providers.anthropic import merge_consecutive_roles
+from holon_coherence.providers._common import (
+    TokenCounts,
+    estimate_chars,
+    estimate_tokens_from_chars,
+    iter_sse_chunks,
+    merge_consecutive_roles,
+    parse_hostname,
+    safe_int,
+)
 from holon_coherence.providers.base import ProviderFormat
 
 if TYPE_CHECKING:
@@ -20,22 +26,8 @@ MIN_PART_DEDUP_CHARS = 100
 RECENT_UNTOUCHED_TURNS = 2
 DEFAULT_MAX_TURNS = 40
 DEFAULT_RECENT_TURNS_TO_KEEP = 10
-
-
-def _iter_sse_chunks(resp_text: str) -> Iterator[dict[str, Any]]:
-    for line in resp_text.splitlines():
-        line = line.strip()
-        if not line.startswith("data:"):
-            continue
-        json_str = line[5:].strip()
-        if not json_str or json_str == "[DONE]":
-            continue
-        try:
-            chunk = json.loads(json_str)
-            if isinstance(chunk, dict):
-                yield chunk
-        except Exception:
-            continue
+GEMINI_API_HOSTNAME = "generativelanguage.googleapis.com"
+GEMINI_CLOUD_HOST_SUFFIXES: tuple[str, ...] = ("generativelanguage.googleapis.com", "googleapis.com")
 
 
 def _dedup_func_response(
@@ -120,10 +112,7 @@ def deduplicate_gemini_contents(
 
 
 def _is_clean_gemini_user_message(turn: dict[str, Any]) -> bool:
-    if not isinstance(turn, dict):
-        return False
-    role = turn.get("role", "user")
-    return role == "user"
+    return isinstance(turn, dict) and turn.get("role", "user") == "user"
 
 
 def _find_gemini_suffix_idx(contents: list[dict[str, Any]], recent_turns_to_keep: int) -> int | None:
@@ -273,6 +262,20 @@ def _extract_gemini_system_prompt(payload: dict[str, Any]) -> str:
 
 
 class GeminiProvider(ProviderFormat):
+    def matches(self, url: str, payload: dict[str, Any] | None = None) -> bool:
+        if url:
+            url_lower, hostname = parse_hostname(url)
+            if (
+                hostname == GEMINI_API_HOSTNAME
+                or hostname.endswith(f".{GEMINI_API_HOSTNAME}")
+                or any(k in url_lower for k in ("gemini", "generatecontent", "streamgeneratecontent"))
+            ):
+                return True
+        return isinstance(payload, dict) and "contents" in payload
+
+    def is_cloud_host(self, host: str) -> bool:
+        return host.lower().endswith(GEMINI_CLOUD_HOST_SUFFIXES)
+
     def clean(
         self,
         cleaner: JSONContextCleaner,
@@ -297,7 +300,7 @@ class GeminiProvider(ProviderFormat):
 
     def extract_sse_content(self, resp_text: str) -> str:
         accumulated: list[str] = []
-        for chunk in _iter_sse_chunks(resp_text):
+        for chunk in iter_sse_chunks(resp_text):
             candidates = chunk.get("candidates")
             if isinstance(candidates, list):
                 _process_gemini_candidates(candidates, accumulated)
@@ -310,7 +313,7 @@ class GeminiProvider(ProviderFormat):
         reasoning_tok: int | None = None
         acc_len = 0
 
-        for chunk in _iter_sse_chunks(resp_text):
+        for chunk in iter_sse_chunks(resp_text):
             usage = chunk.get("usageMetadata") or chunk.get("usage")
             if isinstance(usage, dict):
                 i, o, c, r = _parse_gemini_usage(usage)
@@ -322,13 +325,7 @@ class GeminiProvider(ProviderFormat):
         input_tokens = inp_tok if inp_tok is not None else estimate_tokens_from_chars(estimate_chars(req_data))
         output_tokens = out_tok if out_tok is not None else estimate_tokens_from_chars(acc_len)
 
-        return TokenCounts(
-            input_tokens,
-            output_tokens,
-            cached_tok or 0,
-            cache_creation_tokens=0,
-            reasoning_tokens=reasoning_tok or 0,
-        )
+        return TokenCounts(input_tokens, output_tokens, cached_tok or 0, reasoning_tokens=reasoning_tok or 0)
 
     def token_counts_from_dict(self, req_data: dict[str, Any], resp_data: dict[str, Any]) -> TokenCounts:
         input_tokens = 0
@@ -351,13 +348,7 @@ class GeminiProvider(ProviderFormat):
             input_tokens = estimate_tokens_from_chars(estimate_chars(req_data))
             output_tokens = estimate_tokens_from_chars(estimate_chars(resp_data))
 
-        return TokenCounts(
-            input_tokens,
-            output_tokens,
-            cache_read,
-            cache_creation_tokens=0,
-            reasoning_tokens=reasoning,
-        )
+        return TokenCounts(input_tokens, output_tokens, cache_read, reasoning_tokens=reasoning)
 
     def extract_cache_key_parts(
         self,

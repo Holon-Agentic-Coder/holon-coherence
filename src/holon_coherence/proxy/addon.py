@@ -5,11 +5,11 @@ import logging
 import os
 import time
 from typing import Any
-from urllib.parse import urlparse
 
 from holon_coherence.host_local import GATEWAY_HOSTNAME, rewrite_connection, targets_from_env
 from holon_coherence.hybrid_cache import HybridCacheStore
 from holon_coherence.payload_cleaner import CleaningResult, JSONContextCleaner
+from holon_coherence.providers.registry import UNKNOWN_PROVIDER_NAME, detect_provider_name
 from holon_coherence.proxy.metrics import CumulativeMetrics
 from holon_coherence.proxy.steps import (
     FAILURE_POLICY,
@@ -79,51 +79,8 @@ class MITMProxyInterceptor:
             self._cache_store = HybridCacheStore(cache_dir=self.cache_dir)
         return self._cache_store
 
-    def detect_provider(self, url_or_path: str, payload: dict[str, Any] | None = None) -> str:  # noqa: PLR0911
-        url_lower = url_or_path.lower()
-        parse_target = url_lower if "://" in url_lower else f"https://{url_lower}"
-        parsed = urlparse(parse_target)
-        hostname = parsed.hostname or url_lower
-
-        if "anthropic" in url_lower or "v1/messages" in url_lower:
-            return "anthropic"
-        if (
-            hostname == "generativelanguage.googleapis.com"
-            or hostname.endswith(".generativelanguage.googleapis.com")
-            or "gemini" in url_lower
-            or "generatecontent" in url_lower
-            or "streamgeneratecontent" in url_lower
-        ):
-            return "gemini"
-
-        openai_providers = [
-            "openai",
-            "openrouter",
-            "deepseek",
-            "groq",
-            "together",
-            "mistral",
-            "fireworks",
-            "ollama",
-            "vllm",
-            "lmstudio",
-            "chat/completions",
-            "v1/completions",
-        ]
-        if any(p in url_lower for p in openai_providers):
-            return "openai"
-
-        if payload and isinstance(payload, dict):
-            if "anthropic-version" in payload or "anthropic_version" in payload:
-                return "anthropic"
-            if "contents" in payload:
-                return "gemini"
-            if "messages" in payload or "prompt" in payload:
-                return "openai"
-            if "system" in payload:
-                return "anthropic"
-
-        return "unknown"
+    def detect_provider(self, url_or_path: str, payload: dict[str, Any] | None = None) -> str:
+        return detect_provider_name(url_or_path, payload)
 
     def _has_custom_intercept_request_override(self) -> bool:
         custom_intercept = getattr(self, "intercept_request", None)
@@ -140,7 +97,7 @@ class MITMProxyInterceptor:
             return cleaned_req, cached_resp, None
 
         provider = self.detect_provider(endpoint, request_json)
-        if provider == "unknown":
+        if provider == UNKNOWN_PROVIDER_NAME:
             logger.warning("Unknown LLM provider for endpoint: %s. Bypassing payload cleaning.", endpoint)
             return request_json, None, None
 
@@ -187,7 +144,7 @@ class MITMProxyInterceptor:
             return
 
         provider = self.detect_provider(endpoint, request_json)
-        if provider != "unknown":
+        if provider != UNKNOWN_PROVIDER_NAME:
             try:
                 self.cache_store.put(request_json, response_json, provider=provider)
             except Exception:
@@ -294,7 +251,7 @@ class MitmproxyAddon:
         run_guarded(REQUEST_GUARDED, ctx, REQUEST_POLICY)
 
     def responseheaders(self, flow: Any) -> None:
-        if getattr(flow, "provider", "unknown") == "unknown":
+        if getattr(flow, "provider", UNKNOWN_PROVIDER_NAME) == UNKNOWN_PROVIDER_NAME:
             return
         flow.response_headers_time = time.perf_counter()
         flow.first_chunk_time = None

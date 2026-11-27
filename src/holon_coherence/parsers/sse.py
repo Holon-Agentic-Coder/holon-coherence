@@ -4,6 +4,11 @@ import logging
 from typing import Any
 
 from holon_coherence.parsers.tokens import TokenCounts
+from holon_coherence.providers.registry import (
+    get_provider,
+    is_registered_provider,
+    registered_provider_names,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,28 +46,19 @@ def find_nested_key(  # noqa: C901, PLR0912
     return None
 
 
-KNOWN_PROVIDERS: tuple[str, ...] = (
-    "anthropic",
-    "openai",
-    "gemini",
-    "openrouter",
-    "deepseek",
-    "groq",
-    "together",
-)
+def __getattr__(name: str) -> Any:
+    if name == "KNOWN_PROVIDERS":
+        return registered_provider_names()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def extract_sse_content(resp_text: str, provider: str) -> str:
-    if not provider or provider.strip().lower() not in KNOWN_PROVIDERS:
+    if not provider or not is_registered_provider(provider):
         return ""
-    from holon_coherence.providers import get_provider
-
     return get_provider(provider).extract_sse_content(resp_text)
 
 
 def extract_sse_token_counts(resp_text: str, req_data: dict[str, Any], provider: str) -> TokenCounts:
-    from holon_coherence.providers import get_provider
-
     return get_provider(provider).token_counts_from_sse(resp_text, req_data)
 
 

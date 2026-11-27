@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import json
 import logging
-from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
-from holon_coherence.parsers.tokens import TokenCounts, estimate_chars, estimate_tokens_from_chars, safe_int
-from holon_coherence.providers.anthropic import merge_consecutive_roles
+from holon_coherence.providers._common import (
+    TokenCounts,
+    estimate_chars,
+    estimate_tokens_from_chars,
+    extract_user_content,
+    iter_sse_chunks,
+    merge_consecutive_roles,
+    safe_int,
+)
 from holon_coherence.providers.base import ProviderFormat
 
 if TYPE_CHECKING:
@@ -21,22 +26,20 @@ MIN_MESSAGE_CONTENT_DEDUP_CHARS = 200
 RECENT_UNTOUCHED_TURNS = 2
 DEFAULT_MAX_TURNS = 40
 DEFAULT_RECENT_TURNS_TO_KEEP = 10
-
-
-def _iter_sse_chunks(resp_text: str) -> Iterator[dict[str, Any]]:
-    for line in resp_text.splitlines():
-        line = line.strip()
-        if not line.startswith("data:"):
-            continue
-        json_str = line[5:].strip()
-        if not json_str or json_str == "[DONE]":
-            continue
-        try:
-            chunk = json.loads(json_str)
-            if isinstance(chunk, dict):
-                yield chunk
-        except Exception:
-            continue
+OPENAI_URL_PATTERNS: tuple[str, ...] = (
+    "openai",
+    "openrouter",
+    "deepseek",
+    "groq",
+    "together",
+    "mistral",
+    "fireworks",
+    "ollama",
+    "vllm",
+    "lmstudio",
+    "chat/completions",
+    "v1/completions",
+)
 
 
 def _dedup_tool_output(
@@ -225,57 +228,6 @@ def _parse_openai_usage(usage: dict[str, Any]) -> tuple[int, int, int, int]:
     return inp, out, cached, reasoning
 
 
-def _extract_item_text(item: Any) -> list[str]:
-    texts: list[str] = []
-    if isinstance(item, str):
-        texts.append(item)
-    elif isinstance(item, dict):
-        if "text" in item and isinstance(item["text"], str):
-            texts.append(item["text"])
-        if item.get("type") == "tool_result":
-            tr_content = item.get("content")
-            if isinstance(tr_content, str):
-                texts.append(tr_content)
-            elif isinstance(tr_content, list):
-                for sub in tr_content:
-                    texts.extend(_extract_item_text(sub))
-            elif isinstance(tr_content, dict):
-                texts.extend(_extract_item_text(tr_content))
-    return texts
-
-
-def _extract_single_message_user_text(msg: dict[str, Any]) -> list[str]:
-    content = msg.get("content")
-    if isinstance(content, str):
-        return [content]
-    if isinstance(content, list):
-        out: list[str] = []
-        for item in content:
-            extracted = _extract_item_text(item)
-            if extracted:
-                out.extend(extracted)
-            elif isinstance(item, str):
-                out.append(item)
-        return out
-    if isinstance(content, dict):
-        return _extract_item_text(content)
-    if content is not None:
-        return [json.dumps(content, default=str)]
-    return []
-
-
-def _extract_openai_user_content(messages: Any, prompt: Any, max_recent_turns: int) -> str:
-    user_texts: list[str] = []
-    if isinstance(messages, list):
-        user_msgs = [m for m in messages if isinstance(m, dict) and m.get("role") == "user"]
-        recent = user_msgs[-max_recent_turns:] if max_recent_turns > 0 else user_msgs
-        for msg in recent:
-            user_texts.extend(_extract_single_message_user_text(msg))
-    if not user_texts and isinstance(prompt, str) and prompt:
-        user_texts.append(prompt)
-    return " ".join(user_texts)
-
-
 def _extract_messages_system_texts(messages: list[Any]) -> list[str]:
     texts: list[str] = []
     for msg in messages:
@@ -337,6 +289,12 @@ def _parse_openai_delta_len(delta: dict[str, Any]) -> int:
 
 
 class OpenAIProvider(ProviderFormat):
+    def matches(self, url: str, payload: dict[str, Any] | None = None) -> bool:
+        url_lower = url.lower() if url else ""
+        if url_lower and any(p in url_lower for p in OPENAI_URL_PATTERNS):
+            return True
+        return isinstance(payload, dict) and ("messages" in payload or "prompt" in payload)
+
     def clean(
         self,
         cleaner: JSONContextCleaner,
@@ -362,7 +320,7 @@ class OpenAIProvider(ProviderFormat):
     def extract_sse_content(self, resp_text: str) -> str:
         accumulated: list[str] = []
         in_tool = False
-        for chunk in _iter_sse_chunks(resp_text):
+        for chunk in iter_sse_chunks(resp_text):
             choices = chunk.get("choices")
             if isinstance(choices, list):
                 for choice in choices:
@@ -379,7 +337,7 @@ class OpenAIProvider(ProviderFormat):
         reasoning_tok: int | None = None
         acc_len = 0
 
-        for chunk in _iter_sse_chunks(resp_text):
+        for chunk in iter_sse_chunks(resp_text):
             usage = chunk.get("usage")
             if isinstance(usage, dict):
                 i, o, c, r = _parse_openai_usage(usage)
@@ -437,6 +395,6 @@ class OpenAIProvider(ProviderFormat):
     ) -> tuple[str, str]:
         if not isinstance(payload, dict):
             return str(payload) if payload else "", ""
-        user_content = _extract_openai_user_content(payload.get("messages"), payload.get("prompt"), max_recent_turns)
+        user_content = extract_user_content(payload.get("messages"), payload.get("prompt"), max_recent_turns)
         system_prompt = _extract_openai_system_prompt(payload)
         return user_content, system_prompt

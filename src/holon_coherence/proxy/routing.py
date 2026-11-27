@@ -12,6 +12,7 @@ from holon_coherence.host_local import (
     GATEWAY_HOSTNAME,
     targets_from_env,
 )
+from holon_coherence.providers.registry import UNKNOWN_PROVIDER_NAME, is_non_cloud_provider_host
 
 __all__ = ["_make_http_response", "is_local_target"]
 
@@ -23,8 +24,6 @@ LOCAL_LOOPBACK_HOSTS = (
     "localhost.nip.io",
     GATEWAY_HOSTNAME,
 )
-ANTHROPIC_CLOUD_HOSTS = ("api.anthropic.com", "anthropic.com")
-GEMINI_CLOUD_HOST_SUFFIXES = ("generativelanguage.googleapis.com", "googleapis.com")
 
 
 def _make_http_response(flow: Any, status_code: int, content: bytes, headers: dict[str, str]) -> Any:
@@ -75,12 +74,5 @@ def is_local_target(flow: Any) -> bool:
         ):
             return True
 
-    provider = getattr(flow, "provider", "unknown")
-    if provider == "anthropic" and host_lower and host_lower not in ANTHROPIC_CLOUD_HOSTS:
-        return True
-
-    return bool(
-        provider == "gemini"
-        and host_lower
-        and not any(host_lower.endswith(suffix) for suffix in GEMINI_CLOUD_HOST_SUFFIXES)
-    )
+    provider = getattr(flow, "provider", UNKNOWN_PROVIDER_NAME)
+    return is_non_cloud_provider_host(provider, host_lower)
