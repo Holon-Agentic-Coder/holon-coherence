@@ -13,9 +13,11 @@ from holon_coherence.cli import main
 from holon_coherence.commands.web_token import (
     get_active_web_token,
     handle,
+    mitmweb_password_config,
     register,
     resolve_web_password,
     save_web_token,
+    web_password_env_file,
 )
 
 
@@ -55,6 +57,54 @@ class TestWebTokenHelpers:
         unreadable.write_text("valid-token")
         with patch("builtins.open", side_effect=OSError("Disk error")):
             assert get_active_web_token(token_path=str(unreadable)) is None
+
+    def test_web_password_env_file_permissions_sanitization_and_cleanup(self) -> None:
+        with web_password_env_file(None) as none_path:
+            assert none_path is None
+
+        with web_password_env_file("line1\r\nline2") as env_path:
+            assert env_path is not None
+            path_obj = Path(env_path)
+            assert (path_obj.stat().st_mode & 0o777) == 0o600
+            assert path_obj.read_text(encoding="utf-8") == "HOLON_COHERENCE_WEB_PASSWORD=line1line2\n"
+        assert not path_obj.exists()
+
+        leaked_path: Path | None = None
+        with pytest.raises(RuntimeError), web_password_env_file("boom-secret") as env_path:
+            assert env_path is not None
+            leaked_path = Path(env_path)
+            assert leaked_path.exists()
+            raise RuntimeError("abort")
+        assert leaked_path is not None
+        assert not leaked_path.exists()
+
+    def test_mitmweb_password_config_permissions_escaping_and_restore(self, tmp_path: Path) -> None:
+        confdir = tmp_path / "mitm"
+        with mitmweb_password_config(None, confdir=str(confdir)) as none_path:
+            assert none_path is None
+        assert not confdir.exists()
+
+        special_pwd = 'p:w # "quoted"'
+        with mitmweb_password_config(special_pwd, confdir=str(confdir)) as cfg_path:
+            assert cfg_path is not None
+            cfg = Path(cfg_path)
+            assert (confdir.stat().st_mode & 0o777) == 0o700
+            assert (cfg.stat().st_mode & 0o777) == 0o600
+            assert cfg.read_text(encoding="utf-8") == 'web_password: "p:w # \\"quoted\\""\n'
+        assert not cfg.exists()
+
+        existing_cfg = confdir / "config.yaml"
+        original_content = "anticache: true\nweb_password: old\n"
+        existing_cfg.write_text(original_content, encoding="utf-8")
+        with pytest.raises(RuntimeError), mitmweb_password_config("new-pwd", confdir=str(confdir)) as cfg_path:
+            assert cfg_path == str(existing_cfg)
+            active = existing_cfg.read_text(encoding="utf-8")
+            assert "anticache: true\n" in active
+            assert 'web_password: "new-pwd"\n' in active
+            assert "web_password: old" not in active
+            raise RuntimeError("interrupt")
+        assert existing_cfg.read_text(encoding="utf-8") == original_content
+        assert (existing_cfg.stat().st_mode & 0o777) == 0o600
 
 
 class TestWebTokenRegistrationAndDispatch:
@@ -150,12 +200,19 @@ class TestWebTokenAndDashboardAuth:
         with patch("builtins.open", side_effect=OSError("Disk error")):
             assert get_active_web_token(token_path=str(unreadable)) is None
 
-    def test_start_web_command_forwards_web_password_in_container(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_start_web_command_forwards_web_password_in_container(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setattr("holon_coherence.commands.start.is_in_container", lambda: True)
         launched: list[list[str]] = []
+        config_path = tmp_path / ".mitmproxy" / "config.yaml"
+        observed: dict[str, object] = {}
 
         def fake_run(cmd, *args, **kwargs):
             launched.append(list(cmd))
+            observed["mode"] = config_path.stat().st_mode & 0o777
+            observed["content"] = config_path.read_text(encoding="utf-8")
             return MagicMock(returncode=0)
 
         with (
@@ -166,25 +223,45 @@ class TestWebTokenAndDashboardAuth:
 
         assert len(launched) == 1
         cmd = launched[0]
-        assert "--set" in cmd
-        set_idx = cmd.index("--set") + 1
-        assert cmd[set_idx] == "web_password=container-pwd"
+        assert "web_password=container-pwd" not in cmd
+        assert not any("container-pwd" in arg for arg in cmd)
+        assert observed["mode"] == 0o600
+        assert observed["content"] == 'web_password: "container-pwd"\n'
+        assert not config_path.exists()
 
     def test_start_web_command_forwards_web_password_on_host(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("holon_coherence.commands.start.is_in_container", lambda: False)
+        observed: dict[str, object] = {}
+
+        def fake_run(cmd, *args, **kwargs):
+            if cmd[:2] == ["docker", "run"]:
+                observed["cmd"] = list(cmd)
+                env_path = Path(cmd[cmd.index("--env-file") + 1])
+                observed["env_path"] = env_path
+                observed["mode"] = env_path.stat().st_mode & 0o777
+                observed["content"] = env_path.read_text(encoding="utf-8")
+            return MagicMock(returncode=0)
+
         with (
             patch("holon_coherence.commands.start.save_web_token"),
             patch("holon_coherence.container.lifecycle.check_docker_daemon", return_value=(True, "")),
             patch("holon_coherence.container.lifecycle.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
-            patch("subprocess.run") as mock_run,
+            patch("subprocess.run", side_effect=fake_run) as mock_run,
         ):
             main(["start", "-d", "--web", "--web-password", "host-custom-pwd"])
             assert mock_run.call_count == 2
-            docker_cmd = mock_run.call_args_list[1][0][0]
-            assert "-e" in docker_cmd
-            assert "HOLON_COHERENCE_WEB_PASSWORD=host-custom-pwd" in docker_cmd
+            docker_cmd = observed["cmd"]
+            assert isinstance(docker_cmd, list)
+            assert "--env-file" in docker_cmd
+            assert "HOLON_COHERENCE_WEB_PASSWORD=host-custom-pwd" not in docker_cmd
+            assert not any("host-custom-pwd" in arg for arg in docker_cmd)
+            assert observed["mode"] == 0o600
+            assert observed["content"] == "HOLON_COHERENCE_WEB_PASSWORD=host-custom-pwd\n"
+            env_path = observed["env_path"]
+            assert isinstance(env_path, Path)
+            assert not env_path.exists()
             tail_args = docker_cmd[docker_cmd.index("holon-coherence:latest") :]
             assert "--web-password" not in tail_args
 

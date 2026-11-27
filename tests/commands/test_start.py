@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import argparse
 import email.message
+import os
+import stat
 import subprocess
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -946,7 +949,16 @@ class TestMitmwebInspectorDefault:
         argv: list[str],
         in_use: Any = _free_ports,
         token: str = "tok123",
+        env_capture: dict[str, Any] | None = None,
     ) -> tuple[list[str], MagicMock, MagicMock]:
+        def fake_run(cmd: list[str], *args: Any, **kwargs: Any) -> MagicMock:
+            if env_capture is not None and "--env-file" in cmd:
+                env_path = Path(cmd[cmd.index("--env-file") + 1])
+                env_capture["path"] = env_path
+                env_capture["mode"] = stat.S_IMODE(os.stat(env_path).st_mode)
+                env_capture["content"] = env_path.read_text(encoding="utf-8")
+            return MagicMock(returncode=0)
+
         with (
             patch("holon_coherence.commands.start.is_in_container", return_value=False),
             patch("holon_coherence.container.lifecycle.check_docker_daemon", return_value=(True, "")),
@@ -957,22 +969,36 @@ class TestMitmwebInspectorDefault:
             patch("holon_coherence.container.lifecycle.ensure_docker_image"),
             patch("os.makedirs"),
             patch("os.path.exists", return_value=True),
-            patch("subprocess.run") as mock_run,
+            patch("subprocess.run", side_effect=fake_run) as mock_run,
         ):
             main(argv)
         return mock_run.call_args_list[-1][0][0], mock_resolve, mock_save
 
     @staticmethod
-    def _in_container_start(argv: list[str], monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    def _in_container_start(
+        argv: list[str],
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path | None = None,
+        config_capture: dict[str, Any] | None = None,
+    ) -> list[str]:
         launched: list[list[str]] = []
+        if tmp_path is not None:
+            monkeypatch.setenv("HOME", str(tmp_path))
 
         def fake_run(cmd: list[str], *args: Any, **kwargs: Any) -> MagicMock:
             launched.append(list(cmd))
+            if tmp_path is not None and config_capture is not None:
+                cfg = tmp_path / ".mitmproxy" / "config.yaml"
+                if cfg.exists():
+                    config_capture["path"] = cfg
+                    config_capture["mode"] = stat.S_IMODE(os.stat(cfg).st_mode)
+                    config_capture["content"] = cfg.read_text(encoding="utf-8")
             return MagicMock(returncode=0)
 
         monkeypatch.setattr("holon_coherence.commands.start.is_in_container", lambda: True)
         with (
             patch("holon_coherence.commands.start.resolve_web_password", return_value="tok123"),
+            patch("holon_coherence.commands.start.save_web_token"),
             patch("subprocess.run", side_effect=fake_run),
         ):
             main(argv)
@@ -980,10 +1006,16 @@ class TestMitmwebInspectorDefault:
         return launched[0]
 
     def test_start_web_selects_mitmweb_and_passes_token(self) -> None:
-        docker_cmd, mock_resolve, mock_save = self._host_start(["start", "-d", "--web"])
+        env_capture: dict[str, Any] = {}
+        docker_cmd, mock_resolve, mock_save = self._host_start(["start", "-d", "--web"], env_capture=env_capture)
 
         assert "127.0.0.1:8081:8081" in docker_cmd
-        assert "HOLON_COHERENCE_WEB_PASSWORD=tok123" in docker_cmd
+        assert "--env-file" in docker_cmd
+        assert "HOLON_COHERENCE_WEB_PASSWORD=tok123" not in docker_cmd
+        assert not any("tok123" in arg for arg in docker_cmd)
+        assert env_capture["mode"] == 0o600
+        assert env_capture["content"] == "HOLON_COHERENCE_WEB_PASSWORD=tok123\n"
+        assert not env_capture["path"].exists()
         tail = docker_cmd[docker_cmd.index("holon-coherence:latest") :]
         assert tail == ["holon-coherence:latest", "start", "--port", "8080", "--web", "--web-port", "8081"]
         mock_resolve.assert_called_once_with(None)
@@ -1052,8 +1084,12 @@ class TestMitmwebInspectorDefault:
         assert "--web-password is ignored because --no-web disables the mitmweb inspector" in captured.err
         assert "pw-secret" not in captured.out + captured.err
 
-    def test_in_container_web_password_alone_runs_mitmweb(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        cmd = self._in_container_start(["start", "--port", "8080", "--web-password", "pw-secret"], monkeypatch)
+    def test_in_container_web_password_alone_runs_mitmweb(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cmd = self._in_container_start(
+            ["start", "--port", "8080", "--web-password", "pw-secret"], monkeypatch, tmp_path
+        )
         assert cmd[0].endswith("mitmweb")
 
     def test_web_password_env_var_does_not_imply_inspector(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1112,16 +1148,26 @@ class TestMitmwebInspectorDefault:
         assert "?token=" not in out
 
     def test_in_container_web_runs_mitmweb_with_password_without_printing_it(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        cmd = self._in_container_start(["start", "--port", "8080", "--web", "--web-port", "8081"], monkeypatch)
+        config_capture: dict[str, Any] = {}
+        cmd = self._in_container_start(
+            ["start", "--port", "8080", "--web", "--web-port", "8081"],
+            monkeypatch,
+            tmp_path,
+            config_capture=config_capture,
+        )
 
         assert cmd[0].endswith("mitmweb")
         assert cmd[cmd.index("--web-host") + 1] == "0.0.0.0"
         assert cmd[cmd.index("--web-port") + 1] == "8081"
         set_values = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--set"]
-        assert "web_password=tok123" in set_values
-        assert "web_open_browser=false" in set_values
+        assert set_values == ["web_open_browser=false"]
+        assert "web_password=tok123" not in cmd
+        assert not any("tok123" in arg for arg in cmd)
+        assert config_capture["mode"] == 0o600
+        assert 'web_password: "tok123"' in config_capture["content"]
+        assert not config_capture["path"].exists()
         out = capsys.readouterr().out
         assert "tok123" not in out
         assert "mitmweb inspector listening on container port 8081" in out
@@ -1159,3 +1205,31 @@ class TestMitmwebInspectorDefault:
         assert not any(arg.endswith(":8081") for arg in docker_cmd)
         assert not any(arg.startswith("HOLON_COHERENCE_WEB_PASSWORD=") for arg in docker_cmd)
         mock_resolve.assert_not_called()
+
+    def test_ensure_proxy_running_enforces_private_ca_permissions(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path))
+        ca_dir = tmp_path / ".holon" / "proxy-ca"
+        ca_dir.mkdir(parents=True)
+        os.chmod(ca_dir, 0o777)
+        (ca_dir / "mitmproxy-ca-cert.pem").write_text("cert")
+        (ca_dir / "mitmproxy-ca.pem").write_text("pem")
+        (ca_dir / "holon-root-ca.key").write_text("key")
+        os.chmod(ca_dir / "mitmproxy-ca.pem", 0o666)
+        os.chmod(ca_dir / "holon-root-ca.key", 0o666)
+
+        with (
+            patch("holon_coherence.container.lifecycle.check_docker_daemon", return_value=(True, "")),
+            patch("holon_coherence.container.lifecycle.is_port_in_use", return_value=False),
+            patch("holon_coherence.container.lifecycle.is_container_running", return_value=False),
+            patch("holon_coherence.container.lifecycle.ensure_docker_image"),
+            patch("subprocess.run", return_value=MagicMock(returncode=0)),
+            patch("holon_coherence.container.lifecycle.ProxyLifecycle.wait_until_ready", return_value=True),
+        ):
+            assert ensure_proxy_running(port=8080) is True
+
+        for d in (ca_dir, tmp_path / ".holon" / "cache", tmp_path / ".holon" / "logs"):
+            assert stat.S_IMODE(os.stat(d).st_mode) == 0o700
+        assert stat.S_IMODE(os.stat(ca_dir / "mitmproxy-ca.pem").st_mode) == 0o600
+        assert stat.S_IMODE(os.stat(ca_dir / "holon-root-ca.key").st_mode) == 0o600
