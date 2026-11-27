@@ -22,7 +22,7 @@
   "human_approved": true,
   "payload": {
     "name": "Locked Complexity Budgets and Self-Documenting Hygiene Gates",
-    "description": "Prevent structural decay by locking Ruff complexity and size rules in pyproject.toml (C901, PLR0911-PLR0915 with max-complexity=10, max-args=5, max-branches=12, max-returns=6, max-statements=50), enforcing per-module line budgets via holon-config/hygiene/module_budgets.json and scripts/check_module_budgets.py (default_max_lines=200), ratcheting inline complexity noqa suppressions in tests/test_complexity_baseline.py, and enforcing self-documenting code without docstrings or narrative comments via tests/test_repo_self_doc.py.",
+    "description": "Prevent structural decay by locking Ruff complexity and size rules in pyproject.toml (C901, PLR0911, PLR0912, PLR0913, PLR0915 with max-complexity=10, max-args=5, max-branches=12, max-returns=6, max-statements=50), enforcing per-module line budgets via holon-config/hygiene/module_budgets.json and scripts/check_module_budgets.py (default_max_lines=200), ratcheting inline complexity noqa suppressions in tests/test_complexity_baseline.py, and enforcing self-documenting code without docstrings or narrative comments via tests/test_repo_self_doc.py.",
     "action": "Keep all production modules within their line budget in holon-config/hygiene/module_budgets.json, decompose functions instead of adding complexity noqa suppressions (ratcheting BASELINE_CEILING downward whenever suppressions are removed), write self-explaining symbol names rather than docstrings or explanatory comments, and gate every change on 'uv run task lint' and 'uv run pytest'."
   }
 }
