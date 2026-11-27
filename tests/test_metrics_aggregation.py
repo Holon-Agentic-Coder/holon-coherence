@@ -5,6 +5,7 @@ import io
 import json
 import tokenize
 from pathlib import Path
+from types import SimpleNamespace
 
 from holon_coherence.ab_testing.evaluation import (
     ABComparisonScorecard,
@@ -21,6 +22,12 @@ from holon_coherence.metrics.aggregation import (
     _stored_rate,
     read_offline_metrics,
 )
+from holon_coherence.metrics_math import (
+    compute_decode_tps,
+    compute_prefill_tps,
+    compute_tail_prefill_tps,
+)
+from holon_coherence.proxy.metrics import CumulativeMetrics
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -245,3 +252,139 @@ def test_metrics_and_ab_testing_files_are_self_documenting() -> None:
 
     assert not docstring_violations, f"Docstrings found in self-doc scope: {docstring_violations}"
     assert not comment_violations, f"Disallowed comments found in self-doc scope: {comment_violations}"
+
+
+def test_offline_and_live_accumulators_match_on_identical_wire_stream(tmp_path: Path) -> None:
+    records = [
+        {"turn_id": "turn-1", "cache_action": "HIT"},
+        {
+            "turn_id": "turn-2",
+            "cache_action": "MISS",
+            "delta": {
+                "tool_outputs_omitted": 3,
+                "chars_saved": 800,
+                "turns_summarized": 1,
+                "cache_control_injected": 2,
+            },
+            "response": {
+                "usage": {
+                    "input_tokens": 1200,
+                    "output_tokens": 240,
+                    "cache_read_input_tokens": 600,
+                    "cache_creation_input_tokens": 120,
+                    "reasoning_tokens": 40,
+                }
+            },
+            "timing": {
+                "ttft_ms": 250.0,
+                "total_ms": 1450.0,
+                "prefill_tps": 4800.0,
+                "tail_prefill_tps": 2400.0,
+                "decode_tps": 200.0,
+            },
+        },
+        {
+            "turn_id": "turn-3",
+            "cache_action": "MISS",
+            "delta": {
+                "tool_outputs_omitted": 1,
+                "chars_saved": 400,
+                "turns_summarized": 0,
+                "cache_control_injected": 1,
+            },
+            "response": {
+                "usage": {
+                    "input_tokens": 1000,
+                    "output_tokens": 300,
+                    "cache_read_input_tokens": 200,
+                    "cache_creation_input_tokens": 0,
+                    "reasoning_tokens": 20,
+                }
+            },
+            "timing": {
+                "ttft_ms": 500.0,
+                "total_ms": 2000.0,
+            },
+        },
+        {
+            "turn_id": "turn-4",
+            "cache_action": "MISS",
+            "response": {
+                "usage": {
+                    "input_tokens": 400,
+                    "output_tokens": 50,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                    "reasoning_tokens": 0,
+                }
+            },
+            "timing": {
+                "ttft_ms": 0.0,
+                "total_ms": 500.0,
+                "decode_tps": None,
+            },
+        },
+    ]
+
+    log_file = tmp_path / "transactions.jsonl"
+    log_file.write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
+
+    offline_summary = read_offline_metrics(str(tmp_path))
+    assert offline_summary is not None
+
+    live_metrics = CumulativeMetrics()
+    live_metrics.record_request()
+    live_metrics.record_cache_hit()
+
+    live_metrics.record_request()
+    live_metrics.record_cleaner(
+        SimpleNamespace(tool_outputs_omitted=3, chars_saved=800, turns_summarized=1, cache_control_injected=2)
+    )
+    live_metrics.record_response(
+        input_tokens=1200,
+        output_tokens=240,
+        cache_read_tokens=600,
+        cache_creation_tokens=120,
+        reasoning_tokens=40,
+        ttft=0.25,
+        output_tps=200.0,
+        prefill_tps=4800.0,
+        tail_prefill_tps=2400.0,
+        total_time=1.45,
+    )
+
+    live_metrics.record_request()
+    live_metrics.record_cleaner(
+        SimpleNamespace(tool_outputs_omitted=1, chars_saved=400, turns_summarized=0, cache_control_injected=1)
+    )
+    live_metrics.record_response(
+        input_tokens=1000,
+        output_tokens=300,
+        cache_read_tokens=200,
+        cache_creation_tokens=0,
+        reasoning_tokens=20,
+        ttft=0.5,
+        output_tps=compute_decode_tps(300, 1.5, streaming=True),
+        prefill_tps=compute_prefill_tps(1000, 0.5),
+        tail_prefill_tps=compute_tail_prefill_tps(800, 0.5),
+        total_time=2.0,
+    )
+
+    live_metrics.record_request()
+    live_metrics.record_response(
+        input_tokens=400,
+        output_tokens=50,
+        cache_read_tokens=0,
+        cache_creation_tokens=0,
+        reasoning_tokens=0,
+        ttft=0.0,
+        output_tps=None,
+        prefill_tps=None,
+        tail_prefill_tps=None,
+        total_time=0.5,
+    )
+
+    live_summary = live_metrics.to_dict()
+    shared_keys = [key for key in offline_summary if key != "source"]
+    assert len(shared_keys) == 26
+    assert {key: live_summary[key] for key in shared_keys} == {key: offline_summary[key] for key in shared_keys}
