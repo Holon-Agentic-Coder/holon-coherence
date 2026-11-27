@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+from typing import Any
+
+import pytest
 
 from holon_coherence.providers.translation import (
     translate_gemini_to_openai_request,
@@ -89,3 +92,81 @@ def test_translate_openai_sse_chunk_to_gemini() -> None:
     assert "candidates" in payload
     assert payload["candidates"][0]["content"]["parts"][0]["text"] == "Hello stream"
     assert payload["usageMetadata"]["promptTokenCount"] == 2
+
+
+def test_translate_openai_sse_chunk_reassembles_split_mid_json_lines() -> None:
+    stream_state: dict[str, Any] = {}
+
+    out_1 = translate_openai_sse_chunk_to_gemini(
+        'data: {"choices":[{"delta":{"con',
+        stream_state=stream_state,
+    )
+    assert out_1 == ""
+
+    out_2 = translate_openai_sse_chunk_to_gemini(
+        'tent":"Hello "}}]}\n\ndat',
+        stream_state=stream_state,
+    )
+    payload_1 = json.loads(out_2.strip().split("data: ")[1])
+    assert payload_1["candidates"][0]["content"]["parts"][0]["text"] == "Hello "
+    assert stream_state.get("line_buffer") == "dat"
+
+    out_3 = translate_openai_sse_chunk_to_gemini(
+        'a: {"choices":[{"delta":{"content":"wor',
+        stream_state=stream_state,
+    )
+    assert out_3 == ""
+
+    out_4 = translate_openai_sse_chunk_to_gemini(
+        'ld!"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+        stream_state=stream_state,
+    )
+    payload_2 = json.loads(out_4.strip().split("data: ")[1])
+    assert payload_2["candidates"][0]["content"]["parts"][0]["text"] == "world!"
+    assert payload_2["candidates"][0]["finishReason"] == "STOP"
+
+    crlf_state: dict[str, Any] = {}
+    crlf_out_1 = translate_openai_sse_chunk_to_gemini(
+        'data: {"choices":[{"delta":{"content":"crlf"}}]}\r',
+        stream_state=crlf_state,
+    )
+    assert crlf_out_1 == ""
+    crlf_out_2 = translate_openai_sse_chunk_to_gemini(
+        "\n\r\n",
+        stream_state=crlf_state,
+    )
+    crlf_payload = json.loads(crlf_out_2.strip().split("data: ")[1])
+    assert crlf_payload["candidates"][0]["content"]["parts"][0]["text"] == "crlf"
+
+
+def test_translate_openai_sse_chunk_stateless_without_stream_state() -> None:
+    chunk_raw = 'data: {"choices":[{"delta":{"content":"stateless"}}]}'
+    gemini_chunk = translate_openai_sse_chunk_to_gemini(chunk_raw, stream_state=None)
+    payload = json.loads(gemini_chunk.strip().split("data: ")[1])
+    assert payload["candidates"][0]["content"]["parts"][0]["text"] == "stateless"
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ["stop", "tool_calls", "length", "content_filter", "function_call", "other_reason"],
+)
+def test_translate_finish_reason_parity_streaming_and_non_streaming(reason: str) -> None:
+    non_streaming = translate_openai_to_gemini_response(
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": reason,
+                }
+            ]
+        }
+    )["candidates"][0]["finishReason"]
+
+    sse_chunk = f"data: {json.dumps({'choices': [{'delta': {'content': 'ok'}, 'finish_reason': reason}]})}\n\n"
+    stream_out = translate_openai_sse_chunk_to_gemini(sse_chunk, stream_state={})
+    streaming = json.loads(stream_out.strip().split("data: ")[1])["candidates"][0]["finishReason"]
+
+    expected = "MAX_TOKENS" if reason == "length" else "STOP"
+    assert non_streaming == expected
+    assert streaming == non_streaming
