@@ -1,5 +1,7 @@
 import json
+import os
 import sqlite3
+import stat
 import threading
 import time
 from unittest.mock import patch
@@ -304,3 +306,133 @@ def test_sweep_gate_ignores_wall_clock_steps(tmp_path) -> None:
         store.put(_payload("second shared words"), {"content": "2"}, provider="openai")
 
     assert store._sweep_count == 1, "a wall-clock step must not reopen the monotonic sweep gate"
+
+
+def test_cache_dir_and_sqlite_files_enforce_restrictive_permissions(tmp_path) -> None:
+    cache_dir = tmp_path / "private_cache"
+    cache_dir.mkdir(mode=0o755)
+    os.chmod(cache_dir, 0o755)
+    db_file = cache_dir / "llm_cache.db"
+    db_file.touch()
+    os.chmod(db_file, 0o644)
+    for suffix in ("-wal", "-shm"):
+        sidecar_path = cache_dir / f"llm_cache.db{suffix}"
+        sidecar_path.touch()
+        os.chmod(sidecar_path, 0o644)
+
+    store = HybridCacheStore(cache_dir=str(cache_dir))
+    store.put(_payload("check permissions on db and sidecars"), {"content": "ok"}, provider="openai")
+
+    assert stat.S_IMODE(os.stat(cache_dir).st_mode) == 0o700
+    assert stat.S_IMODE(os.stat(store.db_path).st_mode) == 0o600
+    for suffix in ("-wal", "-shm"):
+        sidecar = f"{store.db_path}{suffix}"
+        if os.path.exists(sidecar):
+            assert stat.S_IMODE(os.stat(sidecar).st_mode) == 0o600
+
+
+def test_put_scrubs_sensitive_credentials_and_headers_before_persisting(tmp_path) -> None:
+    store = HybridCacheStore(cache_dir=str(tmp_path))
+    anthropic_key = "sk-ant-api03-1234567890abcdefghijklmnop"
+    openai_key = "sk-proj-1234567890abcdefghijklmnop"
+    resp_key = "sk-proj-responsekey1234567890abcdef"
+    payload = {
+        "system": "You are a coding agent.",
+        "api_key": "raw-api-key-val",
+        "headers": {
+            "Authorization": "Bearer secret-bearer-val",
+            "X-Api-Key": "raw-header-key",
+            "Cookie": "session=raw-cookie",
+        },
+        "messages": [
+            {
+                "role": "user",
+                "content": (f"Use {anthropic_key} and {openai_key} on https://example.test/?token=supersecretval"),
+            }
+        ],
+    }
+    response = {
+        "content": f"Echoing key {resp_key}",
+        "headers": {"Set-Cookie": "sid=raw-sid", "Content-Type": "application/json"},
+    }
+
+    store.put(payload, response, provider="anthropic")
+
+    with sqlite3.connect(store.db_path) as conn:
+        row = conn.execute("SELECT prompt_normalized, response_json, user_tokens FROM prompt_cache").fetchone()
+    assert row is not None
+    prompt_normalized, response_json, user_tokens = row
+    persisted = f"{prompt_normalized}\n{response_json}\n{user_tokens}"
+
+    for secret in (
+        anthropic_key,
+        openai_key,
+        resp_key,
+        "supersecretval",
+        "raw-api-key-val",
+        "secret-bearer-val",
+        "raw-header-key",
+        "raw-cookie",
+        "raw-sid",
+    ):
+        assert secret not in persisted
+
+    assert "[REDACTED]" in prompt_normalized
+    assert "[REDACTED_SECRET]" in prompt_normalized
+    assert "[REDACTED]" in response_json
+    assert "[REDACTED_SECRET]" in response_json
+
+    hit = store.get(payload, provider="anthropic")
+    assert hit is not None
+    assert hit["headers"]["set-cookie"] == "[REDACTED]"
+    assert "[REDACTED_SECRET]" in hit["content"]
+    assert resp_key not in json.dumps(hit)
+
+
+def test_unused_provider_system_created_index_is_dropped(tmp_path) -> None:
+    fresh_store = HybridCacheStore(cache_dir=str(tmp_path / "fresh"))
+    with sqlite3.connect(fresh_store.db_path) as conn:
+        fresh_indexes = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+    assert "idx_prompt_cache_provider_created" in fresh_indexes
+    assert "idx_prompt_cache_provider_system_created" not in fresh_indexes
+
+    migrated_dir = tmp_path / "migrated"
+    migrated_dir.mkdir()
+    db_path = migrated_dir / "llm_cache.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE prompt_cache (
+                key TEXT PRIMARY KEY, provider TEXT, prompt_normalized TEXT,
+                response_json TEXT, created_at REAL, hit_count INTEGER DEFAULT 0,
+                user_tokens TEXT, system_hash TEXT
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX idx_prompt_cache_provider_system_created "
+            "ON prompt_cache (provider, system_hash, created_at DESC)"
+        )
+        conn.commit()
+
+    migrated_store = HybridCacheStore(cache_dir=str(migrated_dir))
+    with sqlite3.connect(migrated_store.db_path) as conn:
+        migrated_indexes = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+    assert "idx_prompt_cache_provider_created" in migrated_indexes
+    assert "idx_prompt_cache_provider_system_created" not in migrated_indexes
+
+
+def test_put_normalizes_payload_only_once(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = HybridCacheStore(cache_dir=str(tmp_path))
+    calls = 0
+    original = HybridCacheStore.normalize_payload
+
+    def counting(self, payload, provider="anthropic"):
+        nonlocal calls
+        calls += 1
+        return original(self, payload, provider)
+
+    monkeypatch.setattr(HybridCacheStore, "normalize_payload", counting)
+    store.put(_payload("single normalization check"), {"content": "ok"}, provider="openai")
+
+    assert calls == 1

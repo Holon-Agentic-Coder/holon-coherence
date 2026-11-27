@@ -180,7 +180,12 @@ class TestMitmwebInspectorDefault:
         assert "127.0.0.1:8080:8080" in docker_cmd
         out = capsys.readouterr().out
         assert "Mapping mitmweb inspector to host port 8082 instead." in out
-        assert "http://127.0.0.1:8082/?token=tok123" in out
+        assert (
+            "http://127.0.0.1:8082/ "
+            "(recover token with: docker exec <container> sh -c 'cat \"$HOME/.holon/web-token\"')"
+        ) in out
+        assert "?token=" not in out
+        assert "tok123" not in out
 
     def test_start_custom_inspector_port_falls_back(self) -> None:
         docker_cmd, _resolve, _save = self._host_start(
@@ -205,7 +210,12 @@ class TestMitmwebInspectorDefault:
         out = capsys.readouterr().out
         assert "Proxy Listen Address         : 127.0.0.1:8080" in out
         assert "Coherence Live Dashboard     : http://127.0.0.1:8080/holon/" in out
-        assert "mitmweb Req/Resp Inspector   : http://127.0.0.1:8081/?token=tok123" in out
+        assert (
+            "mitmweb Req/Resp Inspector   : http://127.0.0.1:8081/ "
+            "(recover token with: docker exec <container> sh -c 'cat \"$HOME/.holon/web-token\"')"
+        ) in out
+        assert "?token=" not in out
+        assert "tok123" not in out
         assert "Web API Key" not in out
 
     @pytest.mark.parametrize("argv", [["start", "-d"], ["start", "-d", "--no-web"]])
