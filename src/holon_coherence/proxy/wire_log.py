@@ -21,6 +21,7 @@ from holon_coherence.metrics_math import DEFAULT_WIRE_LOG_DIR
 
 __all__ = [
     "WIRE_LOG_DIR",
+    "WIRE_LOG_MAX_PENDING",
     "_discard_pending_future",
     "_get_wire_log_executor",
     "_pending_wire_log_futures",
@@ -29,6 +30,7 @@ __all__ = [
     "_write_transaction_sync",
     "dump_wire_transaction",
     "flush_wire_logs",
+    "get_dropped_wire_log_count",
     "is_flow_passive",
     "is_passive_monitoring",
     "is_wire_logging_enabled",
@@ -39,23 +41,21 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 WIRE_LOG_DIR = os.getenv("WIRE_LOG_DIR", DEFAULT_WIRE_LOG_DIR)
+WIRE_LOG_MAX_PENDING = 256
 
 
 def is_wire_logging_enabled() -> bool:
-    flag = os.getenv("ENABLE_WIRE_LOGGING", "1").lower().strip()
-    return flag not in ("0", "false", "no", "off")
+    return os.getenv("ENABLE_WIRE_LOGGING", "1").lower().strip() not in ("0", "false", "no", "off")
 
 
 def is_passive_monitoring() -> bool:
-    flag = os.getenv("HOLON_PASSIVE_MONITORING", "0").lower().strip()
-    if flag in ("1", "true", "yes", "on"):
+    if os.getenv("HOLON_PASSIVE_MONITORING", "0").lower().strip() in ("1", "true", "yes", "on"):
         return True
-    tr_flag = os.getenv("COHERENCE_TOKEN_REDUCTION", "1").lower().strip()
-    return tr_flag in ("0", "false", "no", "off")
+    return os.getenv("COHERENCE_TOKEN_REDUCTION", "1").lower().strip() in ("0", "false", "no", "off")
 
 
 def is_flow_passive(flow: Any, default_passive: bool | None = None) -> bool:
-    try:
+    with contextlib.suppress(Exception):
         if flow and hasattr(flow, "request") and hasattr(flow.request, "headers"):
             headers = flow.request.headers
             for key in ("x-holon-passive", "x-holon-mode", "X-Holon-Passive", "X-Holon-Mode"):
@@ -66,16 +66,36 @@ def is_flow_passive(flow: Any, default_passive: bool | None = None) -> bool:
                         return True
                     if val_clean in ("0", "false", "no", "optimized", "active"):
                         return False
-    except Exception:
-        pass
-    if default_passive is not None:
-        return default_passive
-    return is_passive_monitoring()
+    return default_passive if default_passive is not None else is_passive_monitoring()
 
 
 _wire_log_executor: concurrent.futures.ThreadPoolExecutor | None = None
 _pending_wire_log_futures: set[concurrent.futures.Future] = set()
-_wire_log_lock = threading.Lock()
+_wire_log_lock = threading.RLock()
+_dropped_wire_log_count = 0
+
+
+def _completed_future() -> concurrent.futures.Future:
+    future: concurrent.futures.Future = concurrent.futures.Future()
+    future.set_result(None)
+    return future
+
+
+def _wire_log_max_pending() -> int:
+    raw = os.getenv("WIRE_LOG_MAX_PENDING", "").strip()
+    with contextlib.suppress(ValueError):
+        if raw and (parsed := int(raw)) >= 0:
+            return parsed
+    return WIRE_LOG_MAX_PENDING
+
+
+def get_dropped_wire_log_count(reset: bool = False) -> int:
+    global _dropped_wire_log_count
+    with _wire_log_lock:
+        count = _dropped_wire_log_count
+        if reset:
+            _dropped_wire_log_count = 0
+        return count
 
 
 def _get_wire_log_executor() -> concurrent.futures.ThreadPoolExecutor:
@@ -93,13 +113,9 @@ def _write_transaction_sync(record: dict[str, Any], wire_log_dir: str) -> None:
         os.makedirs(wire_log_dir, mode=0o700, exist_ok=True)
         with contextlib.suppress(OSError):
             os.chmod(wire_log_dir, 0o700)
-        turn_id = record.get("turn_id", 0)
-        flow_id = record.get("flow_id", "flow")
-        safe_turn_id = re.sub(r"[^a-zA-Z0-9_\-]", "_", str(turn_id))
-        safe_flow_id = re.sub(r"[^a-zA-Z0-9_\-]", "_", str(flow_id))
-        filename = f"turn_{safe_turn_id}_{safe_flow_id}.json"
-        filepath = os.path.join(wire_log_dir, filename)
-
+        safe_turn_id = re.sub(r"[^a-zA-Z0-9_\-]", "_", str(record.get("turn_id", 0)))
+        safe_flow_id = re.sub(r"[^a-zA-Z0-9_\-]", "_", str(record.get("flow_id", "flow")))
+        filepath = os.path.join(wire_log_dir, f"turn_{safe_turn_id}_{safe_flow_id}.json")
         tmp_filepath = f"{filepath}.{uuid.uuid4().hex[:6]}.tmp"
         try:
             fd = os.open(tmp_filepath, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -111,16 +127,13 @@ def _write_transaction_sync(record: dict[str, Any], wire_log_dir: str) -> None:
             with contextlib.suppress(OSError):
                 os.chmod(filepath, 0o600)
         except Exception:
-            if os.path.exists(tmp_filepath):
-                with contextlib.suppress(OSError):
-                    os.unlink(tmp_filepath)
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_filepath)
             raise
-
         jsonl_path = os.path.join(wire_log_dir, "transactions.jsonl")
-        line = json.dumps(record, ensure_ascii=False, default=str) + "\n"
         j_fd = os.open(jsonl_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         with os.fdopen(j_fd, "a", encoding="utf-8") as f:
-            f.write(line)
+            f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
         with contextlib.suppress(OSError):
             os.chmod(jsonl_path, 0o600)
     except Exception as exc:
@@ -128,14 +141,17 @@ def _write_transaction_sync(record: dict[str, Any], wire_log_dir: str) -> None:
 
 
 def dump_wire_transaction(record: dict[str, Any], wire_log_dir: str | None = None) -> concurrent.futures.Future:
+    global _dropped_wire_log_count
     target_dir = wire_log_dir or os.getenv("WIRE_LOG_DIR", WIRE_LOG_DIR)
     if not is_wire_logging_enabled() or not target_dir:
-        dummy: concurrent.futures.Future = concurrent.futures.Future()
-        dummy.set_result(None)
-        return dummy
+        return _completed_future()
 
-    future = _get_wire_log_executor().submit(_write_transaction_sync, record, target_dir)
     with _wire_log_lock:
+        _pending_wire_log_futures.difference_update([f for f in _pending_wire_log_futures if f.done()])
+        if len(_pending_wire_log_futures) >= _wire_log_max_pending():
+            _dropped_wire_log_count += 1
+            return _completed_future()
+        future = _get_wire_log_executor().submit(_write_transaction_sync, record, target_dir)
         _pending_wire_log_futures.add(future)
     future.add_done_callback(_discard_pending_future)
     return future
@@ -168,20 +184,13 @@ def shutdown_wire_logs(wait: bool = True, timeout: float = 5.0) -> None:
 atexit.register(shutdown_wire_logs)
 
 
-def _try_log_via_mitmproxy_ctx(active_ctx: Any, msg: str) -> bool:
-    if active_ctx and hasattr(active_ctx, "log") and hasattr(active_ctx.log, "info"):
-        with contextlib.suppress(Exception):
-            active_ctx.log.info(msg)
-            return True
-    return False
-
-
 def log_telemetry(msg: str) -> None:
     active_ctx = ctx
     mod = sys.modules.get("holon_coherence.mitm_addon")
     if mod is not None and hasattr(mod, "ctx"):
         active_ctx = mod.ctx
-    if _try_log_via_mitmproxy_ctx(active_ctx, msg):
-        return
-
+    if active_ctx and hasattr(active_ctx, "log") and hasattr(active_ctx.log, "info"):
+        with contextlib.suppress(Exception):
+            active_ctx.log.info(msg)
+            return
     logger.info(msg)

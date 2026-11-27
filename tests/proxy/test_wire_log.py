@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import concurrent.futures
 import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
 from holon_coherence.proxy.wire_log import (
+    WIRE_LOG_MAX_PENDING,
+    _pending_wire_log_futures,
+    _wire_log_lock,
     dump_wire_transaction,
     flush_wire_logs,
+    get_dropped_wire_log_count,
     is_flow_passive,
     is_passive_monitoring,
     is_wire_logging_enabled,
@@ -67,3 +72,75 @@ def test_dump_wire_transaction_and_flush(tmp_path: Path, monkeypatch) -> None:
 
 def test_log_telemetry_stdout(capsys) -> None:
     log_telemetry("telemetry testing message")
+
+
+def test_dump_wire_transaction_prunes_completed_futures_on_submission(tmp_path: Path, monkeypatch) -> None:
+    get_dropped_wire_log_count(reset=True)
+    monkeypatch.setenv("ENABLE_WIRE_LOGGING", "1")
+    monkeypatch.setenv("WIRE_LOG_MAX_PENDING", "1")
+
+    done_future: concurrent.futures.Future[None] = concurrent.futures.Future()
+    done_future.set_result(None)
+    with _wire_log_lock:
+        _pending_wire_log_futures.add(done_future)
+
+    try:
+        dump_wire_transaction({"turn_id": 1, "flow_id": "prune"}, wire_log_dir=str(tmp_path))
+        with _wire_log_lock:
+            assert done_future not in _pending_wire_log_futures
+        assert get_dropped_wire_log_count() == 0
+        flush_wire_logs(timeout=5.0)
+        assert (tmp_path / "turn_1_prune.json").exists()
+    finally:
+        with _wire_log_lock:
+            _pending_wire_log_futures.discard(done_future)
+        flush_wire_logs(timeout=5.0)
+        get_dropped_wire_log_count(reset=True)
+
+
+def test_dump_wire_transaction_bounds_pending_queue_and_counts_drops(tmp_path: Path, monkeypatch) -> None:
+    get_dropped_wire_log_count(reset=True)
+    monkeypatch.setenv("ENABLE_WIRE_LOGGING", "1")
+    monkeypatch.setenv("WIRE_LOG_MAX_PENDING", "2")
+
+    placeholders: list[concurrent.futures.Future[None]] = [
+        concurrent.futures.Future(),
+        concurrent.futures.Future(),
+    ]
+    with _wire_log_lock:
+        _pending_wire_log_futures.update(placeholders)
+
+    try:
+        overflow_futures = [
+            dump_wire_transaction({"turn_id": idx, "flow_id": "overflow"}, wire_log_dir=str(tmp_path))
+            for idx in range(3)
+        ]
+        for future in overflow_futures:
+            assert future.done() is True
+            assert future.result(timeout=1.0) is None
+        with _wire_log_lock:
+            assert len(_pending_wire_log_futures) == 2
+        assert get_dropped_wire_log_count() == 3
+        assert get_dropped_wire_log_count(reset=True) == 3
+        assert get_dropped_wire_log_count() == 0
+    finally:
+        with _wire_log_lock:
+            _pending_wire_log_futures.difference_update(placeholders)
+        get_dropped_wire_log_count(reset=True)
+
+
+def test_wire_log_max_pending_invalid_env_falls_back_to_default(tmp_path: Path, monkeypatch) -> None:
+    assert WIRE_LOG_MAX_PENDING == 256
+    get_dropped_wire_log_count(reset=True)
+    monkeypatch.setenv("ENABLE_WIRE_LOGGING", "1")
+
+    try:
+        for raw_value in ("invalid", "-5"):
+            monkeypatch.setenv("WIRE_LOG_MAX_PENDING", raw_value)
+            dump_wire_transaction({"turn_id": 1, "flow_id": f"fallback_{raw_value}"}, wire_log_dir=str(tmp_path))
+            flush_wire_logs(timeout=5.0)
+            assert get_dropped_wire_log_count() == 0
+            assert (tmp_path / f"turn_1_fallback_{raw_value}.json").exists()
+    finally:
+        flush_wire_logs(timeout=5.0)
+        get_dropped_wire_log_count(reset=True)

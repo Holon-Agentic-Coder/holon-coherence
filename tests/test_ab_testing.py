@@ -318,7 +318,8 @@ class TestScorecardPresentation:
         assert "Net Tokens Reduced:" in table
         assert "Prompt Cache Breakpoints:" in table
         assert "Baseline TTFT (Recorded):" in table
-        assert "Semantic Parity Check:       ✅ PASSED" in table
+        assert "Structural Parity Check:     ✅ PASSED (Structural Checks)" in table
+        assert "100% Structural Equivalence" not in table
         assert "CI Reduction Gate:           ✅ PASSED" in table
 
     def test_scorecard_to_dict_serialization(self, sample_trace_records: list[dict]) -> None:
@@ -355,7 +356,8 @@ class TestABTestCLI:
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
         assert "HOLON COHERENCE A/B BENCHMARK SCORECARD" in captured.out
-        assert "Semantic Parity Check" in captured.out
+        assert "Structural Parity Check" in captured.out
+        assert "100% Structural Equivalence" not in captured.out
 
     def test_cli_ab_test_pass_threshold(self, jsonl_trace_file: Path, capsys: pytest.CaptureFixture) -> None:
         with pytest.raises(SystemExit) as exc_info:
