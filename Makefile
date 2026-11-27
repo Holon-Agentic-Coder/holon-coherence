@@ -86,7 +86,7 @@ COLOR_YELLOW := \033[1;33m
 COLOR_RESET := \033[0m
 endif
 
-.PHONY: check-prerequisites prerequisites check-docker install-docker install-homebrew install-miniforge create-conda-env activate-conda-env build-image build-images tools check lint lint-json lint-yaml lint-shell lint-md pre-commit-check help
+.PHONY: check-prerequisites prerequisites check-docker install-docker install-homebrew install-miniforge create-conda-env activate-conda-env build-image build-images tools check lint lint-json lint-yaml lint-shell lint-md pre-commit-check install-hooks help
 
 install-homebrew:
 	@if [ "$(DETECTED_OS)" = "Darwin" ]; then \
@@ -545,6 +545,22 @@ tools:
 		echo "$(COLOR_GREEN)✅ All toolbelt tools are present.$(COLOR_RESET)"; \
 	fi
 
+install-hooks:
+	@if [ -n "$(DRY_RUN)" ]; then \
+		echo "$(COLOR_BOLD)Dry run: would configure git core.hooksPath to .githooks$(COLOR_RESET)"; \
+		exit 0; \
+	fi; \
+	if [ ! -f ".githooks/commit-msg" ]; then \
+		echo "$(COLOR_RED)❌ Missing .githooks/commit-msg hook.$(COLOR_RESET)"; \
+		exit 1; \
+	fi; \
+	if [ ! -x ".githooks/commit-msg" ]; then \
+		echo "$(COLOR_RED)❌ .githooks/commit-msg is not executable.$(COLOR_RESET)"; \
+		exit 1; \
+	fi; \
+	git config core.hooksPath .githooks || exit 1; \
+	echo "$(COLOR_GREEN)✅ Configured git core.hooksPath to .githooks$(COLOR_RESET)"
+
 pre-commit-check:
 	@if [ -n "$(DRY_RUN)" ]; then exit 0; fi; \
 	echo "$(COLOR_BOLD)Running pre-commit security and scratch file checks...$(COLOR_RESET)"; \
@@ -622,6 +638,7 @@ help:
 	@printf $(HELP_FORMAT) "lint-shell" "Check shell scripts with shellcheck."
 	@printf $(HELP_FORMAT) "lint-md" "Check Markdown documentation with Prettier (--no-config)."
 	@printf $(HELP_FORMAT) "pre-commit-check" "Run pre-commit secret leak and scratch file detection."
+	@printf $(HELP_FORMAT) "install-hooks" "Verify .githooks/commit-msg and configure git core.hooksPath to .githooks."
 	@printf $(HELP_FORMAT) "help" "Show this help message."
 	@echo ""
 	@echo "$(COLOR_BOLD)Variables:$(COLOR_RESET)"

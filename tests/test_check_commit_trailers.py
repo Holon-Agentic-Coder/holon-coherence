@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -196,3 +197,82 @@ def test_ci_workflow_runs_commit_trailer_range_check() -> None:
     assert "fetch-depth: 0" in lines
     assert any(line.startswith("uses:") and "actions/checkout@" in line for line in lines)
     assert any("scripts/check_commit_trailers.py" in line and "--range" in line for line in lines)
+
+
+def test_installed_commit_msg_hook_enforces_trailers_on_git_commit(tmp_path: Path) -> None:
+    _run_git(tmp_path, ["init"])
+    _run_git(tmp_path, ["config", "user.name", "Test Author"])
+    _run_git(tmp_path, ["config", "user.email", "test@example.com"])
+
+    hooks_dir = tmp_path / ".githooks"
+    hooks_dir.mkdir()
+    hook_dest = hooks_dir / "commit-msg"
+    shutil.copy2(HOOK_PATH, hook_dest)
+    hook_dest.chmod(0o755)
+
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    shutil.copy2(SCRIPT_PATH, scripts_dir / "check_commit_trailers.py")
+
+    env = _git_env()
+    if shutil.which("make") is not None:
+        install_result = subprocess.run(
+            ["make", "-I", str(REPO_ROOT), "-f", str(REPO_ROOT / "Makefile"), "install-hooks"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            env={**env, "NO_COLOR": "1"},
+            check=False,
+        )
+        assert install_result.returncode == 0, install_result.stderr
+    else:
+        _run_git(tmp_path, ["config", "core.hooksPath", ".githooks"])
+
+    hooks_path = subprocess.run(
+        ["git", "config", "--get", "core.hooksPath"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env=env,
+        check=True,
+    )
+    assert hooks_path.stdout.strip() == ".githooks"
+
+    notes = tmp_path / "notes.txt"
+    notes.write_text("hello\n", encoding="utf-8")
+    _run_git(tmp_path, ["add", "notes.txt"])
+
+    bad_commit = subprocess.run(
+        [
+            "git",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "feat: bad\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert bad_commit.returncode != 0
+    assert "Co-Authored-By: Claude <noreply@anthropic.com>" in bad_commit.stderr
+
+    clean_commit = subprocess.run(
+        [
+            "git",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "feat: clean\n\nAction-Origin: pr_review\nReview-Iteration: 2",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert clean_commit.returncode == 0, clean_commit.stderr

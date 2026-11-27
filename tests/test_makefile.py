@@ -215,6 +215,7 @@ def test_makefile_help():
     assert "lint-shell" in result.stdout
     assert "lint-md" in result.stdout
     assert "pre-commit-check" in result.stdout
+    assert "install-hooks" in result.stdout
 
 
 def test_makefile_help_documents_conda_variables():
@@ -255,6 +256,7 @@ def test_makefile_default_goal():
         "lint-shell",
         "lint-md",
         "pre-commit-check",
+        "install-hooks",
     ],
 )
 def test_makefile_dry_run(target):
@@ -704,3 +706,86 @@ def test_makefile_pre_commit_check_target():
     )
     assert result.returncode == 0
     assert "pre_commit_check.py" in result.stdout
+
+
+def _isolated_git_env():
+    return {**ENV_NO_COLOR, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
+
+
+def _init_temp_git_repo(tmp_path):
+    subprocess.run(
+        ["git", "init"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env=_isolated_git_env(),
+        check=True,
+        timeout=15,
+    )
+
+
+def _run_install_hooks(tmp_path, extra_args=()):
+    return subprocess.run(
+        ["make", "-I", str(REPO_ROOT), "-f", str(REPO_ROOT / "Makefile"), *extra_args, "install-hooks"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env=_isolated_git_env(),
+        timeout=15,
+    )
+
+
+def _get_git_hooks_path(tmp_path):
+    return subprocess.run(
+        ["git", "config", "--get", "core.hooksPath"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env=_isolated_git_env(),
+        timeout=15,
+    )
+
+
+def test_install_hooks_dry_run_does_not_modify_git_config(tmp_path):
+    _init_temp_git_repo(tmp_path)
+
+    result = _run_install_hooks(tmp_path, extra_args=("DRY_RUN=1",))
+
+    assert result.returncode == 0
+    assert _get_git_hooks_path(tmp_path).returncode != 0
+
+
+def test_install_hooks_configures_hooks_path_idempotently(tmp_path):
+    _init_temp_git_repo(tmp_path)
+    hooks_dir = tmp_path / ".githooks"
+    hooks_dir.mkdir()
+    hook_dest = hooks_dir / "commit-msg"
+    shutil.copy2(REPO_ROOT / ".githooks" / "commit-msg", hook_dest)
+    hook_dest.chmod(0o755)
+
+    first = _run_install_hooks(tmp_path)
+    second = _run_install_hooks(tmp_path)
+
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 0, second.stderr
+    configured = _get_git_hooks_path(tmp_path)
+    assert configured.returncode == 0
+    assert configured.stdout.strip() == ".githooks"
+
+
+def test_install_hooks_fails_when_hook_missing_or_not_executable(tmp_path):
+    _init_temp_git_repo(tmp_path)
+
+    missing_result = _run_install_hooks(tmp_path)
+    assert missing_result.returncode != 0
+    assert _get_git_hooks_path(tmp_path).returncode != 0
+
+    hooks_dir = tmp_path / ".githooks"
+    hooks_dir.mkdir()
+    hook_dest = hooks_dir / "commit-msg"
+    shutil.copy2(REPO_ROOT / ".githooks" / "commit-msg", hook_dest)
+    hook_dest.chmod(0o644)
+
+    non_exec_result = _run_install_hooks(tmp_path)
+    assert non_exec_result.returncode != 0
+    assert _get_git_hooks_path(tmp_path).returncode != 0
