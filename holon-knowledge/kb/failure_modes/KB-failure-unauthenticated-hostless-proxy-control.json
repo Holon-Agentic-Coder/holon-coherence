@@ -1,0 +1,34 @@
+{
+  "kb_id": "KB-failure-unauthenticated-hostless-proxy-control",
+  "kb_type": "failure_mode",
+  "version": "1.0",
+  "created_ts": "2026-11-27T06:25:46.283627+00:00",
+  "updated_ts": "2026-11-27T06:25:46.283627+00:00",
+  "created_by": "holon-coherence-audit",
+  "status": "active",
+  "evidence": {
+    "ledger_refs": [],
+    "success_count": 0,
+    "failure_count": 1,
+    "ladder_state": "curated"
+  },
+  "tags": [
+    "security",
+    "proxy",
+    "dashboard",
+    "auth",
+    "failure_mode"
+  ],
+  "human_approved": true,
+  "payload": {
+    "name": "Unauthenticated Host-Less Proxy Control Plane Endpoints",
+    "description": "Matching proxy control-plane routes (/holon, /holon/api/metrics, /_holon/metrics, /holon/api/mode, /_holon/mode) in src/holon_coherence/proxy/steps/serve_dashboard.py solely on URL path without verifying both the target host (loopback/local control plane) and an authentication token allows any proxied client, SSRF vector, DNS-rebound origin, or cross-origin page (especially with Access-Control-Allow-Origin: *) to read live telemetry or mutate proxy state such as addon.default_passive and addon.wire_log_dir.",
+    "action": "Gate all /holon and /_holon control-plane handlers in src/holon_coherence/proxy/steps/serve_dashboard.py on strict loopback/control-plane host validation via src/holon_coherence/proxy/routing.py, require an authenticated bearer or session token managed by src/holon_coherence/commands/web_token.py (stored 0o600), avoid wildcard CORS headers on control endpoints, and cover host/auth rejection paths in tests/proxy/test_dashboard.py and tests/commands/test_web_token.py.",
+    "symptoms": [
+      "GET /holon/api/metrics or POST /holon/api/mode succeeds when sent to an arbitrary remote Host header routed through the proxy.",
+      "Unauthenticated POST /holon/api/mode can toggle addon.default_passive or redirect addon.wire_log_dir.",
+      "Control-plane responses emit 'Access-Control-Allow-Origin: *', permitting cross-origin browser reads of proxy metrics.",
+      "Dashboard or control API handlers inspect ctx.path_clean without checking host locality or token credentials."
+    ]
+  }
+}
