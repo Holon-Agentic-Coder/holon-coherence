@@ -1,0 +1,33 @@
+{
+  "kb_id": "KB-failure-hot-path-deepcopy-and-provider-drift",
+  "kb_type": "failure_mode",
+  "version": "1.0",
+  "created_ts": "2026-11-27T06:25:46.283627+00:00",
+  "updated_ts": "2026-11-27T06:25:46.283627+00:00",
+  "created_by": "holon-coherence-audit",
+  "status": "active",
+  "evidence": {
+    "ledger_refs": [],
+    "success_count": 0,
+    "failure_count": 1,
+    "ladder_state": "curated"
+  },
+  "tags": [
+    "performance",
+    "deepcopy",
+    "providers",
+    "drift",
+    "failure_mode"
+  ],
+  "human_approved": true,
+  "payload": {
+    "name": "Hot-Path Payload Deepcopy Overhead and Provider Detection Drift",
+    "description": "Running copy.deepcopy(payload) and double json.dumps serialization on every request in src/holon_coherence/payload_cleaner.py (JSONContextCleaner.process_payload_with_stats) adds quadratic CPU and memory overhead on large multi-turn LLM transcripts, while duplicating provider detection heuristics across src/holon_coherence/proxy/addon.py (MITMProxyInterceptor.detect_provider) and src/holon_coherence/providers/__init__.py (detect_provider_name) causes silent routing and cleaning drift (such as mismatched Claude model detection and 'system' vs 'messages' precedence).",
+    "action": "Avoid full recursive copy.deepcopy on request hot paths by using targeted copy-on-write shallow copies for mutated message lists/blocks, route all provider detection, cleaning, cache-key extraction, and token parsing through the single ProviderFormat registry in src/holon_coherence/providers/ (base.py, __init__.py, anthropic.py, openai.py, gemini.py), and enforce parity in tests/providers/test_registry.py and tests/proxy/test_addon_pipeline_parity.py.",
+    "symptoms": [
+      "Proxy request latency and RSS memory grow sharply with conversation length due to full copy.deepcopy() and repeated json.dumps() per turn.",
+      "Provider detection in MITMProxyInterceptor.detect_provider disagrees with providers.detect_provider_name on ambiguous payloads (e.g., payloads with both 'system' and 'messages' or Claude model names on custom endpoints).",
+      "Adding a new provider endpoint or payload heuristic requires editing multiple files and leaves stale behavior in one code path."
+    ]
+  }
+}

@@ -260,7 +260,7 @@ def ensure_proxy_running(
         image=image,
         host_local_spec=host_local_spec,
         container_name=container_name,
-        world_accessible_mounts=True,
+        world_accessible_mounts=False,
     )
     return ProxyLifecycle(config).start()
 

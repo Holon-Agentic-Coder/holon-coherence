@@ -13,6 +13,7 @@ from holon_coherence.commands.docker_ops import get_container_web_token
 from holon_coherence.commands.endpoints import (
     ExposedEndpoints,
     format_endpoint_rows,
+    inspector_url,
     print_endpoints,
     resolve_container_endpoints,
 )
@@ -20,13 +21,24 @@ from holon_coherence.commands.metrics import handle_metrics
 
 
 class TestEndpointsFormatting:
+    def test_inspector_url_omits_token(self) -> None:
+        url = inspector_url(8081, "secret-tok")
+        assert url == "http://127.0.0.1:8081/"
+        assert "?token=" not in url
+        assert "secret-tok" not in url
+
     def test_format_endpoint_rows_alignment(self) -> None:
-        rows = format_endpoint_rows(ExposedEndpoints(proxy_port=8080, web_port=8081, web_token="tok"))
+        rows = format_endpoint_rows(ExposedEndpoints(proxy_port=8080, web_port=8081, web_token="secret-tok"))
         assert rows == [
             "  Proxy Listen Address         : 127.0.0.1:8080",
             "  Coherence Live Dashboard     : http://127.0.0.1:8080/holon/",
-            "  mitmweb Req/Resp Inspector   : http://127.0.0.1:8081/?token=tok",
+            (
+                "  mitmweb Req/Resp Inspector   : http://127.0.0.1:8081/ "
+                "(recover token with: docker exec <container> sh -c 'cat \"$HOME/.holon/web-token\"')"
+            ),
         ]
+        assert "?token=" not in rows[2]
+        assert "secret-tok" not in rows[2]
 
     def test_format_endpoint_rows_without_token_gives_a_hint_not_a_url(self) -> None:
         rows = format_endpoint_rows(ExposedEndpoints(proxy_port=8080, web_port=8081, web_token=None))
@@ -88,12 +100,17 @@ class TestEndpointReporting:
         return lambda _name, container_port: mapping.get(container_port)
 
     def test_format_endpoint_rows_alignment(self) -> None:
-        rows = format_endpoint_rows(ExposedEndpoints(proxy_port=8080, web_port=8081, web_token="tok"))
+        rows = format_endpoint_rows(ExposedEndpoints(proxy_port=8080, web_port=8081, web_token="secret-tok"))
         assert rows == [
             "  Proxy Listen Address         : 127.0.0.1:8080",
             "  Coherence Live Dashboard     : http://127.0.0.1:8080/holon/",
-            "  mitmweb Req/Resp Inspector   : http://127.0.0.1:8081/?token=tok",
+            (
+                "  mitmweb Req/Resp Inspector   : http://127.0.0.1:8081/ "
+                "(recover token with: docker exec <container> sh -c 'cat \"$HOME/.holon/web-token\"')"
+            ),
         ]
+        assert "?token=" not in rows[2]
+        assert "secret-tok" not in rows[2]
 
     def test_format_endpoint_rows_without_token_gives_a_hint_not_a_url(self) -> None:
         rows = format_endpoint_rows(ExposedEndpoints(proxy_port=8080, web_port=8081, web_token=None))
@@ -116,7 +133,7 @@ class TestEndpointReporting:
                 "holon_coherence.commands.endpoints.get_container_mapped_port",
                 side_effect=self._mapped_ports({8080: 8080, 8081: 8082}),
             ),
-            patch("holon_coherence.commands.endpoints.get_container_web_token", return_value="tok"),
+            patch("holon_coherence.commands.endpoints.get_container_web_token", return_value="secret-tok"),
             patch("subprocess.run", return_value=MagicMock(returncode=0)),
             patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")),
         ):
@@ -124,7 +141,12 @@ class TestEndpointReporting:
         out = capsys.readouterr().out
         assert "Proxy Listen Address         : 127.0.0.1:8080" in out
         assert "Coherence Live Dashboard     : http://127.0.0.1:8080/holon/" in out
-        assert "mitmweb Req/Resp Inspector   : http://127.0.0.1:8082/?token=tok" in out
+        assert (
+            "mitmweb Req/Resp Inspector   : http://127.0.0.1:8082/ "
+            "(recover token with: docker exec holon-coherence-proxy sh -c 'cat \"$HOME/.holon/web-token\"')"
+        ) in out
+        assert "?token=" not in out
+        assert "secret-tok" not in out
 
     def test_status_reports_inspector_not_running_without_stale_url(self, capsys: pytest.CaptureFixture[str]) -> None:
         with (
@@ -175,13 +197,18 @@ class TestEndpointReporting:
                 "holon_coherence.commands.endpoints.get_container_mapped_port",
                 side_effect=self._mapped_ports({8080: 8080, 8081: 8083}),
             ),
-            patch("holon_coherence.commands.endpoints.get_container_web_token", return_value="tok"),
+            patch("holon_coherence.commands.endpoints.get_container_web_token", return_value="secret-tok"),
         ):
             assert handle_metrics(port=9000) == 0
         out = capsys.readouterr().out
         assert "Proxy Listen Address         : 127.0.0.1:9000" in out
         assert "Coherence Live Dashboard     : http://127.0.0.1:9000/holon/" in out
-        assert "mitmweb Req/Resp Inspector   : http://127.0.0.1:8083/?token=tok" in out
+        assert (
+            "mitmweb Req/Resp Inspector   : http://127.0.0.1:8083/ "
+            "(recover token with: docker exec holon-coherence-proxy sh -c 'cat \"$HOME/.holon/web-token\"')"
+        ) in out
+        assert "?token=" not in out
+        assert "secret-tok" not in out
 
     def test_metrics_json_does_not_include_token(self, capsys: pytest.CaptureFixture[str]) -> None:
         with (
@@ -221,7 +248,10 @@ class TestEndpointReporting:
         ):
             main(["web-token"])
         assert exc.value.code == 0
-        assert "mitmweb Req/Resp Inspector: http://127.0.0.1:8084/?token=tok" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "Active mitmweb inspector token: tok" in out
+        assert "mitmweb Req/Resp Inspector: http://127.0.0.1:8084/" in out
+        assert "?token=" not in out
 
     @pytest.mark.parametrize("command", ["web-token", "web-key"])
     def test_web_token_name_selects_container(self, command: str, capsys: pytest.CaptureFixture[str]) -> None:
@@ -239,7 +269,9 @@ class TestEndpointReporting:
             main([command, "--name", "b"])
         assert exc.value.code == 0
         out = capsys.readouterr().out
-        assert "http://127.0.0.1:8091/?token=tok-b" in out
+        assert "Active mitmweb inspector token: tok-b" in out
+        assert "http://127.0.0.1:8091/" in out
+        assert "?token=" not in out
         assert "tok-a" not in out
 
     def test_web_token_unavailable_names_recovery_command(self, capsys: pytest.CaptureFixture[str]) -> None:
@@ -290,11 +322,24 @@ class TestEndpointReporting:
             with pytest.raises(SystemExit) as exc:
                 main(["web-token"])
             out_web_a = capsys.readouterr().out
-        assert "mitmweb Req/Resp Inspector   : http://127.0.0.1:8081/?token=tok-a" in out_a
+        assert (
+            "mitmweb Req/Resp Inspector   : http://127.0.0.1:8081/ "
+            "(recover token with: docker exec a sh -c 'cat \"$HOME/.holon/web-token\"')"
+        ) in out_a
+        assert "?token=" not in out_a
+        assert "tok-a" not in out_a
         assert "tok-b" not in out_a
-        assert "mitmweb Req/Resp Inspector   : http://127.0.0.1:8091/?token=tok-b" in out_b
+        assert (
+            "mitmweb Req/Resp Inspector   : http://127.0.0.1:8091/ "
+            "(recover token with: docker exec b sh -c 'cat \"$HOME/.holon/web-token\"')"
+        ) in out_b
+        assert "?token=" not in out_b
+        assert "tok-a" not in out_b
+        assert "tok-b" not in out_b
         assert exc.value.code == 0
-        assert "mitmweb Req/Resp Inspector: http://127.0.0.1:8081/?token=tok-a" in out_web_a
+        assert "Active mitmweb inspector token: tok-a" in out_web_a
+        assert "mitmweb Req/Resp Inspector: http://127.0.0.1:8081/" in out_web_a
+        assert "?token=" not in out_web_a
         assert "tok-b" not in out_web_a
 
     def test_web_token_running_inspector_without_container_token_gives_no_stale_url(

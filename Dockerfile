@@ -8,8 +8,11 @@ COPY src/ /app/src/
 RUN pip install --no-cache-dir .
 
 RUN mkdir -p /home/mitmproxy/.holon/cache /tmp/wire_logs && \
-    chown -R mitmproxy:mitmproxy /home/mitmproxy/.holon /tmp/wire_logs
+    chown -R mitmproxy:mitmproxy /home/mitmproxy/.holon /tmp/wire_logs && \
+    chmod 0755 /home/mitmproxy && \
+    chmod 1777 /home/mitmproxy/.holon /tmp/wire_logs
 
+ENV HOME=/home/mitmproxy
 ENV WIRE_LOG_DIR=/tmp/wire_logs
 
 USER mitmproxy

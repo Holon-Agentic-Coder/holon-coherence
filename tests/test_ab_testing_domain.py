@@ -5,7 +5,9 @@ from pathlib import Path
 
 import pytest
 
+from holon_coherence.ab_testing import evaluation
 from holon_coherence.ab_testing.evaluation import (
+    _check_structural_parity,
     evaluate_offline_ab_run,
     evaluate_runs,
     load_trace_transactions,
@@ -127,3 +129,20 @@ def test_evaluate_runs_different_turn_lengths() -> None:
     assert scorecard.baseline_ttft_ms == 100.0
     assert scorecard.optimized_ttft_ms == 80.0
     assert scorecard.ttft_delta_ms == 20.0
+    table = scorecard.render_table()
+    assert "Structural Parity Check" in table
+    assert "100% Structural Equivalence" not in table
+
+
+def test_check_structural_parity_symbol_and_behavior() -> None:
+    assert hasattr(evaluation, "_check_structural_parity")
+    assert not hasattr(evaluation, "_check_semantic_parity")
+
+    orig = {"messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "ok"}]}
+    same_role = {"messages": [{"role": "assistant", "content": "ok"}]}
+    diff_role = {"messages": [{"role": "user", "content": "hi"}]}
+
+    assert _check_structural_parity(orig, same_role) is True
+    assert _check_structural_parity(orig, {"messages": []}) is False
+    assert _check_structural_parity(orig, {}) is False
+    assert _check_structural_parity(orig, diff_role) is False
