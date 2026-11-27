@@ -93,7 +93,7 @@ class TestContainerStatusAndPortBinding:
         timeout_err = subprocess.TimeoutExpired(cmd=["docker", "port"], timeout=5.0)
         with (
             patch("subprocess.run", side_effect=timeout_err),
-            caplog.at_level(logging.DEBUG, logger="holon_coherence.commands.docker_ops"),
+            caplog.at_level(logging.DEBUG, logger="holon_coherence.commands.endpoints"),
         ):
             assert get_container_mapped_port("test-box", 8080) is None
         assert any(r.levelno == logging.DEBUG and "test-box" in r.getMessage() for r in caplog.records)
@@ -102,7 +102,7 @@ class TestContainerStatusAndPortBinding:
         bad_port_res = MagicMock(returncode=0, stdout="127.0.0.1:not-a-port\n")
         with (
             patch("subprocess.run", return_value=bad_port_res),
-            caplog.at_level(logging.DEBUG, logger="holon_coherence.commands.docker_ops"),
+            caplog.at_level(logging.DEBUG, logger="holon_coherence.commands.endpoints"),
         ):
             assert get_container_mapped_port("test-box", 8080) is None
         assert any(r.levelno == logging.DEBUG and "not-a-port" in r.getMessage() for r in caplog.records)

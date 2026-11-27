@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import ast
 import json
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+import holon_coherence.commands.docker_ops as docker_ops
+import holon_coherence.commands.endpoints as endpoints_mod
 from holon_coherence.cli import main
 from holon_coherence.commands.docker_ops import get_container_web_token
 from holon_coherence.commands.endpoints import (
@@ -373,3 +377,33 @@ class TestEndpointReporting:
             assert get_container_web_token("a") is None
         with patch("subprocess.run", side_effect=FileNotFoundError("docker")):
             assert get_container_web_token("a") is None
+
+
+class TestEndpointsAcyclicBoundary:
+    def test_endpoints_module_has_zero_imports_from_docker_ops(self) -> None:
+        source_path = Path(endpoints_mod.__file__)
+        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert "docker_ops" not in alias.name
+            elif isinstance(node, ast.ImportFrom):
+                if node.module is not None:
+                    assert "docker_ops" not in node.module
+                for alias in node.names:
+                    assert "docker_ops" not in alias.name
+
+    def test_docker_ops_reexports_endpoints_container_helpers(self) -> None:
+        assert docker_ops.is_container_running is endpoints_mod.is_container_running
+        assert docker_ops.get_container_mapped_port is endpoints_mod.get_container_mapped_port
+        assert docker_ops.get_container_web_token is endpoints_mod.get_container_web_token
+        assert docker_ops.WEB_PASSWORD_ENV_VAR == endpoints_mod.WEB_PASSWORD_ENV_VAR
+
+    def test_endpoints_container_helpers_work_directly(self) -> None:
+        with patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="true\n")):
+            assert endpoints_mod.is_container_running("direct-box") is True
+        with patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="127.0.0.1:8085\n")):
+            assert endpoints_mod.get_container_mapped_port("direct-box", 8080) == 8085
+        env = '["HOLON_COHERENCE_WEB_PASSWORD=direct-tok"]\n'
+        with patch("subprocess.run", return_value=MagicMock(returncode=0, stdout=env)):
+            assert endpoints_mod.get_container_web_token("direct-box") == "direct-tok"

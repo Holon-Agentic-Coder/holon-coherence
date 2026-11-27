@@ -10,8 +10,16 @@ import sys
 import urllib.error
 import urllib.request
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+from holon_coherence.commands import endpoints as _endpoints
+from holon_coherence.commands.endpoints import (
+    WEB_PASSWORD_ENV_VAR,
+    ExposedEndpoints,
+    get_container_mapped_port,
+    get_container_web_token,
+    is_container_running,
+)
 from holon_coherence.commands.stop import handle_stop
 from holon_coherence.container.image import DOCKER_BUILD_TIMEOUT_SECONDS, ensure_docker_image
 from holon_coherence.container.lifecycle import (
@@ -20,11 +28,7 @@ from holon_coherence.container.lifecycle import (
     check_docker_daemon,
     get_container_name,
     is_container_bound_to_port,
-    is_container_running,
 )
-
-if TYPE_CHECKING:
-    from holon_coherence.commands.endpoints import ExposedEndpoints
 
 __all__ = [
     "CONTAINER_NAME",
@@ -67,65 +71,14 @@ def handle_build(args: Any) -> int:
     return 0
 
 
-def get_container_mapped_port(container_name: str | None = None, container_port: int = 8080) -> int | None:
-    name = container_name or get_container_name()
-    try:
-        res = subprocess.run(
-            ["docker", "port", name, f"{container_port}/tcp"],
-            capture_output=True,
-            text=True,
-            timeout=5.0,
-            check=False,
-        )
-        if res.returncode == 0 and res.stdout.strip():
-            first_line = res.stdout.strip().splitlines()[0]
-            port_str = first_line.split(":")[-1].strip()
-            return int(port_str)
-    except (subprocess.SubprocessError, OSError, ValueError) as exc:
-        logger.debug("Failed to resolve mapped port for %s: %s", name, exc)
-    return None
-
-
-WEB_PASSWORD_ENV_VAR = "HOLON_COHERENCE_WEB_PASSWORD"
-
-
-def get_container_web_token(container_name: str | None = None) -> str | None:
-    name = container_name or get_container_name()
-    try:
-        res = subprocess.run(
-            ["docker", "inspect", "-f", "{{json .Config.Env}}", name],
-            capture_output=True,
-            text=True,
-            timeout=5.0,
-            check=False,
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-    if res.returncode != 0:
-        return None
-    try:
-        env = json.loads(res.stdout.strip() or "null")
-    except ValueError:
-        return None
-    if not isinstance(env, list):
-        return None
-    prefix = f"{WEB_PASSWORD_ENV_VAR}="
-    for entry in env:
-        if isinstance(entry, str) and entry.startswith(prefix):
-            return entry[len(prefix) :].strip() or None
-    return None
-
-
 def handle_status(
     args: Any = None,
     *,
     is_running_fn: Callable[[str], bool] | None = None,
     resolve_endpoints_fn: Callable[..., ExposedEndpoints] | None = None,
 ) -> int:
-    from holon_coherence.commands.endpoints import print_endpoints, resolve_container_endpoints
-
     is_running = is_running_fn or is_container_running
-    resolve_endpoints = resolve_endpoints_fn or resolve_container_endpoints
+    resolve_endpoints = resolve_endpoints_fn or _endpoints.resolve_container_endpoints
     target_container = getattr(args, "name", None) or get_container_name()
     is_default = target_container in (DEFAULT_CONTAINER_NAME, "holon-coherence")
     display_name = "holon-coherence" if is_default else target_container
@@ -148,7 +101,7 @@ def handle_status(
     endpoints = resolve_endpoints(target_container, fallback_proxy_port=fallback_proxy_port)
     proxy_port = endpoints.proxy_port or fallback_proxy_port
     print()
-    print_endpoints(endpoints, container_name=target_container)
+    _endpoints.print_endpoints(endpoints, container_name=target_container)
 
     try:
         metrics_url = f"http://127.0.0.1:{proxy_port}/holon/api/metrics"
