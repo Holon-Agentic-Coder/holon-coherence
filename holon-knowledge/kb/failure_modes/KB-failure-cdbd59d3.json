@@ -1,0 +1,21 @@
+{
+  "kb_id": "KB-failure-cdbd59d3",
+  "kb_type": "failure_mode",
+  "version": "1.0",
+  "created_ts": "1970-01-01T00:00:00+00:00",
+  "updated_ts": "1970-01-01T00:00:00+00:00",
+  "created_by": "holon-promotion-engine",
+  "status": "active",
+  "evidence": {},
+  "tags": [
+    "general",
+    "veto"
+  ],
+  "human_approved": false,
+  "payload": {
+    "name": "Failure mode in I-1795761158-coherence-metrics-unification/P-1795761183-ANA-G4N/_",
+    "description": "Reproduced failure across executions with identical context. Execution counts live in the action index and ledgers.",
+    "action": "Refused a change to holon-config/hygiene/module_budgets.json: the module budget configuration is frozen, so split the module into smaller modules instead; it changes only when the intent carries 'module_budget_change' quoting the maintainer's instruction.",
+    "symptoms": []
+  }
+}
