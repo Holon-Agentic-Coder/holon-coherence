@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 import logging
@@ -80,8 +79,9 @@ def _dedup_gemini_part(
 ) -> Any:
     if not isinstance(part, dict):
         return part
-    part_copy = copy.deepcopy(part)
+    part_copy = dict(part)
     if "functionResponse" in part_copy and isinstance(part_copy["functionResponse"], dict):
+        part_copy["functionResponse"] = dict(part_copy["functionResponse"])
         _dedup_func_response(part_copy, turn_idx, is_older, seen_content_hashes, stats)
     else:
         _dedup_text_part(part_copy, turn_idx, is_older, seen_content_hashes, stats)
@@ -95,14 +95,14 @@ def deduplicate_gemini_contents(
     stats: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     if not enable_dedup:
-        return [copy.deepcopy(t) if isinstance(t, dict) else t for t in contents]
+        return [dict(t) if isinstance(t, dict) else t for t in contents]
     cleaned: list[dict[str, Any]] = []
     turn_count = len(contents)
     for turn_idx, turn in enumerate(contents):
         if not isinstance(turn, dict):
             cleaned.append(turn)
             continue
-        turn_copy = copy.deepcopy(turn)
+        turn_copy = dict(turn)
         is_older = turn_idx < (turn_count - RECENT_UNTOUCHED_TURNS)
         parts = turn_copy.get("parts", [])
         if isinstance(parts, list):
@@ -295,8 +295,7 @@ class GeminiProvider(ProviderFormat):
         if len(cleaned_contents) > max_turns:
             cleaned_contents = summarize_gemini_history(cleaned_contents, recent_turns_to_keep, stats=stats)
 
-        payload["contents"] = cleaned_contents
-        return payload
+        return {**payload, "contents": cleaned_contents}
 
     def extract_sse_content(self, resp_text: str) -> str:
         accumulated: list[str] = []

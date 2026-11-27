@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import hashlib
 import logging
 from typing import TYPE_CHECKING, Any
@@ -86,7 +85,7 @@ def _dedup_single_openai_message(
     seen_content_hashes: dict[str, tuple[int, str]],
     stats: dict[str, int] | None,
 ) -> dict[str, Any]:
-    msg_copy = copy.deepcopy(msg)
+    msg_copy = dict(msg)
     role = msg_copy.get("role")
     content = msg_copy.get("content", "")
     if role == "tool" and isinstance(content, str) and len(content) > MIN_TOOL_OUTPUT_DEDUP_CHARS:
@@ -103,7 +102,7 @@ def deduplicate_openai_messages(
     stats: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     if not enable_dedup:
-        return [copy.deepcopy(m) if isinstance(m, dict) else m for m in messages]
+        return [dict(m) if isinstance(m, dict) else m for m in messages]
     cleaned: list[dict[str, Any]] = []
     turn_count = len(messages)
     for turn_idx, msg in enumerate(messages):
@@ -314,8 +313,7 @@ class OpenAIProvider(ProviderFormat):
         if len(cleaned_messages) > max_turns:
             cleaned_messages = summarize_openai_history(cleaned_messages, recent_turns_to_keep, stats=stats)
 
-        payload["messages"] = cleaned_messages
-        return payload
+        return {**payload, "messages": cleaned_messages}
 
     def extract_sse_content(self, resp_text: str) -> str:
         accumulated: list[str] = []

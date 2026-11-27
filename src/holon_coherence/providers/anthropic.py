@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 import logging
@@ -48,7 +47,7 @@ def _dedup_tool_result_item(
     seen_content_hashes: dict[str, tuple[int, str]],
     stats: dict[str, int] | None,
 ) -> dict[str, Any]:
-    item_copy = copy.deepcopy(item)
+    item_copy = dict(item)
     tool_out = item_copy.get("content", "")
     resource_name = item_copy.get("tool_use_id", f"tool_result_{turn_idx}")
     content_hash = _hash_content(tool_out)
@@ -72,7 +71,7 @@ def _dedup_text_item(
     seen_content_hashes: dict[str, tuple[int, str]],
     stats: dict[str, int] | None,
 ) -> dict[str, Any]:
-    item_copy = copy.deepcopy(item)
+    item_copy = dict(item)
     text_out = item_copy.get("text", "")
     if isinstance(text_out, str) and len(text_out) > MIN_BLOCK_DEDUP_CHARS:
         content_hash = hashlib.sha256(text_out.encode("utf-8")).hexdigest()
@@ -100,7 +99,7 @@ def _dedup_content_block(
         return _dedup_tool_result_item(item, turn_idx, is_older_turn, seen_content_hashes, stats)
     if item_type == "text":
         return _dedup_text_item(item, turn_idx, is_older_turn, seen_content_hashes, stats)
-    return copy.deepcopy(item)
+    return dict(item)
 
 
 def _dedup_single_message(
@@ -110,7 +109,7 @@ def _dedup_single_message(
     seen_content_hashes: dict[str, tuple[int, str]],
     stats: dict[str, int] | None,
 ) -> dict[str, Any]:
-    msg_copy = copy.deepcopy(msg)
+    msg_copy = dict(msg)
     content = msg_copy.get("content")
     if isinstance(content, list):
         msg_copy["content"] = [
@@ -249,7 +248,43 @@ def _iter_cache_control_holders(payload: dict[str, Any]) -> Iterator[dict[str, A
     yield from _iter_messages_holders(payload.get("messages"))
 
 
-def sanitize_and_normalize_cache_controls(payload: dict[str, Any]) -> dict[str, Any]:
+def _copy_cc_dict(block: dict[str, Any]) -> dict[str, Any]:
+    out = dict(block)
+    cc = out.get("cache_control")
+    if isinstance(cc, dict):
+        out["cache_control"] = dict(cc)
+    return out
+
+
+def _clone_message_for_cache(msg: Any) -> Any:
+    if not isinstance(msg, dict):
+        return msg
+    out = _copy_cc_dict(msg)
+    content = out.get("content")
+    if isinstance(content, list):
+        out["content"] = [_copy_cc_dict(b) if isinstance(b, dict) else b for b in content]
+    elif isinstance(content, dict):
+        out["content"] = _copy_cc_dict(content)
+    return out
+
+
+def _clone_payload_for_cache(payload: dict[str, Any]) -> dict[str, Any]:
+    out = dict(payload)
+    tools = out.get("tools")
+    if isinstance(tools, list):
+        out["tools"] = [_copy_cc_dict(t) if isinstance(t, dict) else t for t in tools]
+    system = out.get("system")
+    if isinstance(system, list):
+        out["system"] = [_copy_cc_dict(b) if isinstance(b, dict) else b for b in system]
+    elif isinstance(system, dict):
+        out["system"] = _copy_cc_dict(system)
+    messages = out.get("messages")
+    if isinstance(messages, list):
+        out["messages"] = [_clone_message_for_cache(m) for m in messages]
+    return out
+
+
+def _normalize_cache_controls_in_place(payload: dict[str, Any]) -> dict[str, Any]:
     raw_holders = list(_iter_cache_control_holders(payload))
     valid_holders = [h for h in raw_holders if _sanitize_cache_control_block(h)]
 
@@ -269,6 +304,10 @@ def sanitize_and_normalize_cache_controls(payload: dict[str, Any]) -> dict[str, 
         if rank < max_allowed_rank:
             max_allowed_rank = rank
     return payload
+
+
+def sanitize_and_normalize_cache_controls(payload: dict[str, Any]) -> dict[str, Any]:
+    return _normalize_cache_controls_in_place(_clone_payload_for_cache(payload))
 
 
 def _count_system_cache_controls(system: Any) -> int:
@@ -348,7 +387,7 @@ def _inject_messages_cache(payload: dict[str, Any]) -> bool:
 
 
 def inject_anthropic_cache_control(payload: dict[str, Any], stats: dict[str, int] | None = None) -> dict[str, Any]:
-    sanitize_and_normalize_cache_controls(payload)
+    payload = sanitize_and_normalize_cache_controls(payload)
     existing_count = count_existing_cache_controls(payload)
     budget = MAX_CACHE_BREAKPOINTS - existing_count
     if budget <= 0:
@@ -367,7 +406,7 @@ def inject_anthropic_cache_control(payload: dict[str, Any], stats: dict[str, int
         budget -= 1
         injected += 1
 
-    sanitize_and_normalize_cache_controls(payload)
+    _normalize_cache_controls_in_place(payload)
     if stats is not None:
         stats["cache_control_injected"] += injected
     return payload
@@ -486,14 +525,11 @@ class AnthropicProvider(ProviderFormat):
             messages = summarize_anthropic_history(messages, recent_turns_to_keep, stats=stats)
             messages = merge_consecutive_roles(messages)
 
-        payload["messages"] = messages
+        cleaned_payload = {**payload, "messages": messages}
 
         if getattr(cleaner, "enable_prompt_caching", True):
-            payload = inject_anthropic_cache_control(payload, stats=stats)
-        else:
-            payload = sanitize_and_normalize_cache_controls(payload)
-
-        return payload
+            return inject_anthropic_cache_control(cleaned_payload, stats=stats)
+        return sanitize_and_normalize_cache_controls(cleaned_payload)
 
     def extract_sse_content(self, resp_text: str) -> str:
         accumulated: list[str] = []

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 from collections.abc import Iterator
 from typing import Any
@@ -85,7 +84,7 @@ class TokenCounts(tuple):
 
 def _to_content_blocks(content: Any) -> list[dict[str, Any]]:
     if isinstance(content, list):
-        return copy.deepcopy(content)
+        return [dict(item) if isinstance(item, dict) else item for item in content]
     if isinstance(content, str):
         return [{"type": "text", "text": content}]
     return []
@@ -104,7 +103,7 @@ def _merge_two_messages(prev: dict[str, Any], curr: dict[str, Any]) -> None:
         prev_parts = prev.get("parts", [])
         curr_parts = curr.get("parts", [])
         if isinstance(prev_parts, list) and isinstance(curr_parts, list):
-            prev["parts"] = copy.deepcopy(prev_parts) + copy.deepcopy(curr_parts)
+            prev["parts"] = [dict(p) if isinstance(p, dict) else p for p in (*prev_parts, *curr_parts)]
 
 
 def merge_consecutive_roles(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -113,10 +112,10 @@ def merge_consecutive_roles(messages: list[dict[str, Any]]) -> list[dict[str, An
     merged: list[dict[str, Any]] = []
     for msg in messages:
         if not isinstance(msg, dict):
-            merged.append(copy.deepcopy(msg))
+            merged.append(list(msg) if isinstance(msg, list) else msg)
             continue
         if not merged or not isinstance(merged[-1], dict) or merged[-1].get("role") != msg.get("role"):
-            merged.append(copy.deepcopy(msg))
+            merged.append(dict(msg))
         else:
             _merge_two_messages(merged[-1], msg)
     return merged
