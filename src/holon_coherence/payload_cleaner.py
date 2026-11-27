@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,6 +15,11 @@ from holon_coherence.providers.anthropic import (
     merge_consecutive_roles,
     sanitize_and_normalize_cache_controls,
     summarize_anthropic_history,
+)
+from holon_coherence.reduction_passes import (
+    ReductionContext,
+    ReductionPassRegistry,
+    default_pass_registry,
 )
 
 logger = logging.getLogger(__name__)
@@ -31,18 +37,23 @@ class CleaningResult:
     chars_saved: int = 0
 
 
+@dataclass(eq=False)
 class JSONContextCleaner:
-    def __init__(
-        self,
-        enable_deduplication: bool = True,
-        enable_prompt_caching: bool = True,
-        max_turns: int = 50,
-        recent_turns_to_keep: int = _DEFAULT_RECENT_TURNS_TO_KEEP,
-    ):
-        self.enable_deduplication = enable_deduplication
-        self.enable_prompt_caching = enable_prompt_caching
-        self.max_turns = max_turns
-        self.recent_turns_to_keep = recent_turns_to_keep
+    enable_deduplication: bool = True
+    enable_prompt_caching: bool = True
+    max_turns: int = 50
+    recent_turns_to_keep: int = _DEFAULT_RECENT_TURNS_TO_KEEP
+    pass_registry: ReductionPassRegistry | None = None
+    enabled_passes: Collection[str] | None = None
+    disabled_passes: Collection[str] | None = None
+
+    def __post_init__(self) -> None:
+        if self.pass_registry is None:
+            self.pass_registry = default_pass_registry()
+        if self.enabled_passes is not None:
+            self.enabled_passes = frozenset(self.enabled_passes)
+        if self.disabled_passes is not None:
+            self.disabled_passes = frozenset(self.disabled_passes)
 
     def process_payload(self, payload: dict[str, Any], provider: str = "anthropic") -> dict[str, Any]:
         return self.process_payload_with_stats(payload, provider=provider).payload
@@ -56,8 +67,18 @@ class JSONContextCleaner:
             "cache_control_injected": 0,
         }
 
-        provider_format = get_provider(provider)
-        cleaned_payload = provider_format.clean(self, cleaned_payload, seen_content_hashes, stats=stats)
+        context = ReductionContext(
+            cleaner=self,
+            provider=provider,
+            seen_content_hashes=seen_content_hashes,
+            stats=stats,
+        )
+        cleaned_payload = self.pass_registry.run(
+            cleaned_payload,
+            context,
+            enabled_passes=self.enabled_passes,
+            disabled_passes=self.disabled_passes,
+        )
 
         try:
             raw_chars = len(json.dumps(payload))
