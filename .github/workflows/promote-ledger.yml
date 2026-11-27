@@ -141,13 +141,15 @@ jobs:
                       to_append.extend(stripped)
                       to_append.extend(b"\n")
                       rows_appended += 1
-                  fragment.unlink()
-                  files_promoted += 1
 
               if to_append:
                   canonical.parent.mkdir(parents=True, exist_ok=True)
                   with canonical.open("ab") as handle:
                       handle.write(to_append)
+
+              for fragment in pending_files:
+                  fragment.unlink()
+                  files_promoted += 1
 
           print(
               f"Promoted {files_promoted} fragment file(s): "
@@ -177,26 +179,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          status_output="$(git status --porcelain --untracked-files=all)"
-          if [ -z "$status_output" ]; then
-            echo "::notice::No pending ledger changes to promote."
-            exit 0
-          fi
-          while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            path="${line:3}"
-            if [[ "$path" == *" -> "* ]]; then
-              src="${path%% -> *}"
-              dst="${path#* -> }"
-              if [[ "$src" != holon-knowledge/ledger/* || "$dst" != holon-knowledge/ledger/* ]]; then
-                echo "::error::Refusing to commit changes outside holon-knowledge/ledger/: ${path}"
-                exit 1
-              fi
-            elif [[ "$path" != holon-knowledge/ledger/* ]]; then
+          has_changes=0
+          while IFS= read -r -d '' entry; do
+            has_changes=1
+            xy="${entry:0:2}"
+            path="${entry:3}"
+            if [[ "$path" != holon-knowledge/ledger/* ]]; then
               echo "::error::Refusing to commit changes outside holon-knowledge/ledger/: ${path}"
               exit 1
             fi
-          done <<< "$status_output"
+            if [[ "$xy" == *R* || "$xy" == *C* ]]; then
+              IFS= read -r -d '' orig_path
+              if [[ "$orig_path" != holon-knowledge/ledger/* ]]; then
+                echo "::error::Refusing to commit changes outside holon-knowledge/ledger/: ${orig_path}"
+                exit 1
+              fi
+            fi
+          done < <(git -c core.quotePath=false status --porcelain -z --untracked-files=all)
+          if [ "$has_changes" -eq 0 ]; then
+            echo "::notice::No pending ledger changes to promote."
+            exit 0
+          fi
           git config user.name "holon-ledger-bot"
           git config user.email "holon-ledger-bot@users.noreply.github.com"
           git add -A holon-knowledge/ledger/

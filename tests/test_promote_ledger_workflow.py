@@ -268,3 +268,60 @@ def test_commit_guard_rejects_changes_outside_ledger(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "::error::" in result.stdout
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == head_before
+
+
+def test_promotion_keeps_pending_fragments_on_parse_error(tmp_path: Path) -> None:
+    workflow = _load_workflow()
+    promote_script = _step_by_id(workflow, "promote")["run"]
+    repo, _bare = _init_temp_git_repo(tmp_path)
+    ledger_dir = repo / "holon-knowledge" / "ledger"
+    original_intents = (ledger_dir / "intents.jsonl").read_bytes()
+
+    pending_dir = ledger_dir / "pending" / "intents"
+    pending_dir.mkdir(parents=True)
+    first_fragment = pending_dir / "01-valid.jsonl"
+    second_fragment = pending_dir / "02-invalid.jsonl"
+    first_fragment.write_bytes(b'{"id": "I-2"}\n')
+    second_fragment.write_bytes(b"not-valid-json\n")
+
+    result = _run_step_script(
+        promote_script,
+        cwd=repo,
+        extra_env={"HOLON_LEDGER_BOT_TOKEN": "test-token", "FORCE_PROMOTE": "false"},
+    )
+
+    assert result.returncode != 0
+    assert first_fragment.exists()
+    assert second_fragment.exists()
+    assert (ledger_dir / "intents.jsonl").read_bytes() == original_intents
+
+
+def test_commit_guard_allows_non_ascii_ledger_paths(tmp_path: Path) -> None:
+    workflow = _load_workflow()
+    promote_script = _step_by_id(workflow, "promote")["run"]
+    commit_script = _step_by_id(workflow, "commit-push")["run"]
+    repo, _bare = _init_temp_git_repo(tmp_path)
+    ledger_dir = repo / "holon-knowledge" / "ledger"
+
+    pending_dir = ledger_dir / "pending" / "intents"
+    pending_dir.mkdir(parents=True)
+    (pending_dir / "café fragment.jsonl").write_bytes(b'{"id": "I-3"}\n')
+
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "add non-ascii pending fragment")
+    _git(repo, "push", "origin", "main")
+
+    promote_result = _run_step_script(
+        promote_script,
+        cwd=repo,
+        extra_env={"HOLON_LEDGER_BOT_TOKEN": "test-token", "FORCE_PROMOTE": "false"},
+    )
+    assert promote_result.returncode == 0, promote_result.stderr
+
+    commit_result = _run_step_script(
+        commit_script,
+        cwd=repo,
+        extra_env={"HOLON_LEDGER_BOT_TOKEN": "test-token"},
+    )
+    assert commit_result.returncode == 0, commit_result.stderr
+    assert list(pending_dir.glob("*.jsonl")) == []
