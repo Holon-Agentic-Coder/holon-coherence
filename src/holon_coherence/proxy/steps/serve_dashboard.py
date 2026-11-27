@@ -72,7 +72,8 @@ def _is_loopback_origin(origin: str) -> bool:
 
 
 def _expected_api_token() -> str:
-    return (os.getenv("HOLON_COHERENCE_API_TOKEN") or os.getenv("HOLON_COHERENCE_WEB_PASSWORD") or "").strip()
+    primary = (os.getenv("HOLON_COHERENCE_API_TOKEN") or "").strip()
+    return primary or (os.getenv("HOLON_COHERENCE_WEB_PASSWORD") or "").strip()
 
 
 def _is_authorized_bearer(flow: Any) -> bool:
@@ -83,7 +84,7 @@ def _is_authorized_bearer(flow: Any) -> bool:
     scheme, _, provided = auth.partition(" ")
     if scheme.lower() != "bearer" or not provided.strip():
         return False
-    return hmac.compare_digest(provided.strip(), expected)
+    return hmac.compare_digest(provided.strip().encode("utf-8"), expected.encode("utf-8"))
 
 
 def _allowed_wire_log_base(addon: Any) -> Path:
@@ -183,10 +184,7 @@ def serve_html(ctx: RequestContext) -> Outcome:
         return Outcome.CONTINUE
     dashboard_bytes = render_dashboard_html().encode("utf-8")
     ctx.flow.response = _make_http_response(
-        ctx.flow,
-        200,
-        dashboard_bytes,
-        {"Content-Type": "text/html; charset=utf-8"},
+        ctx.flow, 200, dashboard_bytes, {"Content-Type": "text/html; charset=utf-8"}
     )
     return Outcome.HALT
 

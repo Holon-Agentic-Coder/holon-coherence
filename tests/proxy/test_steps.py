@@ -506,7 +506,9 @@ def test_mode_post_fails_closed_without_configured_token(addon: MitmproxyAddon, 
     assert addon.wire_log_dir == initial_wire_dir
 
 
-@pytest.mark.parametrize("auth_header", [None, "", "Basic dXNlcjpwYXNz", "Bearer ", "Bearer wrong-token"])
+@pytest.mark.parametrize(
+    "auth_header", [None, "", "Basic dXNlcjpwYXNz", "Bearer ", "Bearer wrong-token", "Bearer tok\u00e9n"]
+)
 def test_mode_post_rejects_invalid_bearer_token(
     addon: MitmproxyAddon, monkeypatch: pytest.MonkeyPatch, auth_header: str | None
 ) -> None:
@@ -545,6 +547,36 @@ def test_mode_post_accepts_valid_bearer_token(
     assert flow.response is not None
     assert flow.response.status_code == 200
     assert json.loads(flow.response.get_text())["mode"] == "baseline"
+    assert addon.default_passive is True
+
+
+def test_mode_post_handles_non_ascii_secret_and_whitespace_token_fallback(
+    addon: MitmproxyAddon, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOLON_COHERENCE_API_TOKEN", "   ")
+    monkeypatch.setenv("HOLON_COHERENCE_WEB_PASSWORD", "s\u00e9cret-token")
+    bad_flow = _flow(
+        url="http://127.0.0.1:8080/holon/api/mode",
+        method="POST",
+        path="/holon/api/mode",
+        text=json.dumps({"mode": "baseline"}),
+        headers={"Host": "127.0.0.1:8080", "Authorization": "Bearer wrong-token"},
+    )
+    assert serve_mode(_req_ctx(addon, bad_flow)) is Outcome.HALT
+    assert bad_flow.response is not None
+    assert bad_flow.response.status_code == 401
+    assert addon.default_passive is False
+
+    ok_flow = _flow(
+        url="http://127.0.0.1:8080/holon/api/mode",
+        method="POST",
+        path="/holon/api/mode",
+        text=json.dumps({"mode": "baseline"}),
+        headers={"Host": "127.0.0.1:8080", "Authorization": "Bearer s\u00e9cret-token"},
+    )
+    assert serve_mode(_req_ctx(addon, ok_flow)) is Outcome.HALT
+    assert ok_flow.response is not None
+    assert ok_flow.response.status_code == 200
     assert addon.default_passive is True
 
 
