@@ -64,25 +64,64 @@ def test_no_global_or_per_file_suppression_of_complexity_rules() -> None:
         )
 
 
-def test_complexity_baseline_ratchet_ceiling() -> None:
+def _collect_complexity_noqa_matches(src_root: Path, repo_root: Path) -> list[tuple[str, int, str]]:
     matches: list[tuple[str, int, str]] = []
-
-    for py_file in sorted(SRC_ROOT.rglob("*.py")):
+    for py_file in sorted(src_root.rglob("*.py")):
         content = py_file.read_text(encoding="utf-8")
         for line_no, line in enumerate(content.splitlines(), start=1):
             if COMPLEXITY_NOQA_PATTERN.search(line):
-                rel_path = py_file.relative_to(REPO_ROOT).as_posix()
+                rel_path = py_file.relative_to(repo_root).as_posix()
                 matches.append((rel_path, line_no, line.strip()))
+    return matches
 
+
+def _assert_complexity_ceiling(src_root: Path, repo_root: Path, ceiling: int) -> list[tuple[str, int, str]]:
+    matches = _collect_complexity_noqa_matches(src_root, repo_root)
     total_count = len(matches)
-    assert total_count <= BASELINE_CEILING, (
-        f"Complexity baseline ratchet ceiling exceeded! Expected <= {BASELINE_CEILING}, got {total_count}.\n"
+    assert total_count <= ceiling, (
+        f"Complexity baseline ratchet ceiling exceeded! Expected <= {ceiling}, got {total_count}.\n"
         f"Violations:\n" + "\n".join(f"  {path}:{lineno} -> {line}" for path, lineno, line in matches)
     )
-    assert total_count == BASELINE_CEILING, (
-        f"Ratchet opportunity: Detected fewer inline complexity suppressions ({total_count}) "
-        f"than BASELINE_CEILING ({BASELINE_CEILING}). Update BASELINE_CEILING to {total_count}!"
+    return matches
+
+
+def test_complexity_baseline_ratchet_ceiling() -> None:
+    _assert_complexity_ceiling(SRC_ROOT, REPO_ROOT, BASELINE_CEILING)
+
+
+def test_complexity_ceiling_allows_strict_reduction_and_fails_on_regression(tmp_path: Path) -> None:
+    src_dir = tmp_path / "src" / "pkg"
+    src_dir.mkdir(parents=True)
+    target_file = src_dir / "sample.py"
+
+    target_file.write_text("def alpha() -> int:  # noqa: C901\n    return 1\n", encoding="utf-8")
+    matches_below = _assert_complexity_ceiling(src_dir, tmp_path, ceiling=3)
+    assert len(matches_below) == 1
+
+    target_file.write_text("def alpha() -> int:\n    return 1\n", encoding="utf-8")
+    matches_zero = _assert_complexity_ceiling(src_dir, tmp_path, ceiling=3)
+    assert len(matches_zero) == 0
+
+    target_file.write_text(
+        "def alpha() -> int:  # noqa: C901\n    return 1\n\ndef beta() -> int:  # noqa: PLR0912\n    return 2\n",
+        encoding="utf-8",
     )
+    matches_equal = _assert_complexity_ceiling(src_dir, tmp_path, ceiling=2)
+    assert len(matches_equal) == 2
+
+    target_file.write_text(
+        (
+            "def alpha() -> int:  # noqa: C901\n"
+            "    return 1\n\n"
+            "def beta() -> int:  # noqa: PLR0912\n"
+            "    return 2\n\n"
+            "def gamma() -> int:  # noqa: PLR0915\n"
+            "    return 3\n"
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(AssertionError, match="Complexity baseline ratchet ceiling exceeded"):
+        _assert_complexity_ceiling(src_dir, tmp_path, ceiling=2)
 
 
 def test_ruff_check_clean() -> None:
