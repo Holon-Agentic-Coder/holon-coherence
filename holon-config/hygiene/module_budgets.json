@@ -19,7 +19,6 @@
     "src/holon_coherence/container/lifecycle.py": 611,
     "src/holon_coherence/host_local.py": 357,
     "src/holon_coherence/hybrid_cache.py": 333,
-    "src/holon_coherence/metrics/aggregation.py": 222,
     "src/holon_coherence/providers/anthropic.py": 673,
     "src/holon_coherence/providers/gemini.py": 371,
     "src/holon_coherence/providers/openai.py": 442,
