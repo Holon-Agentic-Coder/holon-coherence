@@ -195,7 +195,8 @@ class TestWebTokenRegistrationAndDispatch:
             assert res == 0
             out = capsys.readouterr().out
             assert "Active mitmweb inspector token: live-tok-789" in out
-            assert "http://127.0.0.1:8081/?token=live-tok-789" in out
+            assert "http://127.0.0.1:8081/" in out
+            assert "?token=" not in out
 
     def test_handle_web_token_missing(self, capsys: pytest.CaptureFixture[str]) -> None:
         args = argparse.Namespace(name=None)
@@ -322,7 +323,12 @@ class TestWebTokenAndDashboardAuth:
         ):
             main(["status"])
             captured = capsys.readouterr()
-            assert "mitmweb Req/Resp Inspector   : http://127.0.0.1:8081/?token=active-session-tok" in captured.out
+            assert (
+                "mitmweb Req/Resp Inspector   : http://127.0.0.1:8081/ "
+                "(recover token with: docker exec holon-coherence-proxy sh -c 'cat \"$HOME/.holon/web-token\"')"
+            ) in captured.out
+            assert "?token=" not in captured.out
+            assert "active-session-tok" not in captured.out
 
     def test_status_command_when_down_displays_explicit_indicator(self, capsys: pytest.CaptureFixture[str]) -> None:
         with (

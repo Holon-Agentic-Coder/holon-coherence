@@ -16,6 +16,27 @@ _UUID_OR_HEX_HASH_PATTERN = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-
 _TASK_OR_RUN_ID_PATTERN = re.compile(r"\b(?:task|run)[-_]\d+\b")
 
 
+def _scrub_nested_headers(data: Any, scrub_headers_fn: Any) -> Any:
+    if isinstance(data, dict):
+        return {
+            k: scrub_headers_fn(v)
+            if str(k).lower() == "headers" and isinstance(v, dict)
+            else _scrub_nested_headers(v, scrub_headers_fn)
+            for k, v in data.items()
+        }
+    if isinstance(data, list):
+        return [_scrub_nested_headers(item, scrub_headers_fn) for item in data]
+    if isinstance(data, tuple):
+        return tuple(_scrub_nested_headers(item, scrub_headers_fn) for item in data)
+    return data
+
+
+def scrub_sensitive_data(data: Any) -> Any:
+    from holon_coherence.proxy.scrubbing import scrub_headers, scrub_payload
+
+    return _scrub_nested_headers(scrub_payload(data), scrub_headers)
+
+
 class HybridCacheStore:
     def __init__(  # noqa: PLR0913
         self,
@@ -43,6 +64,15 @@ class HybridCacheStore:
         self.db_path = os.path.join(cache_dir, "llm_cache.db")
         self._init_db()
 
+    def _ensure_private_db_files(self) -> None:
+        if not os.path.exists(self.db_path):
+            with contextlib.suppress(OSError):
+                os.close(os.open(self.db_path, os.O_CREAT | os.O_RDWR, 0o600))
+        for path in (self.db_path, f"{self.db_path}-wal", f"{self.db_path}-shm"):
+            if os.path.exists(path):
+                with contextlib.suppress(OSError):
+                    os.chmod(path, 0o600)
+
     @staticmethod
     def _ensure_shingle_columns_migrated(cursor: sqlite3.Cursor) -> None:
         existing = {row[1] for row in cursor.execute("PRAGMA table_info(prompt_cache)")}
@@ -51,35 +81,23 @@ class HybridCacheStore:
                 cursor.execute(f"ALTER TABLE prompt_cache ADD COLUMN {column} {declaration}")
 
     def _init_db(self) -> None:
+        self._ensure_private_db_files()
         with self._connect() as conn:
             cursor = conn.cursor()
             cursor.execute("PRAGMA journal_mode=WAL;")
             cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS prompt_cache (
-                    key TEXT PRIMARY KEY,
-                    provider TEXT,
-                    prompt_normalized TEXT,
-                    response_json TEXT,
-                    created_at REAL,
-                    hit_count INTEGER DEFAULT 0,
-                    user_tokens TEXT,
-                    system_hash TEXT
-                )
-                """
+                "CREATE TABLE IF NOT EXISTS prompt_cache ("
+                "key TEXT PRIMARY KEY, provider TEXT, prompt_normalized TEXT, response_json TEXT, "
+                "created_at REAL, hit_count INTEGER DEFAULT 0, user_tokens TEXT, system_hash TEXT)"
             )
             self._ensure_shingle_columns_migrated(cursor)
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_prompt_cache_provider_created "
                 "ON prompt_cache (provider, created_at DESC)"
             )
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_prompt_cache_provider_system_created "
-                "ON prompt_cache (provider, system_hash, created_at DESC)"
-            )
+            cursor.execute("DROP INDEX IF EXISTS idx_prompt_cache_provider_system_created")
             conn.commit()
-        with contextlib.suppress(OSError):
-            os.chmod(self.db_path, 0o600)
+        self._ensure_private_db_files()
 
     @contextlib.contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -100,11 +118,16 @@ class HybridCacheStore:
     def _system_hash(system_prompt: str) -> str:
         return hashlib.sha256(system_prompt.encode()).hexdigest()[:32]
 
-    def _normalized_payload(self, payload: dict[str, Any], provider: str) -> dict[str, Any]:
+    @staticmethod
+    def _prefix_key_from_normalized(norm_prompt: str, provider: str) -> str:
+        return hashlib.sha256(f"{provider}:{norm_prompt}".encode()).hexdigest()
+
+    @staticmethod
+    def _parse_normalized(norm_prompt: str, payload: dict[str, Any]) -> dict[str, Any]:
         try:
-            return json.loads(self.normalize_payload(payload, provider))
+            return json.loads(norm_prompt)
         except Exception:
-            return payload
+            return scrub_sensitive_data(payload)
 
     @staticmethod
     def _backfill_shingles(conn: sqlite3.Connection, key: str, tokens: str, system_hash: str) -> None:
@@ -152,14 +175,14 @@ class HybridCacheStore:
         return removed
 
     def generate_prefix_key(self, payload: dict[str, Any], provider: str = "anthropic") -> str:
-        normalized_str = self.normalize_payload(payload, provider)
-        return hashlib.sha256(f"{provider}:{normalized_str}".encode()).hexdigest()
+        return self._prefix_key_from_normalized(self.normalize_payload(payload, provider), provider)
 
     def normalize_payload(self, payload: dict[str, Any], provider: str = "anthropic") -> str:
+        scrubbed = scrub_sensitive_data(payload)
         try:
-            raw_json = json.dumps(payload, sort_keys=True, default=str)
+            raw_json = json.dumps(scrubbed, sort_keys=True, default=str)
         except Exception:
-            raw_json = str(payload)
+            raw_json = str(scrubbed)
         norm = _ISO_TIMESTAMP_PATTERN.sub("<TIMESTAMP>", raw_json)
         norm = _UUID_OR_HEX_HASH_PATTERN.sub("<UUID>", norm)
         return _TASK_OR_RUN_ID_PATTERN.sub("task-<ID>", norm)
@@ -189,9 +212,9 @@ class HybridCacheStore:
         self,
         prefix_key: str,
         provider: str,
-        fresh_sql: str,
-        fresh_args: list[float],
+        fresh: tuple[str, list[float]],
     ) -> dict[str, Any] | None:
+        fresh_sql, fresh_args = fresh
         with self._connect() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -232,88 +255,65 @@ class HybridCacheStore:
         self,
         payload: dict[str, Any],
         provider: str,
-        fresh_sql: str,
-        fresh_args: list[float],
+        fresh: tuple[str, list[float]],
+        norm_prompt: str | None = None,
     ) -> dict[str, Any] | None:
-        target_payload = self._normalized_payload(payload, provider)
+        fresh_sql, fresh_args = fresh
+        resolved_norm = norm_prompt if norm_prompt is not None else self.normalize_payload(payload, provider)
+        target_payload = self._parse_normalized(resolved_norm, payload)
         target_tokens = self._tokenize(self._extract_user_content(target_payload))
         if not target_tokens:
             return None
-
         target_system_hash = self._system_hash(self._extract_system_prompt(target_payload))
 
         with self._connect() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                f"""
-                SELECT key, prompt_normalized, response_json, user_tokens, system_hash
-                FROM prompt_cache
-                WHERE provider = ?{fresh_sql}
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
+                f"SELECT key, prompt_normalized, response_json, user_tokens, system_hash "
+                f"FROM prompt_cache WHERE provider = ?{fresh_sql} ORDER BY created_at DESC LIMIT ?",
                 (provider, *fresh_args, self.candidate_limit),
             )
-            rows = cursor.fetchall()
-
-            for key, stored_norm, resp_json, stored_tokens, stored_system_hash in rows:
-                resolved = self._resolve_candidate_shingles(
-                    conn,
-                    (key, stored_norm, stored_tokens, stored_system_hash),
-                )
+            for key, stored_norm, resp_json, stored_tokens, stored_system_hash in cursor.fetchall():
+                resolved = self._resolve_candidate_shingles(conn, (key, stored_norm, stored_tokens, stored_system_hash))
                 if resolved is None:
                     continue
                 stored_token_set, resolved_system_hash = resolved
                 if resolved_system_hash != target_system_hash or not stored_token_set:
                     continue
-
-                intersection = len(target_tokens & stored_token_set)
                 union = len(target_tokens | stored_token_set)
-                similarity = intersection / union if union > 0 else 0.0
-
+                similarity = len(target_tokens & stored_token_set) / union if union > 0 else 0.0
                 if similarity >= self.similarity_threshold:
-                    cursor.execute(
-                        "UPDATE prompt_cache SET hit_count = hit_count + 1 WHERE key = ?",
-                        (key,),
-                    )
+                    cursor.execute("UPDATE prompt_cache SET hit_count = hit_count + 1 WHERE key = ?", (key,))
                     conn.commit()
-                    logger.info(
-                        "Semantic cache hit (similarity=%.2f) for key %s",
-                        similarity,
-                        key[:10],
-                    )
+                    logger.info("Semantic cache hit (similarity=%.2f) for key %s", similarity, key[:10])
                     return json.loads(resp_json)
-
         return None
 
     def get(self, payload: dict[str, Any], provider: str = "anthropic") -> dict[str, Any] | None:
-        prefix_key = self.generate_prefix_key(payload, provider)
-        fresh_sql, fresh_args = self._freshness_clause()
-
-        exact_match = self._lookup_exact_prefix_match(prefix_key, provider, fresh_sql, fresh_args)
+        norm_prompt = self.normalize_payload(payload, provider)
+        prefix_key = self._prefix_key_from_normalized(norm_prompt, provider)
+        fresh = self._freshness_clause()
+        exact_match = self._lookup_exact_prefix_match(prefix_key, provider, fresh)
         if exact_match is not None:
             return exact_match
-
-        return self._lookup_semantic_similarity_match(payload, provider, fresh_sql, fresh_args)
+        return self._lookup_semantic_similarity_match(payload, provider, fresh, norm_prompt=norm_prompt)
 
     def put(self, payload: dict[str, Any], response: dict[str, Any], provider: str = "anthropic") -> None:
-        prefix_key = self.generate_prefix_key(payload, provider)
         norm_prompt = self.normalize_payload(payload, provider)
-        normalized = self._normalized_payload(payload, provider)
+        prefix_key = self._prefix_key_from_normalized(norm_prompt, provider)
+        normalized = self._parse_normalized(norm_prompt, payload)
         user_content, system_prompt = self._extract_cache_key_parts(normalized)
         user_tokens = " ".join(sorted(self._tokenize(user_content)))
         system_hash = self._system_hash(system_prompt)
-        resp_json = json.dumps(response, default=str)
+        resp_json = json.dumps(scrub_sensitive_data(response), default=str)
         now = time.time()
         self._prune_expired()
 
         with self._connect() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
+            conn.execute(
                 """
                 INSERT INTO prompt_cache
-                (key, provider, prompt_normalized, response_json, created_at, hit_count,
-                 user_tokens, system_hash)
+                (key, provider, prompt_normalized, response_json, created_at, hit_count, user_tokens, system_hash)
                 VALUES (?, ?, ?, ?, ?, 0, ?, ?)
                 ON CONFLICT(key) DO UPDATE SET
                     response_json = excluded.response_json,
@@ -325,9 +325,9 @@ class HybridCacheStore:
             )
             conn.commit()
             logger.info("Stored response in cache for key %s", prefix_key[:10])
+        self._ensure_private_db_files()
 
     def clear(self) -> None:
         with self._connect() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM prompt_cache")
+            conn.execute("DELETE FROM prompt_cache")
             conn.commit()
