@@ -30,8 +30,8 @@ def format_table_row(label: str, value: str, label_width: int = ENDPOINT_LABEL_W
     return f"  {label:<{label_width}} : {value}"
 
 
-def inspector_url(web_port: int, token: str) -> str:
-    return f"http://127.0.0.1:{web_port}/?token={token}"
+def inspector_url(web_port: int, _token: str | None = None) -> str:
+    return f"http://127.0.0.1:{web_port}/"
 
 
 def token_recovery_command(container_name: str) -> str:
@@ -70,7 +70,9 @@ def format_endpoint_rows(
         proxy_value = dashboard_value = "not running"
 
     if endpoints.web_port is not None and endpoints.web_token:
-        inspector_value = inspector_url(endpoints.web_port, endpoints.web_token)
+        inspector_value = (
+            f"{inspector_url(endpoints.web_port)} (recover token with: {token_recovery_command(container_name)})"
+        )
     elif endpoints.web_port is not None:
         inspector_value = (
             f"running on 127.0.0.1:{endpoints.web_port} (token unavailable; recover it with: "

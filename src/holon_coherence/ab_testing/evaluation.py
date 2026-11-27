@@ -182,10 +182,10 @@ class ABComparisonScorecard:
             lines.append(f"  🚀 Decode Throughput:           Baseline: {base_tps} | Optimized: {opt_tps}")
 
         if self.semantic_parity_verified:
-            parity_str = "✅ PASSED (100% Structural Equivalence)"
+            parity_str = "✅ PASSED (Structural Checks)"
         else:
             parity_str = "❌ FAILED (Discrepancy Detected)"
-        lines.append(f"  🔍 Semantic Parity Check:       {parity_str}")
+        lines.append(f"  🔍 Structural Parity Check:     {parity_str}")
 
         lines.extend(self._format_ci_reduction_gate_lines(thin_sep))
         lines.append(sep)
@@ -304,7 +304,7 @@ def _extract_baseline_tokens(resp: dict[str, Any], baseline_chars: int) -> int:
     return max(1, baseline_chars // CHARS_PER_ESTIMATED_TOKEN)
 
 
-def _check_semantic_parity(orig_payload: dict[str, Any], opt_payload: dict[str, Any]) -> bool:
+def _check_structural_parity(orig_payload: dict[str, Any], opt_payload: dict[str, Any]) -> bool:
     if "messages" in orig_payload:
         if "messages" not in opt_payload:
             return False
@@ -354,7 +354,7 @@ def _evaluate_single_offline_turn(
     tokens_reduced = max(0, baseline_tokens - optimized_tokens)
     reduction_pct = (tokens_reduced / baseline_tokens * 100.0) if baseline_tokens > 0 else 0.0
     chars_saved = max(0, baseline_chars - optimized_chars)
-    parity = _check_semantic_parity(payload_data, optimized_payload)
+    parity = _check_structural_parity(payload_data, optimized_payload)
 
     ttft_val: float | None = None
     if isinstance(timing, dict) and "ttft_ms" in timing:

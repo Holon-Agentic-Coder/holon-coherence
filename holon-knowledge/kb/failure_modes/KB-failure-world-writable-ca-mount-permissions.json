@@ -1,0 +1,34 @@
+{
+  "kb_id": "KB-failure-world-writable-ca-mount-permissions",
+  "kb_type": "failure_mode",
+  "version": "1.0",
+  "created_ts": "2026-11-27T06:25:46.283627+00:00",
+  "updated_ts": "2026-11-27T06:25:46.283627+00:00",
+  "created_by": "holon-coherence-audit",
+  "status": "active",
+  "evidence": {
+    "ledger_refs": [],
+    "success_count": 0,
+    "failure_count": 1,
+    "ladder_state": "curated"
+  },
+  "tags": [
+    "security",
+    "ca",
+    "permissions",
+    "docker",
+    "failure_mode"
+  ],
+  "human_approved": true,
+  "payload": {
+    "name": "World-Writable or Permissive Root CA Mount Permissions",
+    "description": "Creating or mounting the Holon Root CA directory or private key files (holon-root-ca.key, mitmproxy-ca.pem) with default process umask or world-readable/writable modes (such as 0644 or 0777) exposes the trust anchor private key to unprivileged local users or container processes, enabling unauthorized TLS certificate forgery and MITM impersonation across any client trusting the Root CA.",
+    "action": "Pre-create private key files atomically with os.open(..., os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), enforce 0o700 on the certificate directory and 0o600 on holon-root-ca.key and mitmproxy-ca.pem via _precreate_owner_only_key_file and _harden_key_permissions in src/holon_coherence/ca_generator.py, mount CA certificate volumes read-only where write access is unnecessary in src/holon_coherence/container/lifecycle.py, and verify file and directory mode bits in tests/commands/test_ca.py.",
+    "symptoms": [
+      "holon-root-ca.key or mitmproxy-ca.pem has group/other read or write bits set (mode != 0o600).",
+      "Certificate directory (~/.holon/certs or container CA mount directory) has mode wider than 0o700.",
+      "Private key file is created by OpenSSL with default umask before chmod runs, leaving a brief TOCTOU exposure window.",
+      "Container mounts the CA directory read-write when only certificate trust or read-only key loading is required."
+    ]
+  }
+}

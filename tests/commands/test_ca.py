@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from holon_coherence.ca_generator import _sync_mitmproxy_ca
 from holon_coherence.commands.ca import (
     find_system_ca_bundle,
     get_or_create_merged_ca_bundle,
@@ -63,6 +65,30 @@ class TestFindSystemCABundle:
         monkeypatch.setenv("SSL_CERT_FILE", str(merged_file))
         monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(real_sys_ca))
         assert find_system_ca_bundle() == str(real_sys_ca)
+
+    def test_find_system_ca_bundle_logs_debug_on_ssl_verify_paths_error(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+        monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
+        monkeypatch.delenv("CURL_CA_BUNDLE", raising=False)
+        fallback_ca = tmp_path / "fallback-ca.crt"
+        fallback_ca.write_text("fallback")
+
+        with (
+            patch("ssl.get_default_verify_paths", side_effect=OSError("ssl paths unavailable")),
+            patch.dict("sys.modules", {"certifi": None}),
+            patch("holon_coherence.commands.ca.SYSTEM_CA_BUNDLE_CANDIDATE_PATHS", (str(fallback_ca),)),
+            caplog.at_level(logging.DEBUG, logger="holon_coherence.commands.ca"),
+        ):
+            result = find_system_ca_bundle()
+
+        assert result == str(fallback_ca)
+        debug_msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG]
+        assert any("ssl paths unavailable" in msg for msg in debug_msgs)
 
 
 class TestGetOrCreateMergedCABundle:
@@ -162,3 +188,47 @@ class TestCACommandRegistrationAndDispatch:
         with patch("holon_coherence.commands.ca.generate_root_ca", return_value=("/cert.pem", "/key.pem")):
             res = handle(args)
             assert res == 0
+
+
+class TestSyncMitmproxyCALogging:
+    def test_sync_mitmproxy_ca_logs_warning_on_cert_copy_oserror(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        ca_cert = tmp_path / "holon-root-ca.crt"
+        ca_key = tmp_path / "holon-root-ca.key"
+        ca_cert.write_text("-----BEGIN CERTIFICATE-----\nCERT\n-----END CERTIFICATE-----\n", encoding="utf-8")
+        ca_key.write_text("-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----\n", encoding="utf-8")
+
+        with (
+            patch(
+                "holon_coherence.ca_generator.shutil.copyfile",
+                side_effect=PermissionError("read-only cert target"),
+            ),
+            caplog.at_level(logging.WARNING, logger="holon_coherence.ca_generator"),
+        ):
+            _sync_mitmproxy_ca(str(ca_cert), str(ca_key), str(tmp_path))
+
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("mitmproxy-ca-cert.pem" in msg and "read-only cert target" in msg for msg in warnings)
+        assert (tmp_path / "mitmproxy-ca.pem").is_file()
+
+    def test_sync_mitmproxy_ca_logs_warning_on_bundle_write_oserror(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        ca_cert = tmp_path / "holon-root-ca.crt"
+        ca_key = tmp_path / "holon-root-ca.key"
+        ca_cert.write_text("-----BEGIN CERTIFICATE-----\nCERT\n-----END CERTIFICATE-----\n", encoding="utf-8")
+        ca_key.write_text("-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----\n", encoding="utf-8")
+
+        with (
+            patch(
+                "holon_coherence.ca_generator.os.open",
+                side_effect=PermissionError("read-only bundle target"),
+            ),
+            caplog.at_level(logging.WARNING, logger="holon_coherence.ca_generator"),
+        ):
+            _sync_mitmproxy_ca(str(ca_cert), str(ca_key), str(tmp_path))
+
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("mitmproxy-ca.pem" in msg and "read-only bundle target" in msg for msg in warnings)
+        assert (tmp_path / "mitmproxy-ca-cert.pem").is_file()

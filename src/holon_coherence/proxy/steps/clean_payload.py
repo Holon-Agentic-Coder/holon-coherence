@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import contextlib
 import copy
 import json
 from typing import Any
 
+from holon_coherence.payload_cleaner import in_place_cleaning
 from holon_coherence.proxy.normalise.anthropic import normalize_anthropic_request
 from holon_coherence.proxy.steps._compat import _get_log_telemetry
 from holon_coherence.proxy.steps.base import Outcome, RequestContext
@@ -47,9 +49,16 @@ def _log_cleaner(clean_res: Any) -> None:
         _get_log_telemetry()(cleaner_log)
 
 
+def _has_isolated_snapshot(flow: Any, data: Any) -> bool:
+    raw_snapshot = getattr(flow, "raw_request_data", None)
+    return raw_snapshot is not None and raw_snapshot is not data
+
+
 def clean_payload(ctx: RequestContext) -> Outcome:
     flow = ctx.flow
-    cleaned_data, cached_resp, clean_res = _intercept(ctx.addon.interceptor, ctx.url, ctx.data)
+    cleaning_scope = in_place_cleaning() if _has_isolated_snapshot(flow, ctx.data) else contextlib.nullcontext()
+    with cleaning_scope:
+        cleaned_data, cached_resp, clean_res = _intercept(ctx.addon.interceptor, ctx.url, ctx.data)
 
     if ctx.is_local and clean_res:
         clean_res.cache_control_injected = 0

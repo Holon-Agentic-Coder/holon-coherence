@@ -1,0 +1,20 @@
+name: Test - Commit Trailers
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  commit-trailers:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check commit trailers
+        run: python3 scripts/check_commit_trailers.py --range "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"

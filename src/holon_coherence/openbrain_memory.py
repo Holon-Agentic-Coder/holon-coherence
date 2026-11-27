@@ -1,3 +1,4 @@
+import contextlib
 import json
 import logging
 import os
@@ -18,7 +19,7 @@ class OpenBrainMemory:
         self._init_db()
 
     def _init_db(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
@@ -45,7 +46,7 @@ class OpenBrainMemory:
         now = time.time()
 
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     """
@@ -78,7 +79,7 @@ class OpenBrainMemory:
         params.append(limit)
 
         results = []
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute(query, params)
             rows = cursor.fetchall()

@@ -3,6 +3,9 @@ from __future__ import annotations
 import copy
 import json
 import logging
+from collections.abc import Collection, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,11 +18,33 @@ from holon_coherence.providers.anthropic import (
     sanitize_and_normalize_cache_controls,
     summarize_anthropic_history,
 )
+from holon_coherence.reduction_passes import (
+    ReductionContext,
+    ReductionPassRegistry,
+    default_pass_registry,
+)
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_RECENT_TURNS_TO_KEEP = 10
 _RECENT_TURNS_TO_KEEP = _DEFAULT_RECENT_TURNS_TO_KEEP
+_IN_PLACE_MUTATION: ContextVar[bool] = ContextVar("_in_place_mutation", default=False)
+
+
+@contextmanager
+def in_place_cleaning() -> Iterator[None]:
+    token = _IN_PLACE_MUTATION.set(True)
+    try:
+        yield
+    finally:
+        _IN_PLACE_MUTATION.reset(token)
+
+
+def _serialized_length(payload: Any) -> int | None:
+    try:
+        return len(json.dumps(payload))
+    except Exception:
+        return None
 
 
 @dataclass
@@ -31,40 +56,59 @@ class CleaningResult:
     chars_saved: int = 0
 
 
+@dataclass(eq=False)
 class JSONContextCleaner:
-    def __init__(
-        self,
-        enable_deduplication: bool = True,
-        enable_prompt_caching: bool = True,
-        max_turns: int = 50,
-        recent_turns_to_keep: int = _DEFAULT_RECENT_TURNS_TO_KEEP,
-    ):
-        self.enable_deduplication = enable_deduplication
-        self.enable_prompt_caching = enable_prompt_caching
-        self.max_turns = max_turns
-        self.recent_turns_to_keep = recent_turns_to_keep
+    enable_deduplication: bool = True
+    enable_prompt_caching: bool = True
+    max_turns: int = 50
+    recent_turns_to_keep: int = _DEFAULT_RECENT_TURNS_TO_KEEP
+    pass_registry: ReductionPassRegistry | None = None
+    enabled_passes: Collection[str] | None = None
+    disabled_passes: Collection[str] | None = None
+
+    def __post_init__(self) -> None:
+        if self.pass_registry is None:
+            self.pass_registry = default_pass_registry()
+        if self.enabled_passes is not None:
+            self.enabled_passes = frozenset(self.enabled_passes)
+        if self.disabled_passes is not None:
+            self.disabled_passes = frozenset(self.disabled_passes)
 
     def process_payload(self, payload: dict[str, Any], provider: str = "anthropic") -> dict[str, Any]:
         return self.process_payload_with_stats(payload, provider=provider).payload
 
-    def process_payload_with_stats(self, payload: dict[str, Any], provider: str = "anthropic") -> CleaningResult:
+    def process_payload_with_stats(
+        self,
+        payload: dict[str, Any],
+        provider: str = "anthropic",
+        *,
+        copy_payload: bool | None = None,
+    ) -> CleaningResult:
         seen_content_hashes: dict[str, tuple[int, str]] = {}
-        cleaned_payload = copy.deepcopy(payload)
+        should_copy = (not _IN_PLACE_MUTATION.get()) if copy_payload is None else copy_payload
+        raw_chars = _serialized_length(payload)
+        cleaned_payload = copy.deepcopy(payload) if should_copy else payload
         stats = {
             "tool_outputs_omitted": 0,
             "turns_summarized": 0,
             "cache_control_injected": 0,
         }
 
-        provider_format = get_provider(provider)
-        cleaned_payload = provider_format.clean(self, cleaned_payload, seen_content_hashes, stats=stats)
+        context = ReductionContext(
+            cleaner=self,
+            provider=provider,
+            seen_content_hashes=seen_content_hashes,
+            stats=stats,
+        )
+        cleaned_payload = self.pass_registry.run(
+            cleaned_payload,
+            context,
+            enabled_passes=self.enabled_passes,
+            disabled_passes=self.disabled_passes,
+        )
 
-        try:
-            raw_chars = len(json.dumps(payload))
-            cleaned_chars = len(json.dumps(cleaned_payload))
-            chars_saved = max(0, raw_chars - cleaned_chars)
-        except Exception:
-            chars_saved = 0
+        cleaned_chars = _serialized_length(cleaned_payload) if raw_chars is not None else None
+        chars_saved = max(0, raw_chars - cleaned_chars) if raw_chars is not None and cleaned_chars is not None else 0
 
         return CleaningResult(
             payload=cleaned_payload,

@@ -140,25 +140,25 @@ def _generate(openssl_path: str, ca_cert_path: str, ca_key_path: str, cert_dir: 
 def _sync_mitmproxy_ca(ca_cert_path: str, ca_key_path: str, cert_dir: str) -> None:
     mitm_ca_cert = os.path.join(cert_dir, "mitmproxy-ca-cert.pem")
     mitm_ca_pem = os.path.join(cert_dir, "mitmproxy-ca.pem")
-
-    with contextlib.suppress(OSError):
+    try:
         shutil.copyfile(ca_cert_path, mitm_ca_cert)
-
-    with contextlib.suppress(OSError):
+    except OSError as exc:
+        logger.warning("Failed to sync mitmproxy CA certificate to %s: %s", mitm_ca_cert, exc)
+    try:
         with open(ca_key_path, encoding="utf-8") as kf, open(ca_cert_path, encoding="utf-8") as cf:
             combined = f"{kf.read().strip()}\n{cf.read().strip()}\n"
         pem_fd = os.open(mitm_ca_pem, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _OWNER_ONLY_KEY_FILE_MODE)
         with os.fdopen(pem_fd, "w", encoding="utf-8") as pf:
             pf.write(combined)
         os.chmod(mitm_ca_pem, _OWNER_ONLY_KEY_FILE_MODE)
+    except OSError as exc:
+        logger.warning("Failed to sync mitmproxy CA bundle to %s: %s", mitm_ca_pem, exc)
 
 
 def _ensure_root_ca(cert_dir: str | None = None) -> tuple[str, str, bool]:
     openssl_path = _openssl_binary()
-
     if cert_dir is None:
         cert_dir = os.path.expanduser("~/.holon/certs")
-
     os.makedirs(cert_dir, mode=_OWNER_ONLY_DIR_MODE, exist_ok=True)
     with contextlib.suppress(OSError):
         os.chmod(cert_dir, _OWNER_ONLY_DIR_MODE)

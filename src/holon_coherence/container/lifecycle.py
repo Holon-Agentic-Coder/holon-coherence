@@ -35,9 +35,9 @@ DOCKER_CMD_TIMEOUT_SECONDS = 5.0
 CONTAINER_PROXY_PORT = 8080
 CA_CERT_FILENAME = "mitmproxy-ca-cert.pem"
 CA_PEM_FILENAME = "mitmproxy-ca.pem"
+PRIVATE_CA_KEY_FILENAMES = (CA_PEM_FILENAME, "holon-root-ca.key")
 PRIVATE_DIR_MODE = 0o700
-SHARED_DIR_MODE = 0o777
-SHARED_FILE_MODE = 0o666
+PRIVATE_FILE_MODE = 0o600
 TRUTHY_ENV_VALUES = ("1", "true", "yes", "on")
 FALSY_ENV_VALUES = ("0", "false", "no", "off")
 
@@ -306,44 +306,42 @@ def _mount_dirs(config: ProxyLifecycleConfig) -> tuple[str, str, str]:
     )
 
 
-def _chmod_proxy_dirs(ca_dir: str, cache_dir: str, logs_dir: str, ca_files: bool = False) -> None:
-    targets: list[tuple[str, int]] = [
-        (ca_dir, SHARED_DIR_MODE),
-        (cache_dir, SHARED_DIR_MODE),
-        (logs_dir, SHARED_DIR_MODE),
-    ]
-    if ca_files:
-        with contextlib.suppress(OSError):
-            targets.extend((os.path.join(ca_dir, fname), SHARED_FILE_MODE) for fname in os.listdir(ca_dir))
-    for path, mode in targets:
-        with contextlib.suppress(OSError):
-            os.chmod(path, mode)
-
-
-def _prepare_proxy_directories(ca_dir: str, cache_dir: str, logs_dir: str, *, shared: bool = False) -> None:
-    if shared:
-        for d in (ca_dir, cache_dir, logs_dir):
-            os.makedirs(d, exist_ok=True)
-        _chmod_proxy_dirs(ca_dir, cache_dir, logs_dir)
-        return
+def _prepare_proxy_directories(ca_dir: str, cache_dir: str, logs_dir: str) -> None:
     for d in (ca_dir, cache_dir, logs_dir):
         os.makedirs(d, mode=PRIVATE_DIR_MODE, exist_ok=True)
         with contextlib.suppress(OSError):
             os.chmod(d, PRIVATE_DIR_MODE)
 
 
-def _web_inspector_args(actual_web_port: int | None, web_password: str | None) -> list[str]:
+def _harden_ca_key_files(ca_dir: str) -> None:
+    with contextlib.suppress(OSError):
+        for fname in os.listdir(ca_dir):
+            if fname in PRIVATE_CA_KEY_FILENAMES or fname.endswith(".key"):
+                path = os.path.join(ca_dir, fname)
+                with contextlib.suppress(OSError):
+                    os.chmod(path, PRIVATE_FILE_MODE)
+
+
+def _docker_user_args() -> list[str]:
+    if not sys.platform.startswith("linux"):
+        return []
+    if not (hasattr(os, "getuid") and hasattr(os, "getgid")):
+        return []
+    return ["--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/home/mitmproxy"]
+
+
+def _web_inspector_args(actual_web_port: int | None, env_file: str | None = None) -> list[str]:
     if actual_web_port is None:
         return []
-    return [
-        "-p",
-        f"127.0.0.1:{actual_web_port}:{DEFAULT_WEB_PORT}",
-        "-e",
-        f"HOLON_COHERENCE_WEB_PASSWORD={web_password}",
-    ]
+    args = ["-p", f"127.0.0.1:{actual_web_port}:{DEFAULT_WEB_PORT}"]
+    if env_file:
+        args.extend(["--env-file", env_file])
+    return args
 
 
-def _build_docker_run_args(config: ProxyLifecycleConfig, actual_port: int, actual_web_port: int | None) -> list[str]:
+def _build_docker_run_args(
+    config: ProxyLifecycleConfig, actual_port: int, actual_web_port: int | None, env_file: str | None = None
+) -> list[str]:
     name = config.container_name or get_container_name()
     ca_dir, cache_dir, logs_dir = _mount_dirs(config)
     passive = is_start_passive(config.passive)
@@ -355,6 +353,7 @@ def _build_docker_run_args(config: ProxyLifecycleConfig, actual_port: int, actua
         "--name",
         name,
         *docker_host_alias_args(),
+        *_docker_user_args(),
         "-p",
         f"127.0.0.1:{actual_port}:{CONTAINER_PROXY_PORT}",
         "-v",
@@ -374,7 +373,7 @@ def _build_docker_run_args(config: ProxyLifecycleConfig, actual_port: int, actua
         "-e",
         f"HOLON_PASSIVE_MONITORING={'1' if passive else '0'}",
         *host_local_container_args(config.host_local_spec),
-        *_web_inspector_args(actual_web_port, config.web_password),
+        *_web_inspector_args(actual_web_port, env_file),
         config.image,
         "start",
         "--port",
@@ -411,8 +410,7 @@ class ProxyLifecycle:
 
     def ensure_ca(self) -> tuple[str, str]:
         ca_path, cache_dir, logs_dir = _mount_dirs(self.config)
-        shared = self.config.world_accessible_mounts
-        _prepare_proxy_directories(ca_path, cache_dir, logs_dir, shared=shared)
+        _prepare_proxy_directories(ca_path, cache_dir, logs_dir)
 
         ca_cert = os.path.join(ca_path, CA_CERT_FILENAME)
         ca_pem = os.path.join(ca_path, CA_PEM_FILENAME)
@@ -420,8 +418,7 @@ class ProxyLifecycle:
             with contextlib.suppress(Exception):
                 generate_root_ca(output_dir=ca_path)
 
-        if shared:
-            _chmod_proxy_dirs(ca_path, cache_dir, logs_dir, ca_files=True)
+        _harden_ca_key_files(ca_path)
         return ca_cert, ca_pem
 
     def wait_until_ready(
@@ -443,6 +440,8 @@ class ProxyLifecycle:
             )
 
     def start(self, recreate_if_mismatch: bool = True) -> bool:
+        from holon_coherence.commands.web_token import web_password_env_file
+
         require_docker_daemon()
         existing = self._reconcile_existing(recreate_if_mismatch)
         if existing is _Existing.REUSE:
@@ -451,9 +450,13 @@ class ProxyLifecycle:
         self.prepare()
         port = self.config.port
         print(f"🐳 Starting background optimization proxy container on port {port}...")
-        run_res = subprocess.run(
-            _build_docker_run_args(self.config, port, self.config.web_port), capture_output=True, text=True
-        )
+        secret = self.config.web_password if self.config.web_port is not None else None
+        with web_password_env_file(secret) as env_file:
+            run_res = subprocess.run(
+                _build_docker_run_args(self.config, port, self.config.web_port, env_file),
+                capture_output=True,
+                text=True,
+            )
         if run_res.returncode != 0:
             print(f"Error starting proxy container: {run_res.stderr.strip()}", file=sys.stderr)
             sys.exit(run_res.returncode)
@@ -462,50 +465,47 @@ class ProxyLifecycle:
         return existing is _Existing.NONE
 
     def launch(self) -> None:
-        docker_cmd = _build_docker_run_args(self.config, self.config.port, self.config.web_port)
-        if self.config.detach:
+        from holon_coherence.commands.web_token import web_password_env_file
+
+        secret = self.config.web_password if self.config.web_port is not None else None
+        with web_password_env_file(secret) as env_file:
+            docker_cmd = _build_docker_run_args(self.config, self.config.port, self.config.web_port, env_file)
+            if self.config.detach:
+                try:
+                    subprocess.run(docker_cmd, check=True)
+                except subprocess.CalledProcessError as e:
+                    self._launch_failed(e)
+                print("✅ holon-coherence container running in background.")
+                print("Use 'holon-coherence logs -f' to stream logs or 'holon-coherence stop' to shut down.")
+                return
             try:
-                subprocess.run(docker_cmd, check=True)
+                subprocess.run(docker_cmd)
             except subprocess.CalledProcessError as e:
                 self._launch_failed(e)
-            print("✅ holon-coherence container running in background.")
-            print("Use 'holon-coherence logs -f' to stream logs or 'holon-coherence stop' to shut down.")
-            return
-        try:
-            subprocess.run(docker_cmd)
-        except subprocess.CalledProcessError as e:
-            self._launch_failed(e)
-        except KeyboardInterrupt:
-            print("\nShutting down holon-coherence container...")
-            subprocess.run(
-                ["docker", "stop", self.container_name],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            except KeyboardInterrupt:
+                print("\nShutting down holon-coherence container...")
+                subprocess.run(
+                    ["docker", "stop", self.container_name],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
 
     def serve_in_container(self, banner: str | None = None) -> None:
+        from holon_coherence.commands.web_token import mitmweb_password_config
+
         os.environ[HOST_LOCAL_ENV_VAR] = self.config.host_local_spec
         web_port = self.config.web_port
         tool = "mitmweb" if web_port is not None else "mitmdump"
         cmd = [_resolve_proxy_tool(tool), "-s", _addon_path(), "--listen-port", str(self.config.port)]
         if web_port is not None:
-            cmd.extend(
-                [
-                    "--web-host",
-                    "0.0.0.0",
-                    "--web-port",
-                    str(web_port),
-                    "--set",
-                    f"web_password={self.config.web_password}",
-                    "--set",
-                    "web_open_browser=false",
-                ]
-            )
+            cmd.extend(["--web-host", "0.0.0.0", "--web-port", str(web_port), "--set", "web_open_browser=false"])
         print(f"🚀 Starting holon-coherence proxy via {tool} on port {self.config.port}...")
         if banner:
             print(banner)
+        secret = self.config.web_password if web_port is not None else None
         try:
-            subprocess.run(cmd, check=True)
+            with mitmweb_password_config(secret):
+                subprocess.run(cmd, check=True)
         except KeyboardInterrupt:
             print("\nShutting down holon-coherence proxy.")
 
