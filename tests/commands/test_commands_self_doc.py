@@ -31,6 +31,7 @@ COMMANDS_SELF_DOC_FILES: tuple[str, ...] = (
     "tests/commands/test_metrics.py",
     "tests/commands/test_runner.py",
     "tests/commands/test_start.py",
+    "tests/commands/test_start_web.py",
     "tests/commands/test_stop.py",
     "tests/commands/test_web_token.py",
     "tests/commands/test_commands_self_doc.py",

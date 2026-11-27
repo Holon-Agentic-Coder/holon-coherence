@@ -1,0 +1,28 @@
+{
+  "kb_id": "KB-pattern-declarative-proxy-step-pipeline",
+  "kb_type": "pattern",
+  "version": "1.0",
+  "created_ts": "2026-11-27T06:25:46.283627+00:00",
+  "updated_ts": "2026-11-27T06:25:46.283627+00:00",
+  "created_by": "holon-coherence-audit",
+  "status": "active",
+  "evidence": {
+    "ledger_refs": [],
+    "success_count": 1,
+    "failure_count": 0,
+    "ladder_state": "curated"
+  },
+  "tags": [
+    "proxy",
+    "architecture",
+    "pipeline",
+    "stepspec",
+    "pattern"
+  ],
+  "human_approved": true,
+  "payload": {
+    "name": "Declarative Proxy StepSpec Pipeline",
+    "description": "Express MITM proxy request and response handling as declarative, ordered tuples of frozen StepSpec descriptors (REQUEST_PRELUDE, REQUEST_GUARDED, RESPONSE_SUCCESS, RESPONSE_FAILURE) executed via run_steps and run_guarded with explicit Outcome.CONTINUE / Outcome.HALT control flow and mode gating ('always', 'active', 'passive') in src/holon_coherence/proxy/steps/. This replaces monolithic imperative addon hooks in src/holon_coherence/proxy/addon.py with small, single-responsibility steps and explicit ErrorPolicy handling (REQUEST_POLICY, SUCCESS_POLICY, FAILURE_POLICY).",
+    "action": "Add or modify proxy lifecycle behavior by introducing or updating focused StepSpec functions under src/holon_coherence/proxy/steps/, registering them in REQUEST_PRELUDE, REQUEST_GUARDED, RESPONSE_SUCCESS, or RESPONSE_FAILURE in src/holon_coherence/proxy/steps/__init__.py, and verifying both unit step contracts and end-to-end addon parity in tests/proxy/test_steps.py and tests/proxy/test_addon_pipeline_parity.py."
+  }
+}

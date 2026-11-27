@@ -20,6 +20,7 @@ CORE_SELF_DOC_FILES: tuple[str, ...] = (
     "src/holon_coherence/openbrain_memory.py",
     "src/holon_coherence/payload_cleaner.py",
     "src/holon_coherence/rag_indexer.py",
+    "src/holon_coherence/reduction_passes.py",
     "src/holon_coherence/ringer_orchestrator.py",
     "tests/test_core_self_doc.py",
 )
