@@ -66,6 +66,30 @@ class TestFindSystemCABundle:
         monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(real_sys_ca))
         assert find_system_ca_bundle() == str(real_sys_ca)
 
+    def test_find_system_ca_bundle_logs_debug_on_ssl_verify_paths_error(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+        monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
+        monkeypatch.delenv("CURL_CA_BUNDLE", raising=False)
+        fallback_ca = tmp_path / "fallback-ca.crt"
+        fallback_ca.write_text("fallback")
+
+        with (
+            patch("ssl.get_default_verify_paths", side_effect=OSError("ssl paths unavailable")),
+            patch.dict("sys.modules", {"certifi": None}),
+            patch("holon_coherence.commands.ca.SYSTEM_CA_BUNDLE_CANDIDATE_PATHS", (str(fallback_ca),)),
+            caplog.at_level(logging.DEBUG, logger="holon_coherence.commands.ca"),
+        ):
+            result = find_system_ca_bundle()
+
+        assert result == str(fallback_ca)
+        debug_msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG]
+        assert any("ssl paths unavailable" in msg for msg in debug_msgs)
+
 
 class TestGetOrCreateMergedCABundle:
     def test_merged_ca_bundle_generation(self, tmp_path: Path) -> None:

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -46,6 +48,7 @@ __all__ = [
 ]
 
 CONTAINER_NAME = DEFAULT_CONTAINER_NAME
+logger = logging.getLogger(__name__)
 
 
 def stop_proxy_container(container_name: str | None = None) -> None:
@@ -78,8 +81,8 @@ def get_container_mapped_port(container_name: str | None = None, container_port:
             first_line = res.stdout.strip().splitlines()[0]
             port_str = first_line.split(":")[-1].strip()
             return int(port_str)
-    except Exception:
-        pass
+    except (subprocess.SubprocessError, OSError, ValueError) as exc:
+        logger.debug("Failed to resolve mapped port for %s: %s", name, exc)
     return None
 
 
@@ -138,9 +141,8 @@ def handle_status(
         print("   mitmweb inspector: not running")
         return retcode
 
-    proxy_port_str = os.getenv("HOLON_PROXY_PORT", "8080")
     try:
-        fallback_proxy_port = int(proxy_port_str)
+        fallback_proxy_port = int(os.getenv("HOLON_PROXY_PORT", "8080"))
     except ValueError:
         fallback_proxy_port = 8080
     endpoints = resolve_endpoints(target_container, fallback_proxy_port=fallback_proxy_port)
@@ -149,10 +151,8 @@ def handle_status(
     print_endpoints(endpoints, container_name=target_container)
 
     try:
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{proxy_port}/holon/api/metrics",
-            headers={"User-Agent": "holon-coherence-cli"},
-        )
+        metrics_url = f"http://127.0.0.1:{proxy_port}/holon/api/metrics"
+        req = urllib.request.Request(metrics_url, headers={"User-Agent": "holon-coherence-cli"})
         with urllib.request.urlopen(req, timeout=1.0) as resp:
             if resp.status == 200:
                 data = json.loads(resp.read().decode("utf-8"))
@@ -166,8 +166,8 @@ def handle_status(
                     f"   Tool Calls Saved: {pruned:,} | Tokens Reduced: {reduced:,} | "
                     f"Cache Hit Rate: {hit_rate:.1f}% | Prefill: {prefill_tps:.1f} t/s | Output: {tps:.1f} t/s"
                 )
-    except Exception:
-        pass
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError, json.JSONDecodeError) as exc:
+        logger.debug("Failed to fetch proxy metrics on port %s: %s", proxy_port, exc)
     return retcode
 
 
