@@ -10,13 +10,18 @@ from holon_coherence.commands.runner import build_proxy_env
 from holon_coherence.commands.web_token import resolve_web_password
 from holon_coherence.ringer_orchestrator import get_default_architect_model, get_default_executor_model
 from holon_coherence.settings import (
+    DEFAULT_AGENT_ID,
+    DEFAULT_AGENT_ROLE,
     DEFAULT_ARCHITECT_MODEL,
     DEFAULT_CONTAINER_NAME,
     DEFAULT_EXECUTOR_MODEL,
     DEFAULT_PROXY_PORT,
+    DEFAULT_WIRE_LOG_MAX_PENDING,
     CoherenceSettings,
     parse_bool,
+    parse_non_negative_int,
     parse_optional_path,
+    parse_optional_port,
     parse_optional_str,
     parse_path,
     parse_port,
@@ -30,6 +35,7 @@ def test_from_env_defaults() -> None:
     assert settings.api_token is None
     assert settings.web_inspector is False
     assert settings.proxy_port == DEFAULT_PROXY_PORT == 8080
+    assert settings.proxy_port_override is None
     assert settings.container_name == DEFAULT_CONTAINER_NAME == "holon-coherence-proxy"
     assert settings.in_container is False
     assert settings.token_reduction is True
@@ -38,6 +44,13 @@ def test_from_env_defaults() -> None:
     assert settings.ca_cert is None
     assert isinstance(settings.cache_dir, Path)
     assert isinstance(settings.wire_log_dir, Path)
+    assert settings.wire_log_dir_override is None
+    assert settings.wire_log_max_pending == DEFAULT_WIRE_LOG_MAX_PENDING == 256
+    assert settings.wire_log_base_dir is None
+    assert settings.agent_id == DEFAULT_AGENT_ID == "agy"
+    assert settings.agent_role == DEFAULT_AGENT_ROLE == "executor"
+    assert settings.agy_model is None
+    assert settings.local_model is None
     assert settings.local_llm_base is None
     assert settings.architect_model == DEFAULT_ARCHITECT_MODEL == "claude-3-5-sonnet"
     assert settings.executor_model == DEFAULT_EXECUTOR_MODEL == "gemini-3.5-flash"
@@ -71,6 +84,52 @@ def test_parse_port_valid(raw: str, expected: int) -> None:
 @pytest.mark.parametrize("raw", [None, "0", "-1", "65536", "abc", "", "   "])
 def test_parse_port_invalid_or_out_of_range_falls_back(raw: str | None) -> None:
     assert parse_port(raw, 8080) == 8080
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("1", 1), ("8080", 8080), (" 65535 ", 65535)])
+def test_parse_optional_port_valid(raw: str, expected: int) -> None:
+    assert parse_optional_port(raw) == expected
+
+
+@pytest.mark.parametrize("raw", [None, "", "   ", "0", "-1", "65536", "abc"])
+def test_parse_optional_port_invalid_returns_none(raw: str | None) -> None:
+    assert parse_optional_port(raw) is None
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("0", 0), ("512", 512), (" 128 ", 128)])
+def test_parse_non_negative_int_valid(raw: str, expected: int) -> None:
+    assert parse_non_negative_int(raw, 256) == expected
+
+
+@pytest.mark.parametrize("raw", [None, "", "   ", "-1", "abc"])
+def test_parse_non_negative_int_invalid_falls_back(raw: str | None) -> None:
+    assert parse_non_negative_int(raw, 256) == 256
+
+
+def test_from_env_parses_proxy_and_wire_log_fields(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    settings = CoherenceSettings.from_env(
+        {
+            "HOLON_PROXY_PORT": "9095",
+            "WIRE_LOG_DIR": "  ~/custom-wire  ",
+            "WIRE_LOG_MAX_PENDING": "0",
+            "HOLON_WIRE_LOG_BASE_DIR": "  ~/wire-base  ",
+            "HOLON_AGENT_ID": "  custom-agent  ",
+            "HOLON_ROLE": "  architect  ",
+            "AGY_MODEL": "  gemini-2.5-pro  ",
+            "HOLON_LOCAL_MODEL": "  qwen2.5-coder  ",
+        }
+    )
+    assert settings.proxy_port == 9095
+    assert settings.proxy_port_override == 9095
+    assert settings.wire_log_dir == tmp_path / "custom-wire"
+    assert settings.wire_log_dir_override == "~/custom-wire"
+    assert settings.wire_log_max_pending == 0
+    assert settings.wire_log_base_dir == tmp_path / "wire-base"
+    assert settings.agent_id == "custom-agent"
+    assert settings.agent_role == "architect"
+    assert settings.agy_model == "gemini-2.5-pro"
+    assert settings.local_model == "qwen2.5-coder"
 
 
 def test_string_and_path_parsing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

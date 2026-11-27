@@ -3,11 +3,15 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import logging
+import os
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from holon_coherence.metrics_math import DEFAULT_WIRE_LOG_DIR
 from holon_coherence.proxy.wire_log import (
     WIRE_LOG_MAX_PENDING,
     _pending_wire_log_futures,
@@ -177,3 +181,39 @@ def test_log_telemetry_logs_debug_and_falls_back_on_ctx_runtime_error(
 
     assert any(r.levelno == logging.DEBUG and "ctx log unavailable" in r.getMessage() for r in caplog.records)
     assert any(r.levelno == logging.INFO and "telemetry fallback message" in r.getMessage() for r in caplog.records)
+
+
+def test_wire_log_env_resolution_is_dynamic_without_import_freeze(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = dict(os.environ)
+    env["WIRE_LOG_DIR"] = str(tmp_path / "env_before_import")
+    code = "import holon_coherence.proxy.wire_log as w; print(w.WIRE_LOG_DIR)"
+    result = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True)
+    assert result.stdout.strip().splitlines()[-1] == DEFAULT_WIRE_LOG_DIR
+
+    monkeypatch.setenv("ENABLE_WIRE_LOGGING", "false")
+    assert is_wire_logging_enabled() is False
+    monkeypatch.setenv("ENABLE_WIRE_LOGGING", "true")
+    assert is_wire_logging_enabled() is True
+
+    monkeypatch.setenv("HOLON_PASSIVE_MONITORING", "0")
+    monkeypatch.setenv("COHERENCE_TOKEN_REDUCTION", "0")
+    assert is_passive_monitoring() is True
+    monkeypatch.setenv("COHERENCE_TOKEN_REDUCTION", "1")
+    assert is_passive_monitoring() is False
+
+    dir_a = tmp_path / "dyn_a"
+    dir_b = tmp_path / "dyn_b"
+    monkeypatch.setenv("WIRE_LOG_MAX_PENDING", "0")
+    get_dropped_wire_log_count(reset=True)
+    monkeypatch.setenv("WIRE_LOG_DIR", str(dir_a))
+    dump_wire_transaction({"turn_id": 1, "flow_id": "dropped"}).result(timeout=5)
+    assert get_dropped_wire_log_count(reset=True) == 1
+    assert not dir_a.exists()
+
+    monkeypatch.setenv("WIRE_LOG_MAX_PENDING", "4")
+    monkeypatch.setenv("WIRE_LOG_DIR", str(dir_b))
+    dump_wire_transaction({"turn_id": 2, "flow_id": "written"}).result(timeout=5)
+    flush_wire_logs(timeout=5.0)
+    assert (dir_b / "turn_2_written.json").is_file()
