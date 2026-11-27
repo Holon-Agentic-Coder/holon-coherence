@@ -9,3 +9,15 @@ dist
 build
 *.egg-info
 .holon
+tests
+docs
+plans
+executions
+holon-knowledge
+.github
+scripts
+config
+Makefile
+environment.yml
+*.md
+!README.md
