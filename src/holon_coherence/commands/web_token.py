@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
-import json
 import os
 import secrets
-import tempfile
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from typing import Any
 
 from holon_coherence.commands.docker_ops import (
@@ -21,15 +18,34 @@ from holon_coherence.commands.endpoints import (
     inspector_url,
     token_recovery_command,
 )
+from holon_coherence.container.web_token import (
+    MITMPROXY_CONFDIR as MITMPROXY_CONFDIR,
+)
+from holon_coherence.container.web_token import (
+    MITMPROXY_CONFIG_FILENAME as MITMPROXY_CONFIG_FILENAME,
+)
+from holon_coherence.container.web_token import (
+    WEB_PASSWORD_ENV_VAR as WEB_PASSWORD_ENV_VAR,
+)
+from holon_coherence.container.web_token import (
+    WEB_TOKEN_DIR_MODE as WEB_TOKEN_DIR_MODE,
+)
+from holon_coherence.container.web_token import (
+    WEB_TOKEN_FILE_MODE as WEB_TOKEN_FILE_MODE,
+)
+from holon_coherence.container.web_token import (
+    mitmweb_password_config as mitmweb_password_config,
+)
+from holon_coherence.container.web_token import (
+    web_password_env_file as web_password_env_file,
+)
+from holon_coherence.container.web_token import (
+    write_private_file as write_private_file,
+)
 from holon_coherence.settings import CoherenceSettings
 
 WEB_TOKEN_PATH = os.path.expanduser("~/.holon/web-token")
-WEB_TOKEN_DIR_MODE = 0o700
-WEB_TOKEN_FILE_MODE = 0o600
 GENERATED_WEB_TOKEN_BYTES = 16
-WEB_PASSWORD_ENV_VAR = "HOLON_COHERENCE_WEB_PASSWORD"
-MITMPROXY_CONFDIR = "~/.mitmproxy"
-MITMPROXY_CONFIG_FILENAME = "config.yaml"
 
 
 def resolve_web_password(cli_password: str | None = None) -> str:
@@ -41,69 +57,8 @@ def resolve_web_password(cli_password: str | None = None) -> str:
     return secrets.token_urlsafe(GENERATED_WEB_TOKEN_BYTES)
 
 
-def write_private_file(path: str, content: str) -> str:
-    parent_dir = os.path.dirname(path)
-    if parent_dir:
-        os.makedirs(parent_dir, mode=WEB_TOKEN_DIR_MODE, exist_ok=True)
-        with contextlib.suppress(OSError):
-            os.chmod(parent_dir, WEB_TOKEN_DIR_MODE)
-
-    fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, WEB_TOKEN_FILE_MODE)
-    try:
-        with open(fd, "w", encoding="utf-8") as f:
-            with contextlib.suppress(OSError, AttributeError):
-                os.fchmod(f.fileno(), WEB_TOKEN_FILE_MODE)
-            f.write(content)
-    finally:
-        with contextlib.suppress(OSError):
-            os.chmod(path, WEB_TOKEN_FILE_MODE)
-    return path
-
-
 def save_web_token(token: str, token_path: str = WEB_TOKEN_PATH) -> str:
     return write_private_file(token_path, token.strip())
-
-
-@contextlib.contextmanager
-def web_password_env_file(web_password: str | None) -> Iterator[str | None]:
-    if web_password is None:
-        yield None
-        return
-    sanitized = web_password.replace("\r", "").replace("\n", "")
-    fd, env_path = tempfile.mkstemp(prefix="holon-web-env-", suffix=".env")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(f"{WEB_PASSWORD_ENV_VAR}={sanitized}\n")
-        with contextlib.suppress(OSError):
-            os.chmod(env_path, WEB_TOKEN_FILE_MODE)
-        yield env_path
-    finally:
-        with contextlib.suppress(OSError):
-            os.unlink(env_path)
-
-
-@contextlib.contextmanager
-def mitmweb_password_config(web_password: str | None, confdir: str = MITMPROXY_CONFDIR) -> Iterator[str | None]:
-    if web_password is None:
-        yield None
-        return
-    target_dir = os.path.expanduser(confdir)
-    config_path = os.path.join(target_dir, MITMPROXY_CONFIG_FILENAME)
-    previous: str | None = None
-    if os.path.isfile(config_path):
-        with contextlib.suppress(OSError), open(config_path, encoding="utf-8") as f:
-            previous = f.read()
-    kept_lines = [line for line in (previous or "").splitlines() if not line.lstrip().startswith("web_password:")]
-    kept_lines.append(f"web_password: {json.dumps(web_password)}")
-    write_private_file(config_path, "\n".join(kept_lines) + "\n")
-    try:
-        yield config_path
-    finally:
-        if previous is None:
-            with contextlib.suppress(OSError):
-                os.unlink(config_path)
-        else:
-            write_private_file(config_path, previous)
 
 
 def get_active_web_token(token_path: str = WEB_TOKEN_PATH) -> str | None:

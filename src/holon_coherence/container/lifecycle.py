@@ -16,6 +16,7 @@ from typing import Any, NoReturn
 
 from holon_coherence.ca_generator import generate_root_ca
 from holon_coherence.container.image import ensure_docker_image
+from holon_coherence.container.web_token import mitmweb_password_config, web_password_env_file
 from holon_coherence.host_local import (
     GATEWAY_HOSTNAME,
     HOST_LOCAL_ENV_VAR,
@@ -440,8 +441,6 @@ class ProxyLifecycle:
             )
 
     def start(self, recreate_if_mismatch: bool = True) -> bool:
-        from holon_coherence.commands.web_token import web_password_env_file
-
         require_docker_daemon()
         existing = self._reconcile_existing(recreate_if_mismatch)
         if existing is _Existing.REUSE:
@@ -465,8 +464,6 @@ class ProxyLifecycle:
         return existing is _Existing.NONE
 
     def launch(self) -> None:
-        from holon_coherence.commands.web_token import web_password_env_file
-
         secret = self.config.web_password if self.config.web_port is not None else None
         with web_password_env_file(secret) as env_file:
             docker_cmd = _build_docker_run_args(self.config, self.config.port, self.config.web_port, env_file)
@@ -491,8 +488,6 @@ class ProxyLifecycle:
                 )
 
     def serve_in_container(self, banner: str | None = None) -> None:
-        from holon_coherence.commands.web_token import mitmweb_password_config
-
         os.environ[HOST_LOCAL_ENV_VAR] = self.config.host_local_spec
         web_port = self.config.web_port
         tool = "mitmweb" if web_port is not None else "mitmdump"

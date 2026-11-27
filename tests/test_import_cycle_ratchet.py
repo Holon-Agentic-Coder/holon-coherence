@@ -9,8 +9,6 @@ PACKAGE_ROOT = REPO_ROOT / "src" / "holon_coherence"
 PACKAGE_NAME = "holon_coherence"
 
 BASELINE_CYCLE_EDGES: dict[tuple[str, str], int] = {
-    ("commands", "container"): 4,
-    ("container", "commands"): 3,
     ("parsers", "providers"): 3,
     ("providers", "parsers"): 4,
 }
