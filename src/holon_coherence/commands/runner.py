@@ -11,15 +11,15 @@ from typing import Any
 
 from holon_coherence.commands.ca import CA_ENV_VARS, get_or_create_merged_ca_bundle
 from holon_coherence.host_local import parse_no_proxy
+from holon_coherence.settings import CoherenceSettings
 
 NO_PROXY_HOSTS = "localhost,127.0.0.1,::1,169.254.169.254,api.github.com,github.com"
 
 
 def merge_no_proxy_values(env: dict[str, str] | None = None) -> str:
-    environ = os.environ if env is None else env
+    settings = CoherenceSettings.from_env(env)
     entries = [entry.strip() for entry in NO_PROXY_HOSTS.split(",") if entry.strip()]
-    for var in ("NO_PROXY", "no_proxy"):
-        value = environ.get(var)
+    for value in (settings.no_proxy, settings.no_proxy_lower):
         if value:
             entries.extend(entry.strip() for entry in value.split(",") if entry.strip())
     return ",".join(dict.fromkeys(entries))
@@ -27,9 +27,9 @@ def merge_no_proxy_values(env: dict[str, str] | None = None) -> str:
 
 def _resolve_ca_certificate_path(ca_cert_path: str | None) -> str:
     if ca_cert_path is None:
-        env_ca = os.environ.get("HOLON_CA_CERT")
-        if env_ca and os.path.exists(os.path.expanduser(env_ca)):
-            return os.path.expanduser(env_ca)
+        env_ca = CoherenceSettings.from_env().ca_cert
+        if env_ca is not None and os.path.exists(str(env_ca)):
+            return str(env_ca)
         ca_cert = os.path.expanduser("~/.holon/proxy-ca/mitmproxy-ca-cert.pem")
         if not os.path.exists(ca_cert):
             alt_ca = os.path.expanduser("~/.holon/certs/holon-root-ca.crt")
@@ -70,8 +70,9 @@ def build_proxy_env(
         merged_no_proxy = ",".join(entry for entry in parse_no_proxy(merged_no_proxy) if entry.lower() not in dropped)
     env["NO_PROXY"] = merged_no_proxy
     env["no_proxy"] = merged_no_proxy
-    env["COHERENCE_TOKEN_REDUCTION"] = os.environ.get("COHERENCE_TOKEN_REDUCTION", "1")
-    env["HOLON_PASSIVE_MONITORING"] = os.environ.get("HOLON_PASSIVE_MONITORING", "0")
+    settings = CoherenceSettings.from_env()
+    env["COHERENCE_TOKEN_REDUCTION"] = "1" if settings.token_reduction else "0"
+    env["HOLON_PASSIVE_MONITORING"] = "1" if settings.passive_monitoring else "0"
 
     ca_cert = _resolve_ca_certificate_path(ca_cert_path)
     if os.path.exists(ca_cert):

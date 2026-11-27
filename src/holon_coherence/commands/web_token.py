@@ -21,6 +21,7 @@ from holon_coherence.commands.endpoints import (
     inspector_url,
     token_recovery_command,
 )
+from holon_coherence.settings import CoherenceSettings
 
 WEB_TOKEN_PATH = os.path.expanduser("~/.holon/web-token")
 WEB_TOKEN_DIR_MODE = 0o700
@@ -34,7 +35,7 @@ MITMPROXY_CONFIG_FILENAME = "config.yaml"
 def resolve_web_password(cli_password: str | None = None) -> str:
     if cli_password:
         return cli_password
-    env_password = os.getenv(WEB_PASSWORD_ENV_VAR)
+    env_password = CoherenceSettings.from_env().web_password
     if env_password:
         return env_password
     return secrets.token_urlsafe(GENERATED_WEB_TOKEN_BYTES)
