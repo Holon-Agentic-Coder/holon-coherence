@@ -3,7 +3,9 @@ from __future__ import annotations
 import copy
 import json
 import logging
-from collections.abc import Collection
+from collections.abc import Collection, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,6 +28,23 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_RECENT_TURNS_TO_KEEP = 10
 _RECENT_TURNS_TO_KEEP = _DEFAULT_RECENT_TURNS_TO_KEEP
+_IN_PLACE_MUTATION: ContextVar[bool] = ContextVar("_in_place_mutation", default=False)
+
+
+@contextmanager
+def in_place_cleaning() -> Iterator[None]:
+    token = _IN_PLACE_MUTATION.set(True)
+    try:
+        yield
+    finally:
+        _IN_PLACE_MUTATION.reset(token)
+
+
+def _serialized_length(payload: Any) -> int | None:
+    try:
+        return len(json.dumps(payload))
+    except Exception:
+        return None
 
 
 @dataclass
@@ -58,9 +77,17 @@ class JSONContextCleaner:
     def process_payload(self, payload: dict[str, Any], provider: str = "anthropic") -> dict[str, Any]:
         return self.process_payload_with_stats(payload, provider=provider).payload
 
-    def process_payload_with_stats(self, payload: dict[str, Any], provider: str = "anthropic") -> CleaningResult:
+    def process_payload_with_stats(
+        self,
+        payload: dict[str, Any],
+        provider: str = "anthropic",
+        *,
+        copy_payload: bool | None = None,
+    ) -> CleaningResult:
         seen_content_hashes: dict[str, tuple[int, str]] = {}
-        cleaned_payload = copy.deepcopy(payload)
+        should_copy = (not _IN_PLACE_MUTATION.get()) if copy_payload is None else copy_payload
+        raw_chars = _serialized_length(payload)
+        cleaned_payload = copy.deepcopy(payload) if should_copy else payload
         stats = {
             "tool_outputs_omitted": 0,
             "turns_summarized": 0,
@@ -80,12 +107,8 @@ class JSONContextCleaner:
             disabled_passes=self.disabled_passes,
         )
 
-        try:
-            raw_chars = len(json.dumps(payload))
-            cleaned_chars = len(json.dumps(cleaned_payload))
-            chars_saved = max(0, raw_chars - cleaned_chars)
-        except Exception:
-            chars_saved = 0
+        cleaned_chars = _serialized_length(cleaned_payload) if raw_chars is not None else None
+        chars_saved = max(0, raw_chars - cleaned_chars) if raw_chars is not None and cleaned_chars is not None else 0
 
         return CleaningResult(
             payload=cleaned_payload,
