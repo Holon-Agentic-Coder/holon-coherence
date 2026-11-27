@@ -1,19 +1,25 @@
 import logging
-import os
 from typing import Any
+
+from holon_coherence.settings import (
+    DEFAULT_ARCHITECT_MODEL as DEFAULT_ARCHITECT_MODEL,
+)
+from holon_coherence.settings import (
+    DEFAULT_EXECUTOR_MODEL as DEFAULT_EXECUTOR_MODEL,
+)
+from holon_coherence.settings import (
+    CoherenceSettings,
+)
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ARCHITECT_MODEL = "claude-3-5-sonnet"
-DEFAULT_EXECUTOR_MODEL = "gemini-3.5-flash"
-
 
 def get_default_architect_model() -> str:
-    return os.environ.get("HOLON_ARCHITECT_MODEL", DEFAULT_ARCHITECT_MODEL)
+    return CoherenceSettings.from_env().architect_model
 
 
 def get_default_executor_model() -> str:
-    return os.environ.get("HOLON_EXECUTOR_MODEL", DEFAULT_EXECUTOR_MODEL)
+    return CoherenceSettings.from_env().executor_model
 
 
 class SubtaskResult:
