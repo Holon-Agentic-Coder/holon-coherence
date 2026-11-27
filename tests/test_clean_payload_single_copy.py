@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import ast
 import copy
 import importlib
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -11,6 +13,17 @@ import pytest
 import holon_coherence.payload_cleaner as payload_cleaner_mod
 from holon_coherence.mitm_addon import MitmproxyAddon
 from holon_coherence.payload_cleaner import JSONContextCleaner
+from holon_coherence.providers.anthropic import (
+    AnthropicProvider,
+    inject_anthropic_cache_control,
+    sanitize_and_normalize_cache_controls,
+)
+from holon_coherence.providers.gemini import GeminiProvider
+from holon_coherence.providers.openai import OpenAIProvider
+from holon_coherence.providers.translation import (
+    translate_gemini_to_openai_request,
+    translate_openai_to_gemini_response,
+)
 from holon_coherence.proxy.steps.base import Outcome, RequestContext
 from holon_coherence.proxy.steps.clean_payload import clean_payload, snapshot_request
 from holon_coherence.reduction_passes import ReductionContext, ReductionPassRegistry
@@ -274,3 +287,227 @@ def test_in_place_context_resets_after_intercept_exception(tmp_path: Any, monkey
     assert caller_payload == caller_expected
     assert result.payload != caller_expected
     assert result.chars_saved > 0
+
+
+def _forbid_deepcopy(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fail(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("unexpected copy.deepcopy")
+
+    monkeypatch.setattr(copy, "deepcopy", _fail)
+
+
+def test_anthropic_provider_clean_zero_deepcopy_and_caller_immutability(monkeypatch: pytest.MonkeyPatch) -> None:
+    repeated = "anthropic repeated block output " * 10
+    payload = {
+        "model": "claude-3-5-sonnet-20241022",
+        "system": [
+            {"type": "text", "text": "sys-a", "cache_control": {"type": "ephemeral", "ttl": "invalid"}},
+            {"type": "text", "text": "sys-b", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+        ],
+        "tools": [
+            {"name": "t1", "input_schema": {"type": "object"}, "cache_control": {"type": "ephemeral"}},
+            {"name": "t2", "input_schema": {"type": "object"}, "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+            {"name": "t3", "input_schema": {"type": "object"}, "cache_control": {"type": "ephemeral"}},
+        ],
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": repeated, "cache_control": {"type": "ephemeral"}}]},
+            {"role": "assistant", "content": "ok1"},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "u1", "content": repeated}]},
+            {"role": "user", "content": [{"type": "text", "text": repeated}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "u2", "content": repeated}]},
+            {"role": "assistant", "content": "ok2"},
+            {"role": "user", "content": "recent-1"},
+            {"role": "assistant", "content": "recent-2"},
+        ],
+    }
+    expected = copy.deepcopy(payload)
+    _forbid_deepcopy(monkeypatch)
+
+    provider = AnthropicProvider()
+    cleaner = SimpleNamespace(
+        enable_deduplication=True,
+        enable_prompt_caching=True,
+        max_turns=5,
+        recent_turns_to_keep=2,
+    )
+    stats = {"tool_outputs_omitted": 0, "turns_summarized": 0, "cache_control_injected": 0}
+    cleaned = provider.clean(cleaner, payload, {}, stats=stats)
+
+    assert payload == expected
+    assert stats["tool_outputs_omitted"] >= 1
+    assert stats["turns_summarized"] >= 1
+    cleaned["messages"][0]["role"] = "mutated"
+    cleaned["messages"][0]["content"][0]["text"] = "mutated"
+    cleaned["system"][0]["cache_control"]["ttl"] = "99h"
+    cleaned["tools"][0]["cache_control"]["type"] = "mutated"
+    assert payload == expected
+
+    sanitized = sanitize_and_normalize_cache_controls(payload)
+    injected = inject_anthropic_cache_control(payload, stats={"cache_control_injected": 0})
+    sanitized["system"][0]["text"] = "mutated"
+    injected["tools"][-1]["name"] = "mutated"
+    assert payload == expected
+
+    no_dedup_cleaner = SimpleNamespace(
+        enable_deduplication=False,
+        enable_prompt_caching=False,
+        max_turns=100,
+        recent_turns_to_keep=2,
+    )
+    cleaned_no_dedup = provider.clean(no_dedup_cleaner, payload, {}, stats=None)
+    cleaned_no_dedup["messages"][0]["content"][0]["text"] = "mutated"
+    assert payload == expected
+
+
+def test_gemini_provider_clean_zero_deepcopy_and_caller_immutability(monkeypatch: pytest.MonkeyPatch) -> None:
+    repeated_text = "gemini repeated text payload " * 10
+    repeated_resp = {"output": "gemini repeated tool response " * 10}
+    payload = {
+        "contents": [
+            {"role": "user", "parts": [{"text": repeated_text}]},
+            {"role": "model", "parts": [{"text": "calling tool"}]},
+            {"role": "user", "parts": [{"functionResponse": {"name": "read", "response": repeated_resp}}]},
+            {"role": "user", "parts": [{"functionResponse": {"name": "read", "response": dict(repeated_resp)}}]},
+            {"role": "user", "parts": [{"text": repeated_text}]},
+            {"role": "model", "parts": [{"text": "done"}]},
+            {"role": "user", "parts": [{"text": "final question"}]},
+        ]
+    }
+    expected = copy.deepcopy(payload)
+    _forbid_deepcopy(monkeypatch)
+
+    provider = GeminiProvider()
+    cleaner = SimpleNamespace(enable_deduplication=True, max_turns=4, recent_turns_to_keep=2)
+    stats = {"tool_outputs_omitted": 0, "turns_summarized": 0}
+    cleaned = provider.clean(cleaner, payload, {}, stats=stats)
+
+    assert payload == expected
+    assert stats["tool_outputs_omitted"] >= 2
+    assert stats["turns_summarized"] >= 1
+    cleaned["contents"][0]["parts"][0]["text"] = "mutated"
+    assert payload == expected
+
+    dedup_only_cleaner = SimpleNamespace(enable_deduplication=True, max_turns=100, recent_turns_to_keep=2)
+    cleaned_dedup = provider.clean(dedup_only_cleaner, payload, {}, stats={"tool_outputs_omitted": 0})
+    cleaned_dedup["contents"][2]["parts"][0]["functionResponse"]["response"] = {"mutated": True}
+    assert payload == expected
+
+    no_dedup_cleaner = SimpleNamespace(enable_deduplication=False, max_turns=100, recent_turns_to_keep=2)
+    cleaned_no_dedup = provider.clean(no_dedup_cleaner, payload, {}, stats=None)
+    cleaned_no_dedup["contents"][0]["role"] = "mutated"
+    assert payload == expected
+
+
+def test_openai_provider_clean_zero_deepcopy_and_caller_immutability(monkeypatch: pytest.MonkeyPatch) -> None:
+    repeated_tool = "openai repeated tool output " * 10
+    repeated_msg = "openai repeated long message " * 12
+    payload = {
+        "model": "gpt-4o",
+        "messages": [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": repeated_msg},
+            {"role": "tool", "tool_call_id": "c1", "content": repeated_tool},
+            {"role": "tool", "tool_call_id": "c2", "content": repeated_tool},
+            {"role": "user", "content": repeated_msg},
+            {"role": "assistant", "content": "reply"},
+            {"role": "user", "content": "recent"},
+        ],
+    }
+    expected = copy.deepcopy(payload)
+    _forbid_deepcopy(monkeypatch)
+
+    provider = OpenAIProvider()
+    cleaner = SimpleNamespace(enable_deduplication=True, max_turns=4, recent_turns_to_keep=2)
+    stats = {"tool_outputs_omitted": 0, "turns_summarized": 0}
+    cleaned = provider.clean(cleaner, payload, {}, stats=stats)
+
+    assert payload == expected
+    assert stats["tool_outputs_omitted"] >= 2
+    assert stats["turns_summarized"] >= 1
+    cleaned["messages"][0]["content"] = "mutated"
+    assert payload == expected
+
+    no_dedup_cleaner = SimpleNamespace(enable_deduplication=False, max_turns=100, recent_turns_to_keep=2)
+    cleaned_no_dedup = provider.clean(no_dedup_cleaner, payload, {}, stats=None)
+    cleaned_no_dedup["messages"][1]["content"] = "mutated"
+    assert payload == expected
+
+
+def test_translation_zero_deepcopy_and_caller_immutability(monkeypatch: pytest.MonkeyPatch) -> None:
+    gemini_req = {
+        "model": "gemini-2.5-pro",
+        "systemInstruction": {"parts": [{"text": "Be precise."}]},
+        "contents": [
+            {"role": "user", "parts": [{"text": "Run lookup"}]},
+            {"role": "model", "parts": [{"functionCall": {"name": "lookup", "args": {"q": "abc"}}}]},
+            {"role": "user", "parts": [{"functionResponse": {"name": "lookup", "response": {"content": "ok"}}}]},
+        ],
+        "tools": [
+            {
+                "functionDeclarations": [
+                    {
+                        "name": "lookup",
+                        "description": "Search",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"q": {"type": "string", "enum": ["a", "b"]}},
+                            "required": ["q"],
+                        },
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {"temperature": 0.2, "stopSequences": ["END", "STOP"]},
+    }
+    openai_resp = {
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "lookup", "arguments": {"nested": [1, 2]}},
+                        }
+                    ],
+                },
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+    gemini_expected = copy.deepcopy(gemini_req)
+    openai_expected = copy.deepcopy(openai_resp)
+    _forbid_deepcopy(monkeypatch)
+
+    openai_req = translate_gemini_to_openai_request(gemini_req)
+    gemini_resp = translate_openai_to_gemini_response(openai_resp)
+
+    assert gemini_req == gemini_expected
+    assert openai_resp == openai_expected
+
+    openai_req["tools"][0]["function"]["parameters"]["properties"]["q"]["enum"].append("c")
+    openai_req["tools"][0]["function"]["parameters"]["required"].append("extra")
+    openai_req["stop"].append("EXTRA")
+    gemini_resp["candidates"][0]["content"]["parts"][0]["functionCall"]["args"]["nested"].append(3)
+
+    assert gemini_req == gemini_expected
+    assert openai_resp == openai_expected
+
+
+def test_provider_modules_contain_no_copy_import_or_deepcopy_references() -> None:
+    providers_dir = Path(__file__).resolve().parents[1] / "src" / "holon_coherence" / "providers"
+    for filename in ("_common.py", "anthropic.py", "gemini.py", "openai.py", "translation.py"):
+        tree = ast.parse((providers_dir / filename).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                assert all(alias.name != "copy" for alias in node.names), filename
+            elif isinstance(node, ast.ImportFrom):
+                assert node.module != "copy", filename
+            elif isinstance(node, ast.Attribute):
+                assert node.attr != "deepcopy", filename
+            elif isinstance(node, ast.Name):
+                assert node.id != "deepcopy", filename

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 from typing import Any
 
@@ -146,6 +145,12 @@ def _translate_contents(
     return openai_messages
 
 
+def _copy_json_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _copy_json_value(v) for k, v in value.items()}
+    return [_copy_json_value(v) for v in value] if isinstance(value, list) else value
+
+
 def _translate_tools(tools: list[Any]) -> list[dict[str, Any]]:
     openai_tools: list[dict[str, Any]] = []
     for t in tools:
@@ -156,13 +161,10 @@ def _translate_tools(tools: list[Any]) -> list[dict[str, Any]]:
                 continue
             tool_dict: dict[str, Any] = {
                 "type": "function",
-                "function": {
-                    "name": fd.get("name", ""),
-                    "description": fd.get("description", ""),
-                },
+                "function": {"name": fd.get("name", ""), "description": fd.get("description", "")},
             }
             if "parameters" in fd and isinstance(fd["parameters"], dict):
-                tool_dict["function"]["parameters"] = copy.deepcopy(fd["parameters"])
+                tool_dict["function"]["parameters"] = _copy_json_value(fd["parameters"])
             openai_tools.append(tool_dict)
     return openai_tools
 
@@ -175,7 +177,7 @@ def _translate_gen_config(gen_config: dict[str, Any], openai_req: dict[str, Any]
     if "topP" in gen_config:
         openai_req["top_p"] = gen_config["topP"]
     if "stopSequences" in gen_config:
-        openai_req["stop"] = gen_config["stopSequences"]
+        openai_req["stop"] = _copy_json_value(gen_config["stopSequences"])
 
 
 def translate_gemini_to_openai_request(
@@ -212,7 +214,7 @@ def translate_gemini_to_openai_request(
 
 def _parse_func_args(raw_args: Any) -> dict[str, Any]:
     if isinstance(raw_args, dict):
-        return raw_args
+        return _copy_json_value(raw_args)
     if isinstance(raw_args, str):
         try:
             return json.loads(raw_args)
