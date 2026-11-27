@@ -322,6 +322,14 @@ def _harden_ca_key_files(ca_dir: str) -> None:
                     os.chmod(path, PRIVATE_FILE_MODE)
 
 
+def _docker_user_args() -> list[str]:
+    if not sys.platform.startswith("linux"):
+        return []
+    if not (hasattr(os, "getuid") and hasattr(os, "getgid")):
+        return []
+    return ["--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/home/mitmproxy"]
+
+
 def _web_inspector_args(actual_web_port: int | None, env_file: str | None = None) -> list[str]:
     if actual_web_port is None:
         return []
@@ -345,6 +353,7 @@ def _build_docker_run_args(
         "--name",
         name,
         *docker_host_alias_args(),
+        *_docker_user_args(),
         "-p",
         f"127.0.0.1:{actual_port}:{CONTAINER_PROXY_PORT}",
         "-v",
@@ -489,16 +498,7 @@ class ProxyLifecycle:
         tool = "mitmweb" if web_port is not None else "mitmdump"
         cmd = [_resolve_proxy_tool(tool), "-s", _addon_path(), "--listen-port", str(self.config.port)]
         if web_port is not None:
-            cmd.extend(
-                [
-                    "--web-host",
-                    "0.0.0.0",
-                    "--web-port",
-                    str(web_port),
-                    "--set",
-                    "web_open_browser=false",
-                ]
-            )
+            cmd.extend(["--web-host", "0.0.0.0", "--web-port", str(web_port), "--set", "web_open_browser=false"])
         print(f"🚀 Starting holon-coherence proxy via {tool} on port {self.config.port}...")
         if banner:
             print(banner)

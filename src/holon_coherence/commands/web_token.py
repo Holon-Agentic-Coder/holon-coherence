@@ -50,6 +50,8 @@ def write_private_file(path: str, content: str) -> str:
     fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, WEB_TOKEN_FILE_MODE)
     try:
         with open(fd, "w", encoding="utf-8") as f:
+            with contextlib.suppress(OSError, AttributeError):
+                os.fchmod(f.fileno(), WEB_TOKEN_FILE_MODE)
             f.write(content)
     finally:
         with contextlib.suppress(OSError):

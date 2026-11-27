@@ -177,6 +177,29 @@ class TestProxyLifecycleStart:
         assert "HOLON_PROXY_PORT=9292" in docker_cmd
         assert docker_cmd[-4:] == ["holon-coherence:latest", "start", "--port", "8080"]
 
+    def test_docker_run_passes_host_uid_gid_on_linux(self, tmp_path: Path) -> None:
+        from holon_coherence.container.lifecycle import _build_docker_run_args
+
+        config = _config(tmp_path)
+        with (
+            patch(f"{LIFECYCLE}.sys.platform", "linux"),
+            patch(f"{LIFECYCLE}.os.getuid", return_value=1001, create=True),
+            patch(f"{LIFECYCLE}.os.getgid", return_value=127, create=True),
+        ):
+            cmd = _build_docker_run_args(config, 8080, None)
+        user_idx = cmd.index("--user")
+        assert cmd[user_idx + 1] == "1001:127"
+        assert "HOME=/home/mitmproxy" in cmd
+
+    def test_docker_run_omits_user_flag_on_non_linux(self, tmp_path: Path) -> None:
+        from holon_coherence.container.lifecycle import _build_docker_run_args
+
+        config = _config(tmp_path)
+        with patch(f"{LIFECYCLE}.sys.platform", "darwin"):
+            cmd = _build_docker_run_args(config, 8080, None)
+        assert "--user" not in cmd
+        assert "HOME=/home/mitmproxy" not in cmd
+
     def test_reuses_healthy_bound_container(self) -> None:
         with (
             patch(f"{LIFECYCLE}.check_docker_daemon", return_value=(True, "")),

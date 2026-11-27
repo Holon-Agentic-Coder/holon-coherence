@@ -18,6 +18,7 @@ from holon_coherence.commands.web_token import (
     resolve_web_password,
     save_web_token,
     web_password_env_file,
+    write_private_file,
 )
 
 
@@ -45,6 +46,51 @@ class TestWebTokenHelpers:
 
         retrieved = get_active_web_token(token_path=str(target_path))
         assert retrieved == "super-secret-token"
+
+    def test_write_private_file_hardens_preexisting_permissive_file_before_write(self, tmp_path: Path) -> None:
+        target = tmp_path / "existing-secret"
+        target.write_text("stale", encoding="utf-8")
+        target.chmod(0o644)
+
+        events: list[tuple[str, int]] = []
+        real_fchmod = __import__("os").fchmod
+
+        def tracking_fchmod(fd: int, mode: int) -> None:
+            events.append(("fchmod", mode))
+            real_fchmod(fd, mode)
+
+        real_open = open
+
+        class _TrackingWriter:
+            def __init__(self, inner: object) -> None:
+                self._inner = inner
+
+            def fileno(self) -> int:
+                return self._inner.fileno()  # type: ignore[attr-defined]
+
+            def write(self, data: str) -> int:
+                events.append(("write", target.stat().st_mode & 0o777))
+                return self._inner.write(data)  # type: ignore[attr-defined]
+
+            def __enter__(self) -> _TrackingWriter:
+                self._inner.__enter__()  # type: ignore[attr-defined]
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                self._inner.__exit__(*args)  # type: ignore[attr-defined]
+
+        def tracking_open(file: object, *args: object, **kwargs: object) -> object:
+            return _TrackingWriter(real_open(file, *args, **kwargs))  # type: ignore[call-overload]
+
+        with (
+            patch("holon_coherence.commands.web_token.os.fchmod", side_effect=tracking_fchmod),
+            patch("builtins.open", side_effect=tracking_open),
+        ):
+            write_private_file(str(target), "fresh-secret")
+
+        assert events == [("fchmod", 0o600), ("write", 0o600)]
+        assert (target.stat().st_mode & 0o777) == 0o600
+        assert target.read_text(encoding="utf-8") == "fresh-secret"
 
     def test_get_active_web_token_edge_cases(self, tmp_path: Path) -> None:
         assert get_active_web_token(token_path=str(tmp_path / "nonexistent")) is None
