@@ -86,7 +86,21 @@ formula: `EV = P(success) * Impact + mu * LearningValue - lambda * Delta_S_inten
 
 Numbered high-level overview of all sequential steps.
 
-### 7. Step-by-Step Breakdown
+### 7. Touch Set
+
+The plan lists its touch set at module granularity and prefers adding focused modules over growing existing files past
+~400 lines. The touch set goes in a `## Touch Set` section placed after `## Plan Description & Strategy`: one backticked
+repository-relative path or glob per top-level bullet (a trailing `/` means a whole directory, `*` stays within one path
+segment and `**` spans directories), with an optional `symbols: a, b` suffix for very large modules. Leave out `plans/`,
+`executions/` and `holon-knowledge/`; write `- none` when the plan changes no other file.
+
+```markdown
+## Touch Set
+
+- `{repository_relative_path_or_glob}`
+```
+
+### 8. Step-by-Step Breakdown
 
 For each step (`## Step 1: ...`, `## Step 2: ...`, etc.):
 
