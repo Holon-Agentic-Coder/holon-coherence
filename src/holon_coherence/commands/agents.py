@@ -20,6 +20,7 @@ from holon_coherence.commands.start import (
     report_local_llm_route,
 )
 from holon_coherence.host_local import GATEWAY_HOSTNAME
+from holon_coherence.settings import CoherenceSettings, parse_port
 
 SUPPORTED_AGENTS = ("agy", "claude", "codex", "opencode", "pi")
 
@@ -198,7 +199,7 @@ def build_agent_env(
     env = os.environ.copy()
     _apply_proxy_and_ca_env(env, port, drop_no_proxy)
     holon_key = env.get("HOLON_AGENT_KEY")
-    if local_llm_base or os.getenv("HOLON_LOCAL_LLM_BASE"):
+    if local_llm_base or CoherenceSettings.from_env().local_llm_base:
         _apply_local_llm_env(env, agent_name, port, model, holon_key)
     if holon_key:
         _apply_auth_key_env(env, agent_name, holon_key)
@@ -218,17 +219,11 @@ def _resolve_agent_port(port: int | None) -> int | None:
             print(f"Error: Port must be between {MIN_TCP_PORT} and {MAX_TCP_PORT}, got {port}.", file=sys.stderr)
             return None
         return port
-    env_port = os.getenv("HOLON_PROXY_PORT")
-    if not env_port:
-        return DEFAULT_PROXY_PORT
-    try:
-        parsed_port = int(env_port)
-    except ValueError:
-        parsed_port = 0
-    if MIN_TCP_PORT <= parsed_port <= MAX_TCP_PORT:
-        return parsed_port
-    print(f"⚠️  Invalid HOLON_PROXY_PORT '{env_port}', falling back to {DEFAULT_PROXY_PORT}.", file=sys.stderr)
-    return DEFAULT_PROXY_PORT
+    resolved_port = CoherenceSettings.from_env().proxy_port
+    raw_env_port = os.environ.get("HOLON_PROXY_PORT")
+    if raw_env_port and parse_port(raw_env_port, 0) == 0:
+        print(f"⚠️  Invalid HOLON_PROXY_PORT '{raw_env_port}', falling back to {resolved_port}.", file=sys.stderr)
+    return resolved_port
 
 
 def _report_missing_binary(agent_name: str) -> None:
@@ -243,7 +238,7 @@ def _report_missing_binary(agent_name: str) -> None:
 def _resolve_local_llm_base(local_llm_base: str | None) -> str | None:
     if local_llm_base is not None:
         return local_llm_base
-    return (os.getenv("HOLON_LOCAL_LLM_BASE") or "").strip() or None
+    return CoherenceSettings.from_env().local_llm_base
 
 
 def _plan_agent_route(

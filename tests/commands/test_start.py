@@ -35,6 +35,7 @@ from holon_coherence.commands.start import (
 )
 from holon_coherence.container.lifecycle import ProxyLifecycle
 from holon_coherence.host_local import HOST_LOCAL_ENV_VAR
+from holon_coherence.settings import DEFAULT_PROXY_PORT, CoherenceSettings
 
 
 class TestWaitForProxyReadySuite:
@@ -141,6 +142,43 @@ class TestStartCommandRegistrationAndDispatch:
         ):
             res = handle(args)
             assert res == 0
+
+    def test_register_defaults_from_env_with_whitespace(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HOLON_PROXY_PORT", " 9123 ")
+        monkeypatch.setenv("HOLON_LOCAL_LLM_BASE", "  localhost:11434  ")
+        parser = argparse.ArgumentParser()
+        register(parser.add_subparsers(dest="command"))
+        args = parser.parse_args(["start"])
+        assert args.port == 9123
+        assert args.local_llm_base == "localhost:11434"
+
+        monkeypatch.setenv("HOLON_LOCAL_LLM_BASE", "   ")
+        parser_blank = argparse.ArgumentParser()
+        register(parser_blank.add_subparsers(dest="command"))
+        args_blank = parser_blank.parse_args(["start"])
+        assert args_blank.local_llm_base is None
+
+    def test_register_delegates_to_coherence_settings(self) -> None:
+        parser = argparse.ArgumentParser()
+        with patch(
+            "holon_coherence.commands.start.CoherenceSettings.from_env",
+            return_value=CoherenceSettings(proxy_port=9456, local_llm_base="127.0.0.1:8082"),
+        ) as mock_from_env:
+            register(parser.add_subparsers(dest="command"))
+        mock_from_env.assert_called_once_with()
+        args = parser.parse_args(["start"])
+        assert args.port == 9456
+        assert args.local_llm_base == "127.0.0.1:8082"
+
+    @pytest.mark.parametrize("raw_port", ["0", "65536", "abc", ""])
+    def test_register_invalid_env_port_falls_back_to_default(
+        self, raw_port: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HOLON_PROXY_PORT", raw_port)
+        parser = argparse.ArgumentParser()
+        register(parser.add_subparsers(dest="command"))
+        args = parser.parse_args(["start"])
+        assert args.port == DEFAULT_PROXY_PORT
 
 
 class TestDockerDiagnosticsAndPortConflicts:
