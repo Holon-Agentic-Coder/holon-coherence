@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import logging
 import os
@@ -140,9 +141,8 @@ def handle_status(
         print("   mitmweb inspector: not running")
         return retcode
 
-    proxy_port_str = os.getenv("HOLON_PROXY_PORT", "8080")
     try:
-        fallback_proxy_port = int(proxy_port_str)
+        fallback_proxy_port = int(os.getenv("HOLON_PROXY_PORT", "8080"))
     except ValueError:
         fallback_proxy_port = 8080
     endpoints = resolve_endpoints(target_container, fallback_proxy_port=fallback_proxy_port)
@@ -166,7 +166,7 @@ def handle_status(
                     f"   Tool Calls Saved: {pruned:,} | Tokens Reduced: {reduced:,} | "
                     f"Cache Hit Rate: {hit_rate:.1f}% | Prefill: {prefill_tps:.1f} t/s | Output: {tps:.1f} t/s"
                 )
-    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError) as exc:
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError, json.JSONDecodeError) as exc:
         logger.debug("Failed to fetch proxy metrics on port %s: %s", proxy_port, exc)
     return retcode
 
