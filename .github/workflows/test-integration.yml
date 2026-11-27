@@ -26,12 +26,20 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
+      - name: Bookkeeping gate
+        id: bookkeeping_gate
+        uses: ./.github/actions/bookkeeping-gate
+        with:
+          job-name: integration (${{ matrix.os }})
+
       - name: CI Timing Gate (Start)
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         uses: ./.github/actions/ci-timing-gate
         with:
           phase: start
 
       - name: Cache conda packages
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         uses: actions/cache@v4
         with:
           path: ~/conda_pkgs_dir
@@ -39,6 +47,7 @@ jobs:
           restore-keys: ${{ runner.os }}-conda-
 
       - name: Set up Miniconda
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         uses: conda-incubator/setup-miniconda@v3
         with:
           auto-update-conda: true
@@ -50,23 +59,27 @@ jobs:
           use-only-tar-bz2: false
 
       - name: Set up Docker Buildx
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         uses: docker/setup-buildx-action@v4
         with:
           keep-state: true
 
       - name: Expose GitHub Runtime
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         uses: crazy-max/ghaction-github-runtime@v4
 
       - name: Build Docker image via make build-image
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         run: |
           make build-image
 
       - name: Run integration tests
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         shell: bash -el {0}
         run: uv sync; uv run task test-docker --junitxml="$RUNNER_TEMP/ci-timing/junit.xml"
 
       - name: CI timing gate (record)
-        if: success() && github.event_name != 'pull_request'
+        if: success() && steps.bookkeeping_gate.outputs.skip != 'true' && github.event_name != 'pull_request'
         shell: bash
         run: |
           python3 scripts/ci_timing_gate.py record \
@@ -76,7 +89,7 @@ jobs:
             --junit "$RUNNER_TEMP/ci-timing/junit.xml"
 
       - name: CI timing gate (compare with main)
-        if: success() && github.event_name == 'pull_request'
+        if: success() && steps.bookkeeping_gate.outputs.skip != 'true' && github.event_name == 'pull_request'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -91,7 +104,7 @@ jobs:
             --junit "$RUNNER_TEMP/ci-timing/junit.xml"
 
       - name: Upload CI timing record (main only)
-        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: success() && steps.bookkeeping_gate.outputs.skip != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
           name: ci-timing-${{ github.job }}-${{ runner.os }}
@@ -101,7 +114,7 @@ jobs:
           overwrite: true
 
       - name: CI Timing Gate (Check <= 5 min)
-        if: always()
+        if: always() && steps.bookkeeping_gate.outputs.skip != 'true'
         uses: ./.github/actions/ci-timing-gate
         with:
           phase: check

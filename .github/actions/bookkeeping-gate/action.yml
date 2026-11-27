@@ -1,0 +1,28 @@
+name: "Bookkeeping Gate"
+description: "Fail-closed gate that skips redundant PR CI steps on pure bookkeeping pushes."
+inputs:
+  token:
+    description: "GitHub token used to query workflow runs, jobs, commits, and diffs."
+    required: false
+    default: ${{ github.token }}
+  job-name:
+    description: "Exact GitHub Actions job display name to match on prior workflow runs."
+    required: false
+    default: ""
+outputs:
+  skip:
+    description: "Whether downstream expensive CI steps may be safely skipped."
+    value: ${{ steps.gate.outputs.skip }}
+  reason:
+    description: "Human-readable explanation for the gate decision."
+    value: ${{ steps.gate.outputs.reason }}
+runs:
+  using: "composite"
+  steps:
+    - id: gate
+      name: Evaluate bookkeeping gate
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.token }}
+        BOOKKEEPING_JOB_NAME: ${{ inputs.job-name }}
+      run: python3 "${GITHUB_WORKSPACE}/scripts/ci_bookkeeping_gate.py"
