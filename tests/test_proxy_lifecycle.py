@@ -45,16 +45,25 @@ class TestProxyLifecycleCA:
             assert (tmp_path / name).is_dir()
             assert _mode(tmp_path / name) == 0o700
 
-    def test_shared_mounts_are_world_accessible(self, tmp_path: Path) -> None:
+    def test_enforces_restrictive_permissions_even_when_world_accessible_requested(self, tmp_path: Path) -> None:
         lifecycle = ProxyLifecycle(_config(tmp_path, world_accessible_mounts=True))
         ca_dir = tmp_path / "proxy-ca"
-        ca_dir.mkdir()
+        cache_dir = tmp_path / "cache"
+        logs_dir = tmp_path / "logs"
+        for directory in (ca_dir, cache_dir, logs_dir):
+            directory.mkdir()
+            os.chmod(directory, 0o777)
         (ca_dir / CA_CERT_FILENAME).write_text("cert")
         (ca_dir / CA_PEM_FILENAME).write_text("pem")
+        (ca_dir / "holon-root-ca.key").write_text("key")
+        os.chmod(ca_dir / CA_PEM_FILENAME, 0o666)
+        os.chmod(ca_dir / "holon-root-ca.key", 0o666)
         lifecycle.ensure_ca()
-        assert _mode(ca_dir) == 0o777
-        assert _mode(tmp_path / "cache") == 0o777
-        assert _mode(ca_dir / CA_PEM_FILENAME) == 0o666
+        assert _mode(ca_dir) == 0o700
+        assert _mode(cache_dir) == 0o700
+        assert _mode(logs_dir) == 0o700
+        assert _mode(ca_dir / CA_PEM_FILENAME) == 0o600
+        assert _mode(ca_dir / "holon-root-ca.key") == 0o600
 
     def test_skips_generation_when_ca_files_exist(self, tmp_path: Path) -> None:
         ca_dir = tmp_path / "proxy-ca"
@@ -168,6 +177,29 @@ class TestProxyLifecycleStart:
         assert "HOLON_PROXY_PORT=9292" in docker_cmd
         assert docker_cmd[-4:] == ["holon-coherence:latest", "start", "--port", "8080"]
 
+    def test_docker_run_passes_host_uid_gid_on_linux(self, tmp_path: Path) -> None:
+        from holon_coherence.container.lifecycle import _build_docker_run_args
+
+        config = _config(tmp_path)
+        with (
+            patch(f"{LIFECYCLE}.sys.platform", "linux"),
+            patch(f"{LIFECYCLE}.os.getuid", return_value=1001, create=True),
+            patch(f"{LIFECYCLE}.os.getgid", return_value=127, create=True),
+        ):
+            cmd = _build_docker_run_args(config, 8080, None)
+        user_idx = cmd.index("--user")
+        assert cmd[user_idx + 1] == "1001:127"
+        assert "HOME=/home/mitmproxy" in cmd
+
+    def test_docker_run_omits_user_flag_on_non_linux(self, tmp_path: Path) -> None:
+        from holon_coherence.container.lifecycle import _build_docker_run_args
+
+        config = _config(tmp_path)
+        with patch(f"{LIFECYCLE}.sys.platform", "darwin"):
+            cmd = _build_docker_run_args(config, 8080, None)
+        assert "--user" not in cmd
+        assert "HOME=/home/mitmproxy" not in cmd
+
     def test_reuses_healthy_bound_container(self) -> None:
         with (
             patch(f"{LIFECYCLE}.check_docker_daemon", return_value=(True, "")),
@@ -270,16 +302,71 @@ class TestProxyLifecycleStart:
         assert "addon loaded" in err
         assert "Traceback: bind failed" in err
 
+    def test_start_passes_web_password_via_private_env_file(self, tmp_path: Path) -> None:
+        lifecycle = ProxyLifecycle(
+            _config(tmp_path, port=9292, web_port=8091, web_password="start-secret-tok", container_name="box")
+        )
+        observed: dict[str, object] = {}
+
+        def fake_run(cmd: list[str], *args: object, **kwargs: object) -> MagicMock:
+            if cmd[:2] == ["docker", "run"]:
+                observed["cmd"] = list(cmd)
+                env_file = Path(cmd[cmd.index("--env-file") + 1])
+                observed["env_file"] = env_file
+                observed["mode"] = _mode(env_file)
+                observed["content"] = env_file.read_text(encoding="utf-8")
+            return MagicMock(returncode=0)
+
+        with (
+            patch(f"{LIFECYCLE}.check_docker_daemon", return_value=(True, "")),
+            patch(f"{LIFECYCLE}.is_port_in_use", return_value=False),
+            patch(f"{LIFECYCLE}.is_container_running", return_value=False),
+            patch(f"{LIFECYCLE}.generate_root_ca"),
+            patch("holon_coherence.container.lifecycle.ensure_docker_image"),
+            patch("subprocess.run", side_effect=fake_run),
+            patch.object(ProxyLifecycle, "wait_until_ready", return_value=True),
+        ):
+            assert lifecycle.start() is True
+
+        docker_cmd = observed["cmd"]
+        assert isinstance(docker_cmd, list)
+        assert "--env-file" in docker_cmd
+        assert "HOLON_COHERENCE_WEB_PASSWORD=start-secret-tok" not in docker_cmd
+        assert not any("start-secret-tok" in arg for arg in docker_cmd)
+        assert observed["mode"] == 0o600
+        assert observed["content"] == "HOLON_COHERENCE_WEB_PASSWORD=start-secret-tok\n"
+        env_file = observed["env_file"]
+        assert isinstance(env_file, Path)
+        assert not env_file.exists()
+
 
 class TestProxyLifecycleLaunchAndServe:
     def test_launch_attached_with_inspector(self, tmp_path: Path) -> None:
         config = _config(tmp_path, port=8080, web_port=8090, web_password="tok", detach=False, passive=True)
-        with patch("subprocess.run") as mock_run:
+        observed: dict[str, object] = {}
+
+        def fake_run(cmd: list[str], *args: object, **kwargs: object) -> MagicMock:
+            observed["cmd"] = list(cmd)
+            env_file = Path(cmd[cmd.index("--env-file") + 1])
+            observed["env_file"] = env_file
+            observed["mode"] = _mode(env_file)
+            observed["content"] = env_file.read_text(encoding="utf-8")
+            return MagicMock(returncode=0)
+
+        with patch("subprocess.run", side_effect=fake_run):
             ProxyLifecycle(config).launch()
-        docker_cmd = mock_run.call_args[0][0]
+        docker_cmd = observed["cmd"]
+        assert isinstance(docker_cmd, list)
         assert docker_cmd[:3] == ["docker", "run", "--rm"]
         assert "127.0.0.1:8090:8081" in docker_cmd
-        assert "HOLON_COHERENCE_WEB_PASSWORD=tok" in docker_cmd
+        assert "--env-file" in docker_cmd
+        assert "HOLON_COHERENCE_WEB_PASSWORD=tok" not in docker_cmd
+        assert not any("tok" in arg for arg in docker_cmd)
+        assert observed["mode"] == 0o600
+        assert observed["content"] == "HOLON_COHERENCE_WEB_PASSWORD=tok\n"
+        env_file = observed["env_file"]
+        assert isinstance(env_file, Path)
+        assert not env_file.exists()
         assert "COHERENCE_TOKEN_REDUCTION=0" in docker_cmd
         assert "HOLON_PASSIVE_MONITORING=1" in docker_cmd
         assert docker_cmd[-3:] == ["--web", "--web-port", "8081"]
@@ -298,17 +385,43 @@ class TestProxyLifecycleLaunchAndServe:
 
     @pytest.mark.parametrize(("web_port", "tool"), [(None, "mitmdump"), (8081, "mitmweb")])
     def test_serve_in_container_selects_tool(
-        self, web_port: int | None, tool: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+        self,
+        web_port: int | None,
+        tool: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.delenv(HOST_LOCAL_ENV_VAR, raising=False)
         config = ProxyLifecycleConfig(port=8080, web_port=web_port, web_password="tok", host_local_spec="localhost:1")
-        with patch("subprocess.run") as mock_run:
+        config_path = tmp_path / ".mitmproxy" / "config.yaml"
+        observed: dict[str, object] = {}
+
+        def fake_run(cmd: list[str], *args: object, **kwargs: object) -> MagicMock:
+            observed["cmd"] = list(cmd)
+            if config_path.exists():
+                observed["dir_mode"] = _mode(config_path.parent)
+                observed["file_mode"] = _mode(config_path)
+                observed["content"] = config_path.read_text(encoding="utf-8")
+            return MagicMock(returncode=0)
+
+        with patch("subprocess.run", side_effect=fake_run):
             ProxyLifecycle(config).serve_in_container(banner="inspector banner" if web_port else None)
-        cmd = mock_run.call_args[0][0]
+        cmd = observed["cmd"]
+        assert isinstance(cmd, list)
         assert cmd[0].endswith(tool)
         assert cmd[cmd.index("-s") + 1].endswith("mitm_addon.py")
         assert os.environ[HOST_LOCAL_ENV_VAR] == "localhost:1"
-        assert ("web_password=tok" in cmd) is (web_port is not None)
+        assert "web_password=tok" not in cmd
+        assert not any("tok" in arg for arg in cmd)
+        if web_port is not None:
+            assert observed["dir_mode"] == 0o700
+            assert observed["file_mode"] == 0o600
+            assert observed["content"] == 'web_password: "tok"\n'
+        else:
+            assert "content" not in observed
+        assert not config_path.exists()
         out = capsys.readouterr().out
         assert f"via {tool} on port 8080" in out
         assert "tok" not in out
@@ -374,7 +487,7 @@ class TestProxyLifecycleDelegation:
         assert (config.port, config.host_local_spec, config.container_name) == (9100, "localhost:8081", "box")
         assert config.image == "holon-coherence:latest"
         assert config.detach is True
-        assert config.world_accessible_mounts is True
+        assert config.world_accessible_mounts is False
         assert config.web_port is None
 
     def test_wait_for_proxy_ready_delegates_to_lifecycle(self) -> None:
@@ -424,3 +537,11 @@ class TestProxyLifecycleDelegation:
             main(["start", "--local-llm-base", "localhost:notaport"])
         assert exc_info.value.code == 1
         assert "is not a usable endpoint" in capsys.readouterr().err
+
+
+class TestDockerfileUserTraversal:
+    def test_dockerfile_makes_home_traversable_for_host_uid_mapping(self) -> None:
+        dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
+        content = dockerfile.read_text(encoding="utf-8")
+        assert "chmod 0755 /home/mitmproxy" in content
+        assert "chmod 1777 /home/mitmproxy/.holon /tmp/wire_logs" in content
