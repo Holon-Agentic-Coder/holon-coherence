@@ -3,25 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from holon_coherence.providers.base import ProviderFormat
+from holon_coherence.providers.gemini import GEMINI_API_HOSTNAME
+from holon_coherence.providers.openai import OPENAI_URL_PATTERNS as OPENAI_PROVIDERS
 
 DEFAULT_FALLBACK_PROVIDER_NAME = "openai"
 UNKNOWN_PROVIDER_NAME = "unknown"
-GEMINI_API_HOSTNAME = "generativelanguage.googleapis.com"
-
-OPENAI_PROVIDERS: tuple[str, ...] = (
-    "openai",
-    "openrouter",
-    "deepseek",
-    "groq",
-    "together",
-    "mistral",
-    "fireworks",
-    "ollama",
-    "vllm",
-    "lmstudio",
-    "chat/completions",
-    "v1/completions",
-)
 
 _REGISTRY: dict[str, ProviderFormat] = {}
 
