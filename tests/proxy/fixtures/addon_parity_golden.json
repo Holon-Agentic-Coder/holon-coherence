@@ -2096,7 +2096,6 @@
         "response": {
           "body": "{\n  \"total_turns\": 0,\n  \"total_requests\": 0,\n  \"cache_hits\": 0,\n  \"cache_misses\": 0,\n  \"cache_hit_rate\": 0.0,\n  \"provider_cache_hit_rate\": 0.0,\n  \"tool_calls_pruned\": 0,\n  \"tokens_reduced\": 0,\n  \"chars_saved\": 0,\n  \"turns_summarized\": 0,\n  \"cache_control_injected\": 0,\n  \"avg_ttft_ms\": 0.0,\n  \"avg_decode_throughput_tps\": 0.0,\n  \"latest_decode_throughput_tps\": 0.0,\n  \"decode_samples\": 0,\n  \"avg_prefill_throughput_tps\": 0.0,\n  \"latest_prefill_tps\": 0.0,\n  \"latest_prefill_throughput_tps\": 0.0,\n  \"avg_tail_prefill_tps\": 0.0,\n  \"avg_tail_prefill_throughput_tps\": 0.0,\n  \"latest_tail_prefill_tps\": 0.0,\n  \"latest_tail_prefill_throughput_tps\": 0.0,\n  \"avg_prompt_prefill_speed_tps\": 0.0,\n  \"avg_tail_prefill_speed_tps\": 0.0,\n  \"latest_ttft_ms\": 0.0,\n  \"latest_total_time_ms\": 0.0,\n  \"total_input_tokens\": 0,\n  \"total_output_tokens\": 0,\n  \"total_cache_read_tokens\": 0,\n  \"total_cache_creation_tokens\": 0,\n  \"total_reasoning_tokens\": 0\n}",
           "headers": {
-            "Access-Control-Allow-Origin": "*",
             "Content-Type": "application/json",
             "content-length": "<body length>"
           },
@@ -2127,7 +2126,6 @@
         "response": {
           "body": "{\n  \"total_turns\": 0,\n  \"total_requests\": 0,\n  \"cache_hits\": 0,\n  \"cache_misses\": 0,\n  \"cache_hit_rate\": 0.0,\n  \"provider_cache_hit_rate\": 0.0,\n  \"tool_calls_pruned\": 0,\n  \"tokens_reduced\": 0,\n  \"chars_saved\": 0,\n  \"turns_summarized\": 0,\n  \"cache_control_injected\": 0,\n  \"avg_ttft_ms\": 0.0,\n  \"avg_decode_throughput_tps\": 0.0,\n  \"latest_decode_throughput_tps\": 0.0,\n  \"decode_samples\": 0,\n  \"avg_prefill_throughput_tps\": 0.0,\n  \"latest_prefill_tps\": 0.0,\n  \"latest_prefill_throughput_tps\": 0.0,\n  \"avg_tail_prefill_tps\": 0.0,\n  \"avg_tail_prefill_throughput_tps\": 0.0,\n  \"latest_tail_prefill_tps\": 0.0,\n  \"latest_tail_prefill_throughput_tps\": 0.0,\n  \"avg_prompt_prefill_speed_tps\": 0.0,\n  \"avg_tail_prefill_speed_tps\": 0.0,\n  \"latest_ttft_ms\": 0.0,\n  \"latest_total_time_ms\": 0.0,\n  \"total_input_tokens\": 0,\n  \"total_output_tokens\": 0,\n  \"total_cache_read_tokens\": 0,\n  \"total_cache_creation_tokens\": 0,\n  \"total_reasoning_tokens\": 0\n}",
           "headers": {
-            "Access-Control-Allow-Origin": "*",
             "Content-Type": "application/json",
             "content-length": "<body length>"
           },
@@ -2652,7 +2650,7 @@
   "mode_get_env_passive": {
     "addon": {
       "cache_hits": 0,
-      "default_passive": false,
+      "default_passive": null,
       "total_requests": 0,
       "wire_log_dir_is_default": true
     },
@@ -2868,11 +2866,11 @@
           "path": "/holon/api/mode",
           "port": 8080,
           "scheme": "http",
-          "text": "{\"mode\": \"active\", \"wire_log_dir\": \"/tmp/x\"}"
+          "text": "{\"mode\": \"active\", \"wire_log_dir\": \"<tmp>/wire/sub\"}"
         },
         "request_start_time": "<unset>",
         "response": {
-          "body": "{\"status\": \"ok\", \"mode\": \"optimized\", \"wire_log_dir\": \"/tmp/x\"}",
+          "body": "{\"status\": \"ok\", \"mode\": \"optimized\", \"wire_log_dir\": \"<tmp>/wire/sub\"}",
           "headers": {
             "Content-Type": "application/json",
             "content-length": "<body length>"
@@ -2932,7 +2930,7 @@
         },
         "request_start_time": "<unset>",
         "response": {
-          "body": "{\"status\": \"ok\", \"mode\": \"optimized\", \"wire_log_dir\": \"/tmp/x\"}",
+          "body": "{\"status\": \"ok\", \"mode\": \"optimized\", \"wire_log_dir\": \"<tmp>/wire/sub\"}",
           "headers": {
             "Content-Type": "application/json",
             "content-length": "<body length>"
@@ -2962,7 +2960,7 @@
         },
         "request_start_time": "<unset>",
         "response": {
-          "body": "{\"status\": \"ok\", \"mode\": \"optimized\", \"wire_log_dir\": \"/tmp/x\"}",
+          "body": "{\"status\": \"ok\", \"mode\": \"optimized\", \"wire_log_dir\": \"<tmp>/wire/sub\"}",
           "headers": {
             "Content-Type": "application/json",
             "content-length": "<body length>"
@@ -2992,7 +2990,7 @@
         },
         "request_start_time": "<unset>",
         "response": {
-          "body": "{\"mode\": \"optimized\", \"wire_log_dir\": \"/tmp/x\"}",
+          "body": "{\"mode\": \"optimized\", \"wire_log_dir\": \"<tmp>/wire/sub\"}",
           "headers": {
             "Content-Type": "application/json",
             "content-length": "<body length>"

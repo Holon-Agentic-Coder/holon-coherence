@@ -1,0 +1,218 @@
+name: Promote Pending Ledger
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "holon-knowledge/ledger/pending/**"
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Force promotion check"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: promote-ledger
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  promote-ledger:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[ledger-promote]')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.HOLON_LEDGER_BOT_TOKEN || github.token }}
+
+      - name: CI Timing Gate (Start)
+        uses: ./.github/actions/ci-timing-gate
+        with:
+          phase: start
+
+      - name: Report missing HOLON_LEDGER_BOT_TOKEN
+        id: missing-token
+        env:
+          HOLON_LEDGER_BOT_TOKEN: ${{ secrets.HOLON_LEDGER_BOT_TOKEN }}
+        if: env.HOLON_LEDGER_BOT_TOKEN == ''
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          pending_root = Path("holon-knowledge/ledger/pending")
+          pending_files = sorted(pending_root.rglob("*.jsonl")) if pending_root.exists() else []
+          count = len(pending_files)
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
+
+          if count > 0:
+              message = (
+                  f"HOLON_LEDGER_BOT_TOKEN is unset or empty; {count} pending ledger "
+                  f"fragment(s) under holon-knowledge/ledger/pending/ remain unpromoted."
+              )
+              print(f"::warning::{message}")
+              summary_lines = [
+                  "### Pending Ledger Promotion Skipped (Missing Token)",
+                  "",
+                  "- **Status:** Warning — `HOLON_LEDGER_BOT_TOKEN` is unset or empty.",
+                  f"- **Unpromoted pending fragments:** {count}",
+                  "",
+              ]
+          else:
+              message = (
+                  "HOLON_LEDGER_BOT_TOKEN is unset or empty; 0 pending ledger "
+                  "fragments under holon-knowledge/ledger/pending/."
+              )
+              print(f"::notice::{message}")
+              summary_lines = [
+                  "### Pending Ledger Promotion Skipped (Missing Token)",
+                  "",
+                  "- **Status:** Notice — `HOLON_LEDGER_BOT_TOKEN` is unset or empty.",
+                  "- **Unpromoted pending fragments:** 0",
+                  "",
+              ]
+
+          if summary_path:
+              with Path(summary_path).open("a", encoding="utf-8") as handle:
+                  handle.write("\n".join(summary_lines))
+          PY
+
+      - name: Promote pending ledger fragments
+        id: promote
+        env:
+          HOLON_LEDGER_BOT_TOKEN: ${{ secrets.HOLON_LEDGER_BOT_TOKEN }}
+          FORCE_PROMOTE: ${{ github.event.inputs.force || 'false' }}
+        if: env.HOLON_LEDGER_BOT_TOKEN != ''
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          ledger_root = Path("holon-knowledge/ledger")
+          pending_root = ledger_root / "pending"
+          categories = ("intents", "plans", "executions")
+          force_promote = os.environ.get("FORCE_PROMOTE", "false")
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
+
+          files_promoted = 0
+          rows_appended = 0
+          duplicates_skipped = 0
+
+          for category in categories:
+              canonical = ledger_root / f"{category}.jsonl"
+              pending_dir = pending_root / category
+              pending_files = sorted(pending_dir.glob("*.jsonl")) if pending_dir.exists() else []
+              if not pending_files:
+                  continue
+
+              existing_bytes = canonical.read_bytes() if canonical.exists() else b""
+              seen = {line.strip() for line in existing_bytes.splitlines() if line.strip()}
+              needs_leading_newline = bool(existing_bytes) and not existing_bytes.endswith(b"\n")
+              to_append = bytearray()
+
+              for fragment in pending_files:
+                  raw = fragment.read_bytes()
+                  for raw_line in raw.splitlines():
+                      stripped = raw_line.strip()
+                      if not stripped:
+                          continue
+                      json.loads(stripped.decode("utf-8"))
+                      if stripped in seen:
+                          duplicates_skipped += 1
+                          continue
+                      seen.add(stripped)
+                      if needs_leading_newline:
+                          to_append.extend(b"\n")
+                          needs_leading_newline = False
+                      to_append.extend(stripped)
+                      to_append.extend(b"\n")
+                      rows_appended += 1
+
+              if to_append:
+                  canonical.parent.mkdir(parents=True, exist_ok=True)
+                  with canonical.open("ab") as handle:
+                      handle.write(to_append)
+
+              for fragment in pending_files:
+                  fragment.unlink()
+                  files_promoted += 1
+
+          print(
+              f"Promoted {files_promoted} fragment file(s): "
+              f"{rows_appended} row(s) appended, {duplicates_skipped} duplicate(s) skipped "
+              f"(force={force_promote})."
+          )
+
+          if summary_path:
+              summary_lines = [
+                  "### Pending Ledger Promotion Summary",
+                  "",
+                  f"- **Force input:** `{force_promote}`",
+                  f"- **Fragment files promoted:** {files_promoted}",
+                  f"- **Rows appended:** {rows_appended}",
+                  f"- **Duplicates skipped:** {duplicates_skipped}",
+                  "",
+              ]
+              with Path(summary_path).open("a", encoding="utf-8") as handle:
+                  handle.write("\n".join(summary_lines))
+          PY
+
+      - name: Verify ledger-only changes and commit
+        id: commit-push
+        env:
+          HOLON_LEDGER_BOT_TOKEN: ${{ secrets.HOLON_LEDGER_BOT_TOKEN }}
+        if: env.HOLON_LEDGER_BOT_TOKEN != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          has_changes=0
+          while IFS= read -r -d '' entry; do
+            has_changes=1
+            xy="${entry:0:2}"
+            path="${entry:3}"
+            if [[ "$path" != holon-knowledge/ledger/* ]]; then
+              echo "::error::Refusing to commit changes outside holon-knowledge/ledger/: ${path}"
+              exit 1
+            fi
+            if [[ "$xy" == *R* || "$xy" == *C* ]]; then
+              IFS= read -r -d '' orig_path
+              if [[ "$orig_path" != holon-knowledge/ledger/* ]]; then
+                echo "::error::Refusing to commit changes outside holon-knowledge/ledger/: ${orig_path}"
+                exit 1
+              fi
+            fi
+          done < <(git -c core.quotePath=false status --porcelain -z --untracked-files=all)
+          if [ "$has_changes" -eq 0 ]; then
+            echo "::notice::No pending ledger changes to promote."
+            exit 0
+          fi
+          git config user.name "holon-ledger-bot"
+          git config user.email "holon-ledger-bot@users.noreply.github.com"
+          git add -A holon-knowledge/ledger/
+          if git diff --cached --quiet; then
+            echo "::notice::No pending ledger changes to promote."
+            exit 0
+          fi
+          git commit -m "chore(ledger): promote pending fragments [ledger-promote]"
+          git push origin HEAD:main
+
+      - name: CI Timing Gate (Check <= 5 min)
+        if: always()
+        uses: ./.github/actions/ci-timing-gate
+        with:
+          phase: check
+          max-seconds: "300"
