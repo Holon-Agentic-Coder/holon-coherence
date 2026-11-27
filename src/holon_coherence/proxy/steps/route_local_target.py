@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from typing import Any
 
@@ -10,6 +9,7 @@ from holon_coherence.proxy.normalise.anthropic import normalize_anthropic_reques
 from holon_coherence.proxy.steps._compat import _get_in_container
 from holon_coherence.proxy.steps.base import Outcome, RequestContext
 from holon_coherence.proxy.translation.gemini_openai import translate_gemini_to_openai_request
+from holon_coherence.settings import CoherenceSettings
 
 __all__ = ["adapt_local_protocol", "route_local_target"]
 
@@ -38,7 +38,8 @@ def route_local_target(ctx: RequestContext) -> Outcome:
 
 
 def _bridge_target_model(flow: Any, url: str) -> str | None:
-    target_model = os.getenv("AGY_MODEL") or os.getenv("HOLON_LOCAL_MODEL")
+    settings = CoherenceSettings.from_env()
+    target_model = settings.agy_model or settings.local_model
     if not target_model:
         path_or_url = getattr(flow.request, "path", "") or url
         match = re.search(r"/models/([^/:]+)", path_or_url)

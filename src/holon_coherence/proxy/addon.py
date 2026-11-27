@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import os
 import time
 from typing import Any
 
 from holon_coherence.host_local import GATEWAY_HOSTNAME, rewrite_connection, targets_from_env
 from holon_coherence.hybrid_cache import HybridCacheStore
+from holon_coherence.metrics_math import DEFAULT_WIRE_LOG_DIR
 from holon_coherence.payload_cleaner import CleaningResult, JSONContextCleaner
 from holon_coherence.providers.registry import UNKNOWN_PROVIDER_NAME, detect_provider_name
 from holon_coherence.proxy.metrics import CumulativeMetrics
@@ -35,12 +35,12 @@ from holon_coherence.proxy.steps._compat import (
 from holon_coherence.proxy.steps.sse_tap import _MAX_SSE_BUFFER_BYTES, install_sse_tap, response_content_type
 from holon_coherence.proxy.steps.wire_record import WireTransaction, build_wire_record
 from holon_coherence.proxy.wire_log import (
-    WIRE_LOG_DIR,
     dump_wire_transaction,
     is_passive_monitoring,
     is_wire_logging_enabled,
     shutdown_wire_logs,
 )
+from holon_coherence.settings import CoherenceSettings
 
 __all__ = [
     "DEFAULT_PROXY_LISTEN_PORT",
@@ -53,10 +53,7 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 DEFAULT_PROXY_LISTEN_PORT = 8080
-DEFAULT_CACHE_DIR = "~/.holon/cache"
 WIRE_LOG_SHUTDOWN_TIMEOUT_SEC = 5.0
-MIN_VALID_TCP_PORT = 1
-MAX_VALID_TCP_PORT = 65535
 
 
 def _is_streaming_request(endpoint: str, request_json: dict[str, Any]) -> bool:
@@ -69,7 +66,7 @@ def _is_streaming_request(endpoint: str, request_json: dict[str, Any]) -> bool:
 class MITMProxyInterceptor:
     def __init__(self, cache_dir: str | None = None, enable_caching: bool = True):
         self.cleaner = JSONContextCleaner()
-        self.cache_dir = cache_dir or os.getenv("CACHE_DIR", os.path.expanduser(DEFAULT_CACHE_DIR))
+        self.cache_dir = cache_dir or str(CoherenceSettings.from_env().cache_dir)
         self.enable_caching = enable_caching
         self._cache_store: HybridCacheStore | None = None
 
@@ -154,7 +151,7 @@ class MITMProxyInterceptor:
 class MitmproxyAddon:
     def __init__(self, cache_dir: str | None = None, wire_log_dir: str | None = None):
         self.interceptor = MITMProxyInterceptor(cache_dir=cache_dir)
-        self.wire_log_dir = wire_log_dir or os.getenv("WIRE_LOG_DIR", WIRE_LOG_DIR)
+        self.wire_log_dir = wire_log_dir or CoherenceSettings.from_env().wire_log_dir_override or DEFAULT_WIRE_LOG_DIR
         self.total_requests = 0
         self.cache_hits = 0
         self.metrics = CumulativeMetrics()
@@ -167,12 +164,9 @@ class MitmproxyAddon:
 
     def _proxy_own_ports(self) -> tuple[int, ...]:
         ports: list[int] = []
-        env_port = os.getenv("HOLON_PROXY_PORT")
-        if env_port:
-            with contextlib.suppress(ValueError):
-                parsed = int(env_port)
-                if MIN_VALID_TCP_PORT <= parsed <= MAX_VALID_TCP_PORT:
-                    ports.append(parsed)
+        env_port = CoherenceSettings.from_env().proxy_port_override
+        if env_port is not None:
+            ports.append(env_port)
 
         if _get_in_container()():
             return tuple(dict.fromkeys(ports)) or (DEFAULT_PROXY_LISTEN_PORT,)

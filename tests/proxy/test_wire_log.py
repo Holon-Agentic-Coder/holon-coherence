@@ -177,3 +177,45 @@ def test_log_telemetry_logs_debug_and_falls_back_on_ctx_runtime_error(
 
     assert any(r.levelno == logging.DEBUG and "ctx log unavailable" in r.getMessage() for r in caplog.records)
     assert any(r.levelno == logging.INFO and "telemetry fallback message" in r.getMessage() for r in caplog.records)
+
+
+def test_dump_wire_transaction_resolves_wire_log_dir_dynamically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ENABLE_WIRE_LOGGING", "1")
+
+    dir_a = tmp_path / "dir_a"
+    monkeypatch.setenv("WIRE_LOG_DIR", str(dir_a))
+    dump_wire_transaction({"turn_id": 1, "flow_id": "dyn_a"})
+    flush_wire_logs(timeout=5.0)
+    assert (dir_a / "transactions.jsonl").exists()
+
+    dir_b = tmp_path / "dir_b"
+    monkeypatch.setenv("WIRE_LOG_DIR", str(dir_b))
+    dump_wire_transaction({"turn_id": 2, "flow_id": "dyn_b"})
+    flush_wire_logs(timeout=5.0)
+    assert (dir_b / "transactions.jsonl").exists()
+
+    monkeypatch.delenv("WIRE_LOG_DIR", raising=False)
+    dump_wire_transaction({"turn_id": 3, "flow_id": "dyn_default"})
+    flush_wire_logs(timeout=5.0)
+    assert (tmp_path / ".holon" / "mitm_wire_logs" / "transactions.jsonl").exists()
+
+
+def test_wire_log_flags_respond_dynamically_to_bool_variants(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENABLE_WIRE_LOGGING", "yes")
+    assert is_wire_logging_enabled() is True
+    monkeypatch.setenv("ENABLE_WIRE_LOGGING", "off")
+    assert is_wire_logging_enabled() is False
+
+    monkeypatch.setenv("HOLON_PASSIVE_MONITORING", "true")
+    monkeypatch.setenv("COHERENCE_TOKEN_REDUCTION", "yes")
+    assert is_passive_monitoring() is True
+
+    monkeypatch.setenv("HOLON_PASSIVE_MONITORING", "false")
+    monkeypatch.setenv("COHERENCE_TOKEN_REDUCTION", "off")
+    assert is_passive_monitoring() is True
+
+    monkeypatch.setenv("COHERENCE_TOKEN_REDUCTION", "yes")
+    assert is_passive_monitoring() is False

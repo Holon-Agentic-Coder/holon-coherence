@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-
 try:
     from mitmproxy import ctx
 except ImportError:
@@ -83,8 +81,9 @@ from holon_coherence.proxy.wire_log import (
     log_telemetry,
     shutdown_wire_logs,
 )
+from holon_coherence.settings import CoherenceSettings
 
-CACHE_DIR = os.getenv("CACHE_DIR", os.path.expanduser("~/.holon/cache"))
+CACHE_DIR = str(CoherenceSettings.from_env().cache_dir)
 
 
 def _proxy_own_ports(addon: MitmproxyAddon | None = None) -> tuple[int, ...]:

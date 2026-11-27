@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hmac
 import json
-import os
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -11,6 +10,7 @@ from holon_coherence.proxy.dashboard import render_dashboard_html
 from holon_coherence.proxy.routing import _make_http_response
 from holon_coherence.proxy.steps.base import Outcome, RequestContext
 from holon_coherence.proxy.wire_log import is_passive_monitoring
+from holon_coherence.settings import CoherenceSettings
 
 __all__ = ["serve_dashboard", "serve_html", "serve_metrics", "serve_mode"]
 
@@ -72,8 +72,8 @@ def _is_loopback_origin(origin: str) -> bool:
 
 
 def _expected_api_token() -> str:
-    primary = (os.getenv("HOLON_COHERENCE_API_TOKEN") or "").strip()
-    return primary or (os.getenv("HOLON_COHERENCE_WEB_PASSWORD") or "").strip()
+    settings = CoherenceSettings.from_env()
+    return settings.api_token or settings.web_password or ""
 
 
 def _is_authorized_bearer(flow: Any) -> bool:
@@ -88,21 +88,21 @@ def _is_authorized_bearer(flow: Any) -> bool:
 
 
 def _allowed_wire_log_base(addon: Any) -> Path:
-    env_base = (os.getenv("HOLON_WIRE_LOG_BASE_DIR") or "").strip()
-    if env_base:
-        return Path(os.path.expanduser(env_base)).resolve()
+    env_base = CoherenceSettings.from_env().wire_log_base_dir
+    if env_base is not None:
+        return env_base.resolve()
     initial = getattr(addon, "_base_wire_log_dir", None)
     if initial is None:
         initial = addon.wire_log_dir
         addon._base_wire_log_dir = initial
-    return Path(os.path.expanduser(str(initial))).resolve()
+    return Path(str(initial)).expanduser().resolve()
 
 
 def _resolve_confined_wire_log_dir(addon: Any, raw_dir: Any) -> str:
     if not isinstance(raw_dir, str) or not raw_dir.strip() or "\x00" in raw_dir:
         raise ValueError("Invalid wire_log_dir")
     base = _allowed_wire_log_base(addon)
-    candidate = (base / os.path.expanduser(raw_dir.strip())).resolve()
+    candidate = (base / Path(raw_dir.strip()).expanduser()).resolve()
     if not candidate.is_relative_to(base):
         raise ValueError("wire_log_dir outside allowed base directory")
     return str(candidate)

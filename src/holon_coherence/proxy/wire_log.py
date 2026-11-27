@@ -18,6 +18,7 @@ except ImportError:
     ctx = None
 
 from holon_coherence.metrics_math import DEFAULT_WIRE_LOG_DIR
+from holon_coherence.settings import DEFAULT_WIRE_LOG_MAX_PENDING, CoherenceSettings
 
 __all__ = [
     "WIRE_LOG_DIR",
@@ -40,18 +41,17 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-WIRE_LOG_DIR = os.getenv("WIRE_LOG_DIR", DEFAULT_WIRE_LOG_DIR)
-WIRE_LOG_MAX_PENDING = 256
+WIRE_LOG_DIR = DEFAULT_WIRE_LOG_DIR
+WIRE_LOG_MAX_PENDING = DEFAULT_WIRE_LOG_MAX_PENDING
 
 
 def is_wire_logging_enabled() -> bool:
-    return os.getenv("ENABLE_WIRE_LOGGING", "1").lower().strip() not in ("0", "false", "no", "off")
+    return CoherenceSettings.from_env().enable_wire_logging
 
 
 def is_passive_monitoring() -> bool:
-    if os.getenv("HOLON_PASSIVE_MONITORING", "0").lower().strip() in ("1", "true", "yes", "on"):
-        return True
-    return os.getenv("COHERENCE_TOKEN_REDUCTION", "1").lower().strip() in ("0", "false", "no", "off")
+    settings = CoherenceSettings.from_env()
+    return settings.passive_monitoring or not settings.token_reduction
 
 
 def is_flow_passive(flow: Any, default_passive: bool | None = None) -> bool:
@@ -84,11 +84,7 @@ def _completed_future() -> concurrent.futures.Future:
 
 
 def _wire_log_max_pending() -> int:
-    raw = os.getenv("WIRE_LOG_MAX_PENDING", "").strip()
-    with contextlib.suppress(ValueError):
-        if raw and (parsed := int(raw)) >= 0:
-            return parsed
-    return WIRE_LOG_MAX_PENDING
+    return CoherenceSettings.from_env().wire_log_max_pending
 
 
 def get_dropped_wire_log_count(reset: bool = False) -> int:
@@ -144,7 +140,7 @@ def _write_transaction_sync(record: dict[str, Any], wire_log_dir: str) -> None:
 
 def dump_wire_transaction(record: dict[str, Any], wire_log_dir: str | None = None) -> concurrent.futures.Future:
     global _dropped_wire_log_count
-    target_dir = wire_log_dir or os.getenv("WIRE_LOG_DIR", WIRE_LOG_DIR)
+    target_dir = wire_log_dir or CoherenceSettings.from_env().wire_log_dir_override or DEFAULT_WIRE_LOG_DIR
     if not is_wire_logging_enabled() or not target_dir:
         return _completed_future()
 
