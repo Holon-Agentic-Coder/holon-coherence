@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from holon_coherence.ca_generator import _sync_mitmproxy_ca
 from holon_coherence.commands.ca import (
     find_system_ca_bundle,
     get_or_create_merged_ca_bundle,
@@ -162,3 +164,47 @@ class TestCACommandRegistrationAndDispatch:
         with patch("holon_coherence.commands.ca.generate_root_ca", return_value=("/cert.pem", "/key.pem")):
             res = handle(args)
             assert res == 0
+
+
+class TestSyncMitmproxyCALogging:
+    def test_sync_mitmproxy_ca_logs_warning_on_cert_copy_oserror(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        ca_cert = tmp_path / "holon-root-ca.crt"
+        ca_key = tmp_path / "holon-root-ca.key"
+        ca_cert.write_text("-----BEGIN CERTIFICATE-----\nCERT\n-----END CERTIFICATE-----\n", encoding="utf-8")
+        ca_key.write_text("-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----\n", encoding="utf-8")
+
+        with (
+            patch(
+                "holon_coherence.ca_generator.shutil.copyfile",
+                side_effect=PermissionError("read-only cert target"),
+            ),
+            caplog.at_level(logging.WARNING, logger="holon_coherence.ca_generator"),
+        ):
+            _sync_mitmproxy_ca(str(ca_cert), str(ca_key), str(tmp_path))
+
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("mitmproxy-ca-cert.pem" in msg and "read-only cert target" in msg for msg in warnings)
+        assert (tmp_path / "mitmproxy-ca.pem").is_file()
+
+    def test_sync_mitmproxy_ca_logs_warning_on_bundle_write_oserror(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        ca_cert = tmp_path / "holon-root-ca.crt"
+        ca_key = tmp_path / "holon-root-ca.key"
+        ca_cert.write_text("-----BEGIN CERTIFICATE-----\nCERT\n-----END CERTIFICATE-----\n", encoding="utf-8")
+        ca_key.write_text("-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----\n", encoding="utf-8")
+
+        with (
+            patch(
+                "holon_coherence.ca_generator.os.open",
+                side_effect=PermissionError("read-only bundle target"),
+            ),
+            caplog.at_level(logging.WARNING, logger="holon_coherence.ca_generator"),
+        ):
+            _sync_mitmproxy_ca(str(ca_cert), str(ca_key), str(tmp_path))
+
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("mitmproxy-ca.pem" in msg and "read-only bundle target" in msg for msg in warnings)
+        assert (tmp_path / "mitmproxy-ca-cert.pem").is_file()

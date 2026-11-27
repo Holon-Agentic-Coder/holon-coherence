@@ -86,36 +86,36 @@ def run_workload_ab_test(
         raise ValueError("No command specified for workload A/B benchmark.")
 
     proxy_url = f"http://127.0.0.1:{proxy_port}"
-    session_dir = tempfile.mkdtemp(prefix="holon_ab_workload_")
-    baseline_dir = os.path.join(session_dir, "baseline")
-    optimized_dir = os.path.join(session_dir, "optimized")
-    os.makedirs(baseline_dir, exist_ok=True)
-    os.makedirs(optimized_dir, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="holon_ab_workload_") as session_dir:
+        baseline_dir = os.path.join(session_dir, "baseline")
+        optimized_dir = os.path.join(session_dir, "optimized")
+        os.makedirs(baseline_dir, exist_ok=True)
+        os.makedirs(optimized_dir, exist_ok=True)
 
-    base_env = os.environ.copy()
-    proxy_env_vars = build_proxy_env(proxy_url)
-    base_env.update(proxy_env_vars)
+        base_env = os.environ.copy()
+        proxy_env_vars = build_proxy_env(proxy_url)
+        base_env.update(proxy_env_vars)
 
-    print("🚀 Running Variant A (Baseline / Control Workload): Real Traffic Interception...")
-    set_proxy_mode("baseline", port=proxy_port, wire_log_dir=baseline_dir)
-    env_a = base_env.copy()
-    env_a["HOLON_PASSIVE_MONITORING"] = "1"
-    env_a["WIRE_LOG_DIR"] = baseline_dir
-    res_a = subprocess.run(command_str, shell=True, env=env_a)
-    if res_a.returncode != 0:
-        print(f"⚠️  Baseline workload exited with code {res_a.returncode}", file=sys.stderr)
+        print("🚀 Running Variant A (Baseline / Control Workload): Real Traffic Interception...")
+        set_proxy_mode("baseline", port=proxy_port, wire_log_dir=baseline_dir)
+        env_a = base_env.copy()
+        env_a["HOLON_PASSIVE_MONITORING"] = "1"
+        env_a["WIRE_LOG_DIR"] = baseline_dir
+        res_a = subprocess.run(command_str, shell=True, env=env_a)
+        if res_a.returncode != 0:
+            print(f"⚠️  Baseline workload exited with code {res_a.returncode}", file=sys.stderr)
 
-    print("⚡ Running Variant B (Optimized Workload): Real Traffic Optimization...")
-    set_proxy_mode("optimized", port=proxy_port, wire_log_dir=optimized_dir)
-    env_b = base_env.copy()
-    env_b["HOLON_PASSIVE_MONITORING"] = "0"
-    env_b["WIRE_LOG_DIR"] = optimized_dir
-    res_b = subprocess.run(command_str, shell=True, env=env_b)
-    if res_b.returncode != 0:
-        print(f"⚠️  Optimized workload exited with code {res_b.returncode}", file=sys.stderr)
+        print("⚡ Running Variant B (Optimized Workload): Real Traffic Optimization...")
+        set_proxy_mode("optimized", port=proxy_port, wire_log_dir=optimized_dir)
+        env_b = base_env.copy()
+        env_b["HOLON_PASSIVE_MONITORING"] = "0"
+        env_b["WIRE_LOG_DIR"] = optimized_dir
+        res_b = subprocess.run(command_str, shell=True, env=env_b)
+        if res_b.returncode != 0:
+            print(f"⚠️  Optimized workload exited with code {res_b.returncode}", file=sys.stderr)
 
-    baseline_txs = load_transactions_from_path(baseline_dir)
-    optimized_txs = load_transactions_from_path(optimized_dir)
+        baseline_txs = load_transactions_from_path(baseline_dir)
+        optimized_txs = load_transactions_from_path(optimized_dir)
 
     return evaluate_runs(
         baseline_transactions=baseline_txs,
