@@ -537,3 +537,11 @@ class TestProxyLifecycleDelegation:
             main(["start", "--local-llm-base", "localhost:notaport"])
         assert exc_info.value.code == 1
         assert "is not a usable endpoint" in capsys.readouterr().err
+
+
+class TestDockerfileUserTraversal:
+    def test_dockerfile_makes_home_traversable_for_host_uid_mapping(self) -> None:
+        dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
+        content = dockerfile.read_text(encoding="utf-8")
+        assert "chmod 0755 /home/mitmproxy" in content
+        assert "chmod 1777 /home/mitmproxy/.holon /tmp/wire_logs" in content
