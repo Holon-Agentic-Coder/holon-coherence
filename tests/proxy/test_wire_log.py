@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import logging
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from holon_coherence.proxy.wire_log import (
     WIRE_LOG_MAX_PENDING,
@@ -144,3 +147,33 @@ def test_wire_log_max_pending_invalid_env_falls_back_to_default(tmp_path: Path, 
     finally:
         flush_wire_logs(timeout=5.0)
         get_dropped_wire_log_count(reset=True)
+
+
+def test_is_flow_passive_logs_debug_on_header_error(caplog: pytest.LogCaptureFixture) -> None:
+    flow = MagicMock()
+    flow.request.headers.get.side_effect = TypeError("bad header lookup")
+    with caplog.at_level(logging.DEBUG, logger="holon_coherence.proxy.wire_log"):
+        assert is_flow_passive(flow, default_passive=True) is True
+    assert any(r.levelno == logging.DEBUG and "bad header lookup" in r.getMessage() for r in caplog.records)
+
+    caplog.clear()
+    flow.request.headers.get.side_effect = AttributeError("missing header method")
+    with caplog.at_level(logging.DEBUG, logger="holon_coherence.proxy.wire_log"):
+        assert is_flow_passive(flow, default_passive=False) is False
+    assert any(r.levelno == logging.DEBUG and "missing header method" in r.getMessage() for r in caplog.records)
+
+
+def test_log_telemetry_logs_debug_and_falls_back_on_ctx_runtime_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fake_ctx = MagicMock()
+    fake_ctx.log.info.side_effect = RuntimeError("ctx log unavailable")
+    with (
+        patch("holon_coherence.proxy.wire_log.ctx", fake_ctx),
+        patch.dict("sys.modules", {"holon_coherence.mitm_addon": None}),
+        caplog.at_level(logging.DEBUG, logger="holon_coherence.proxy.wire_log"),
+    ):
+        log_telemetry("telemetry fallback message")
+
+    assert any(r.levelno == logging.DEBUG and "ctx log unavailable" in r.getMessage() for r in caplog.records)
+    assert any(r.levelno == logging.INFO and "telemetry fallback message" in r.getMessage() for r in caplog.records)

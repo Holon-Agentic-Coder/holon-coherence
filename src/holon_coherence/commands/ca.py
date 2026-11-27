@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import logging
 import os
 import ssl
 from collections.abc import Callable
 from typing import Any
 
 from holon_coherence.ca_generator import generate_root_ca
+
+logger = logging.getLogger(__name__)
 
 CA_ENV_VARS = (
     "SSL_CERT_FILE",
@@ -37,8 +40,8 @@ def find_system_ca_bundle() -> str | None:
         cafile = ssl.get_default_verify_paths().cafile
         if cafile and not cafile.endswith(HOLON_CA_FILENAMES) and os.path.isfile(cafile):
             return cafile
-    except Exception:
-        pass
+    except (OSError, ssl.SSLError, AttributeError) as exc:
+        logger.debug("Failed to resolve default SSL CA verify paths: %s", exc)
 
     try:
         import certifi

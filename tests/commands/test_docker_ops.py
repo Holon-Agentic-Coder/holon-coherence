@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import subprocess
+import urllib.error
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,6 +15,7 @@ from holon_coherence.commands.docker_ops import (
     get_container_mapped_port,
     get_container_web_token,
     handle,
+    handle_status,
     is_container_bound_to_port,
     is_container_running,
     register,
@@ -82,6 +85,68 @@ class TestContainerStatusAndPortBinding:
 
         with patch("subprocess.run", return_value=MagicMock(returncode=1, stdout="")):
             assert get_container_mapped_port("test-box", 8080) is None
+
+    def test_get_container_mapped_port_logs_debug_on_timeout_and_bad_output(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        timeout_err = subprocess.TimeoutExpired(cmd=["docker", "port"], timeout=5.0)
+        with (
+            patch("subprocess.run", side_effect=timeout_err),
+            caplog.at_level(logging.DEBUG, logger="holon_coherence.commands.docker_ops"),
+        ):
+            assert get_container_mapped_port("test-box", 8080) is None
+        assert any(r.levelno == logging.DEBUG and "test-box" in r.getMessage() for r in caplog.records)
+
+        caplog.clear()
+        bad_port_res = MagicMock(returncode=0, stdout="127.0.0.1:not-a-port\n")
+        with (
+            patch("subprocess.run", return_value=bad_port_res),
+            caplog.at_level(logging.DEBUG, logger="holon_coherence.commands.docker_ops"),
+        ):
+            assert get_container_mapped_port("test-box", 8080) is None
+        assert any(r.levelno == logging.DEBUG and "not-a-port" in r.getMessage() for r in caplog.records)
+
+    def test_handle_status_logs_debug_on_metrics_url_error_and_invalid_json(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        args = argparse.Namespace(name="test-box")
+        endpoints = MagicMock(proxy_port=8080)
+        with (
+            patch("subprocess.run", return_value=MagicMock(returncode=0)),
+            patch("holon_coherence.commands.endpoints.print_endpoints"),
+            patch("urllib.request.urlopen", side_effect=urllib.error.URLError("connection refused")),
+            caplog.at_level(logging.DEBUG, logger="holon_coherence.commands.docker_ops"),
+        ):
+            ret = handle_status(
+                args,
+                is_running_fn=lambda _: True,
+                resolve_endpoints_fn=lambda *_a, **_kw: endpoints,
+            )
+        assert ret == 0
+        assert any(r.levelno == logging.DEBUG and "connection refused" in r.getMessage() for r in caplog.records)
+
+        caplog.clear()
+        bad_resp = MagicMock()
+        bad_resp.status = 200
+        bad_resp.read.return_value = b"{not-valid-json"
+        cm = MagicMock()
+        cm.__enter__.return_value = bad_resp
+        cm.__exit__.return_value = False
+        with (
+            patch("subprocess.run", return_value=MagicMock(returncode=0)),
+            patch("holon_coherence.commands.endpoints.print_endpoints"),
+            patch("urllib.request.urlopen", return_value=cm),
+            caplog.at_level(logging.DEBUG, logger="holon_coherence.commands.docker_ops"),
+        ):
+            ret = handle_status(
+                args,
+                is_running_fn=lambda _: True,
+                resolve_endpoints_fn=lambda *_a, **_kw: endpoints,
+            )
+        assert ret == 0
+        assert any(
+            r.levelno == logging.DEBUG and "Failed to fetch proxy metrics" in r.getMessage() for r in caplog.records
+        )
 
     def test_get_container_web_token_reads_container_env(self) -> None:
         env = '["PATH=/usr/bin","HOLON_COHERENCE_WEB_PASSWORD=tok-from-env","OTHER=x"]\n'

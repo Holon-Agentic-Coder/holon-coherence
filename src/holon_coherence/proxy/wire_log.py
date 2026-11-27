@@ -55,9 +55,9 @@ def is_passive_monitoring() -> bool:
 
 
 def is_flow_passive(flow: Any, default_passive: bool | None = None) -> bool:
-    with contextlib.suppress(Exception):
-        if flow and hasattr(flow, "request") and hasattr(flow.request, "headers"):
-            headers = flow.request.headers
+    try:
+        headers = getattr(getattr(flow, "request", None), "headers", None)
+        if headers is not None:
             for key in ("x-holon-passive", "x-holon-mode", "X-Holon-Passive", "X-Holon-Mode"):
                 val = headers.get(key)
                 if val:
@@ -66,6 +66,8 @@ def is_flow_passive(flow: Any, default_passive: bool | None = None) -> bool:
                         return True
                     if val_clean in ("0", "false", "no", "optimized", "active"):
                         return False
+    except (AttributeError, TypeError, ValueError) as exc:
+        logger.debug("Failed to inspect passive flow headers: %s", exc)
     return default_passive if default_passive is not None else is_passive_monitoring()
 
 
@@ -190,7 +192,9 @@ def log_telemetry(msg: str) -> None:
     if mod is not None and hasattr(mod, "ctx"):
         active_ctx = mod.ctx
     if active_ctx and hasattr(active_ctx, "log") and hasattr(active_ctx.log, "info"):
-        with contextlib.suppress(Exception):
+        try:
             active_ctx.log.info(msg)
             return
+        except (AttributeError, RuntimeError, TypeError, OSError) as exc:
+            logger.debug("mitmproxy ctx.log.info failed, falling back to stdlib logger: %s", exc)
     logger.info(msg)
