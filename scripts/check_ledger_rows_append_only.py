@@ -49,6 +49,17 @@ def _verify_commit(repo: Path, ref: str) -> None:
         raise AppendOnlyCheckError(f"failed to resolve git ref '{ref}': {detail}")
 
 
+def _resolve_merge_base(repo: Path, base: str, head: str) -> str:
+    result = _run_git_bytes(repo, ["merge-base", base, head])
+    if result.returncode != 0:
+        detail = _decode_stderr(result.stderr, result.returncode)
+        raise AppendOnlyCheckError(f"failed to resolve merge-base for '{base}' and '{head}': {detail}")
+    merge_base = result.stdout.decode("utf-8", errors="replace").strip()
+    if not merge_base:
+        raise AppendOnlyCheckError(f"empty merge-base for '{base}' and '{head}'")
+    return merge_base
+
+
 def _list_ledger_jsonl_paths(repo: Path, ref: str) -> list[str]:
     result = _run_git_bytes(repo, ["ls-tree", "-r", "--name-only", "-z", ref, "--", LEDGER_TREE_PATH])
     if result.returncode != 0:
@@ -104,11 +115,12 @@ def check_ledger_rows_append_only(repo: Path, base: str, head: str) -> list[Viol
         raise AppendOnlyCheckError(f"repository path is not a directory: {repo}")
     _verify_commit(repo, base)
     _verify_commit(repo, head)
-    base_paths = _list_ledger_jsonl_paths(repo, base)
+    merge_base = _resolve_merge_base(repo, base, head)
+    base_paths = _list_ledger_jsonl_paths(repo, merge_base)
     head_paths = set(_list_ledger_jsonl_paths(repo, head))
     violations: list[Violation] = []
     for rel_path in base_paths:
-        base_bytes = _read_git_blob(repo, base, rel_path)
+        base_bytes = _read_git_blob(repo, merge_base, rel_path)
         head_bytes = _read_git_blob(repo, head, rel_path) if rel_path in head_paths else None
         violations.extend(check_bytes_append_only(rel_path, base_bytes, head_bytes))
     return violations

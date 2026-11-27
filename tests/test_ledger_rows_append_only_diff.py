@@ -119,3 +119,43 @@ def test_unreadable_base_ref_fails_closed(tmp_path: Path, capsys: pytest.Capture
     exit_code = main(["--repo", str(repo), "--base", missing_sha, "--head", head_sha])
     assert exit_code == 2
     assert "error:" in capsys.readouterr().err
+
+
+def test_diverged_base_advancing_ledger_does_not_false_positive(tmp_path: Path) -> None:
+    repo, merge_base_sha = _create_base_repo(tmp_path)
+    _git(repo, "checkout", "-b", "pr-branch", merge_base_sha)
+    pr_pending = repo / "holon-knowledge" / "ledger" / "pending" / "plans" / "P-2.jsonl"
+    pr_pending.parent.mkdir(parents=True)
+    pr_pending.write_bytes(b'{"id":"P-2","pending":true}\n')
+    pr_head_sha = _commit_all(repo, "pr appends pending fragment")
+
+    _git(repo, "checkout", "-b", "base-branch", merge_base_sha)
+    intents = repo / "holon-knowledge" / "ledger" / "intents.jsonl"
+    intents.write_bytes(intents.read_bytes() + b'{"id":"I-99","v":99}\n')
+    main_pending = repo / "holon-knowledge" / "ledger" / "pending" / "executions" / "E-99.jsonl"
+    main_pending.parent.mkdir(parents=True)
+    main_pending.write_bytes(b'{"id":"E-99","pending":true}\n')
+    advanced_base_sha = _commit_all(repo, "main appends ledger row and pending fragment")
+
+    assert check_ledger_rows_append_only(repo, advanced_base_sha, pr_head_sha) == []
+    assert main(["--repo", str(repo), "--base", advanced_base_sha, "--head", pr_head_sha]) == 0
+
+    _git(repo, "checkout", "pr-branch")
+    intents.write_bytes(b'{"id":"I-1","v":9}\n{"id":"I-2","v":2}\n')
+    bad_pr_head_sha = _commit_all(repo, "pr edits merge-base row")
+    violations = check_ledger_rows_append_only(repo, advanced_base_sha, bad_pr_head_sha)
+    assert len(violations) == 1
+    assert violations[0].path == "holon-knowledge/ledger/intents.jsonl"
+    assert violations[0].row_index == 1
+
+
+def test_unrelated_histories_fail_closed(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    repo, base_sha = _create_base_repo(tmp_path)
+    _git(repo, "checkout", "--orphan", "orphan-branch")
+    (repo / "holon-knowledge" / "ledger" / "intents.jsonl").write_bytes(b'{"id":"I-1","v":1}\n')
+    orphan_sha = _commit_all(repo, "orphan commit")
+    with pytest.raises(AppendOnlyCheckError):
+        check_ledger_rows_append_only(repo, base_sha, orphan_sha)
+    exit_code = main(["--repo", str(repo), "--base", base_sha, "--head", orphan_sha])
+    assert exit_code == 2
+    assert "error:" in capsys.readouterr().err
