@@ -101,14 +101,7 @@ def _translate_tool_responses(
             pending = pending_tool_call_ids.get(fn_name)
             tool_call_id = pending.pop(0) if pending else f"call_{fn_name}"
 
-        messages.append(
-            {
-                "role": "tool",
-                "name": fn_name,
-                "tool_call_id": tool_call_id,
-                "content": content_body,
-            }
-        )
+        messages.append({"role": "tool", "name": fn_name, "tool_call_id": tool_call_id, "content": content_body})
     return messages
 
 
@@ -334,10 +327,7 @@ def _flush_buffered_tool_calls(stream_state: dict[str, Any]) -> list[dict[str, A
         b_args_raw = b_call.get("arguments", "{}")
         if not b_name:
             continue
-        try:
-            b_args = json.loads(b_args_raw) if b_args_raw else {}
-        except Exception:
-            b_args = {"raw": b_args_raw}
+        b_args = _parse_func_args(b_args_raw) if b_args_raw else {}
         parts.append({"functionCall": {"name": b_name, "args": b_args}})
     return parts
 
@@ -377,9 +367,7 @@ def _build_gemini_candidate_chunk(
     if parts:
         cand["content"] = {"role": "model", "parts": parts}
     if finish_reason:
-        cand["finishReason"] = (
-            GEMINI_STOP_FINISH_REASON if finish_reason in ("stop", "tool_calls") else GEMINI_MAX_TOKENS_FINISH_REASON
-        )
+        cand["finishReason"] = _map_finish_reason(finish_reason)
     return cand
 
 
@@ -426,9 +414,17 @@ def _process_single_sse_payload(
 def translate_openai_sse_chunk_to_gemini(
     chunk_str: str,
     stream_state: dict[str, Any] | None = None,
+    *,
+    flush: bool = False,
 ) -> str:
     output_lines: list[str] = []
-    for line in chunk_str.split("\n"):
+    if stream_state is not None:
+        lines = (stream_state.pop("line_buffer", "") + chunk_str).split("\n")
+        if not flush:
+            stream_state["line_buffer"] = lines.pop()
+    else:
+        lines = chunk_str.split("\n")
+    for line in lines:
         stripped = line.strip()
         if not stripped or stripped == SSE_DONE_LINE:
             continue
