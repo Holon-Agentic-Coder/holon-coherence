@@ -11,6 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 SCRIPTS_SELF_DOC_FILES: tuple[str, ...] = (
     "scripts/check_ci_runtime_budget.py",
+    "scripts/check_commit_trailers.py",
     "scripts/check_ledger_rows_append_only.py",
     "scripts/check_ledger_stores.py",
     "scripts/check_module_budgets.py",
@@ -20,6 +21,7 @@ SCRIPTS_SELF_DOC_FILES: tuple[str, ...] = (
     "scripts/module_budget_base.py",
     "scripts/pre_commit_check.py",
     "tests/test_check_ci_runtime_budget.py",
+    "tests/test_check_commit_trailers.py",
     "tests/test_check_no_harness_references.py",
     "tests/test_ci_timing_gate.py",
     "tests/test_complexity_baseline.py",
