@@ -162,6 +162,51 @@ def test_diff_mode_ignores_removed_lines(tmp_path: Path) -> None:
     assert result.stdout == ""
 
 
+def test_diff_mode_uses_merge_base_when_base_diverges(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    ancestor = _commit_file(repo, "legacy.txt", f"keep\nold {_sample_agent_dir()}\n", "ancestor with legacy ref")
+    _git(repo, "checkout", "-b", "feature", ancestor)
+    head = _commit_file(repo, "feature.txt", "clean feature work\n", "clean pr change")
+    _git(repo, "checkout", "-")
+    base = _commit_file(repo, "legacy.txt", "keep\ncleaned on base\n", "base removes legacy ref")
+
+    result = _run_cli(["diff", "--repo", str(repo), "--base", base, "--head", head])
+    assert result.returncode == 0
+    assert result.stdout == ""
+
+
+def test_scan_unified_diff_handles_context_lines_across_hunks_and_files() -> None:
+    diff_text = "\n".join(
+        [
+            "diff --git a/first.txt b/first.txt",
+            "--- a/first.txt",
+            "+++ b/first.txt",
+            "@@ -1,3 +1,4 @@",
+            " line 1",
+            "+added clean",
+            " line 2",
+            " line 3",
+            "@@ -10,2 +11,3 @@",
+            " line 10",
+            f"+hit {_sample_task_id()}",
+            " line 11",
+            "diff --git a/second.txt b/second.txt",
+            "--- a/second.txt",
+            "+++ b/second.txt",
+            "@@ -1,2 +1,3 @@",
+            " ctx",
+            f"+see {_sample_task_dir()}",
+            " end",
+        ]
+    )
+
+    findings = checker.scan_unified_diff(diff_text)
+    assert [(f.source, f.line_number, f.pattern_name) for f in findings] == [
+        ("first.txt", 12, "four_digit_task_id"),
+        ("second.txt", 2, "task_tracking_dir"),
+    ]
+
+
 def test_diff_mode_fails_closed_on_unreadable_diff_and_inputs(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     base = _commit_file(repo, "a.txt", "ok\n", "base")
@@ -181,6 +226,14 @@ def test_diff_mode_fails_closed_on_unreadable_diff_and_inputs(tmp_path: Path) ->
     )
     assert missing_body.returncode == 2
     assert "error:" in missing_body.stderr
+
+    bad_utf8_body = tmp_path / "bad_utf8.md"
+    bad_utf8_body.write_bytes(b"\xff\xfeinvalid")
+    invalid_body = _run_cli(
+        ["diff", "--repo", str(repo), "--base", base, "--head", base, "--pr-body-file", str(bad_utf8_body)]
+    )
+    assert invalid_body.returncode == 2
+    assert "error:" in invalid_body.stderr
 
 
 def test_tree_mode_reports_matching_files_and_lines(tmp_path: Path) -> None:

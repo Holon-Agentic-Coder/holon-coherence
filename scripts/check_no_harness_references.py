@@ -42,6 +42,24 @@ def _extract_diff_target(header_line: str) -> str | None:
     return target[2:] if target.startswith("b/") else target
 
 
+def _scan_hunk_line(
+    line: str,
+    current_file: str | None,
+    state: tuple[int, int, int],
+    findings: list[Finding],
+) -> tuple[int, int, int]:
+    line_number, remaining_old, remaining_new = state
+    if line.startswith("+"):
+        if current_file is not None:
+            findings.extend(scan_line(line[1:], current_file, line_number))
+        return line_number + 1, remaining_old, max(remaining_new - 1, 0)
+    if line.startswith("-"):
+        return line_number, max(remaining_old - 1, 0), remaining_new
+    if line.startswith(" "):
+        return line_number + 1, max(remaining_old - 1, 0), max(remaining_new - 1, 0)
+    return line_number, remaining_old, remaining_new
+
+
 def scan_unified_diff(diff_text: str) -> list[Finding]:
     findings: list[Finding] = []
     current_file: str | None = None
@@ -50,13 +68,9 @@ def scan_unified_diff(diff_text: str) -> list[Finding]:
     remaining_new = 0
     for line in diff_text.splitlines():
         if remaining_old > 0 or remaining_new > 0:
-            if line.startswith("+"):
-                if current_file is not None:
-                    findings.extend(scan_line(line[1:], current_file, line_number))
-                line_number += 1
-                remaining_new = max(remaining_new - 1, 0)
-            elif line.startswith("-"):
-                remaining_old = max(remaining_old - 1, 0)
+            line_number, remaining_old, remaining_new = _scan_hunk_line(
+                line, current_file, (line_number, remaining_old, remaining_new), findings
+            )
             continue
         if line.startswith("diff --git "):
             current_file = None
@@ -78,7 +92,7 @@ def _load_pr_body(pr_body: str | None, pr_body_file: str | None, pr_body_env: st
     if pr_body_file is not None:
         try:
             parts.append(Path(pr_body_file).read_text(encoding="utf-8"))
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
             raise CheckExecutionError(f"failed to read PR body file '{pr_body_file}': {exc}") from exc
     if pr_body_env is not None:
         env_value = os.environ.get(pr_body_env, "")
@@ -95,10 +109,10 @@ def run_diff_check(
 ) -> list[Finding]:
     if not repo.is_dir():
         raise CheckExecutionError(f"repository path is not a directory: {repo}")
-    result = _run_git(repo, ["diff", "--unified=0", "--no-color", base, head])
+    result = _run_git(repo, ["diff", "--unified=0", "--no-color", f"{base}...{head}", "--"])
     if result.returncode != 0:
         detail = result.stderr.strip() or f"exit code {result.returncode}"
-        raise CheckExecutionError(f"failed to read git diff {base}..{head}: {detail}")
+        raise CheckExecutionError(f"failed to read git diff {base}...{head}: {detail}")
     findings = scan_unified_diff(result.stdout)
     if pr_body:
         findings.extend(scan_text(pr_body, "PR_BODY"))
