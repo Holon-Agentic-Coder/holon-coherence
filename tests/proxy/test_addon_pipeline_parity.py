@@ -39,6 +39,9 @@ _ENV_TO_CLEAR = (
     "HOLON_LOCAL_MODEL",
     "HOLON_AGENT_ID",
     "HOLON_ROLE",
+    "HOLON_COHERENCE_API_TOKEN",
+    "HOLON_COHERENCE_WEB_PASSWORD",
+    "HOLON_WIRE_LOG_BASE_DIR",
 )
 
 
@@ -314,17 +317,28 @@ def sc_post_metrics_falls_through(h: Harness) -> dict[str, Any]:
     return h.observe(flow)
 
 
-def sc_mode_post_variants(h: Harness) -> dict[str, Any]:
+def sc_mode_post_variants(h: Harness, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    monkeypatch.setenv("HOLON_COHERENCE_API_TOKEN", "parity-token")
     url = "http://127.0.0.1:8080/holon/api/mode"
+    auth = {"Content-Type": "application/json", "Authorization": "Bearer parity-token"}
     flows = [
-        ParityFlow(ParityRequest(url, "POST", json.dumps({"mode": "baseline"}))),
+        ParityFlow(ParityRequest(url, "POST", json.dumps({"mode": "baseline"}), dict(auth))),
         ParityFlow(ParityRequest(url, "GET")),
-        ParityFlow(ParityRequest(url, "POST", json.dumps({"mode": " Optimized "}))),
-        ParityFlow(ParityRequest("http://127.0.0.1:8080/_holon/mode", "post", json.dumps({"mode": "passive"}))),
-        ParityFlow(ParityRequest(url, "POST", json.dumps({"mode": "active", "wire_log_dir": "/tmp/x"}))),
-        ParityFlow(ParityRequest(url, "POST", "{not json")),
-        ParityFlow(ParityRequest(url, "POST", "")),
-        ParityFlow(ParityRequest(url, "POST", json.dumps({"mode": "weird"}))),
+        ParityFlow(ParityRequest(url, "POST", json.dumps({"mode": " Optimized "}), dict(auth))),
+        ParityFlow(
+            ParityRequest("http://127.0.0.1:8080/_holon/mode", "post", json.dumps({"mode": "passive"}), dict(auth))
+        ),
+        ParityFlow(
+            ParityRequest(
+                url,
+                "POST",
+                json.dumps({"mode": "active", "wire_log_dir": str(h.wire_dir / "sub")}),
+                dict(auth),
+            )
+        ),
+        ParityFlow(ParityRequest(url, "POST", "{not json", dict(auth))),
+        ParityFlow(ParityRequest(url, "POST", "", dict(auth))),
+        ParityFlow(ParityRequest(url, "POST", json.dumps({"mode": "weird"}), dict(auth))),
         ParityFlow(ParityRequest(url, "GET")),
     ]
     snapshots = []
@@ -336,6 +350,7 @@ def sc_mode_post_variants(h: Harness) -> dict[str, Any]:
 
 def sc_mode_get_env_passive(h: Harness, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setenv("HOLON_PASSIVE_MONITORING", "1")
+    h.addon.default_passive = None
     flow = ParityFlow(ParityRequest("http://127.0.0.1:8080/holon/api/mode", "GET"))
     h.addon.request(flow)
     return h.observe(flow)

@@ -1,0 +1,30 @@
+name: Test - No Harness References
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  no-harness-references:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check diff and PR body for harness references
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python3 scripts/check_no_harness_references.py diff \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --pr-body-env PR_BODY
