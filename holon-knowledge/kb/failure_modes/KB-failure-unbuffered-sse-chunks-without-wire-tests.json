@@ -1,0 +1,34 @@
+{
+  "kb_id": "KB-failure-unbuffered-sse-chunks-without-wire-tests",
+  "kb_type": "failure_mode",
+  "version": "1.0",
+  "created_ts": "2026-11-27T06:25:46.283627+00:00",
+  "updated_ts": "2026-11-27T06:25:46.283627+00:00",
+  "created_by": "holon-coherence-audit",
+  "status": "active",
+  "evidence": {
+    "ledger_refs": [],
+    "success_count": 0,
+    "failure_count": 1,
+    "ladder_state": "curated"
+  },
+  "tags": [
+    "sse",
+    "streaming",
+    "proxy",
+    "wire-test",
+    "failure_mode"
+  ],
+  "human_approved": true,
+  "payload": {
+    "name": "Unbuffered SSE Chunk Processing Without Wire Boundary Tests",
+    "description": "Decoding and translating raw TCP/HTTP stream chunks independently in src/holon_coherence/proxy/steps/sse_tap.py (chunk.decode('utf-8', errors='ignore') passed directly to translate_openai_sse_chunk_to_gemini) without a stateful incremental UTF-8 decoder and line-framing buffer across chunk boundaries silently corrupts multi-byte characters or drops split 'data:' JSON frames, while single-chunk unit tests mask the defect until real fragmented wire traffic hits the proxy.",
+    "action": "Maintain a stateful incremental UTF-8 decoder and partial-line SSE framing buffer per flow in src/holon_coherence/proxy/steps/sse_tap.py and SSE parsers while enforcing the _MAX_SSE_BUFFER_BYTES cap, flush remaining buffered lines cleanly on stream end, and add wire-level chunk-split tests (splitting mid-JSON, mid-'data:' prefix, and mid-UTF-8 codepoint) in tests/test_mitm_addon_sse.py.",
+    "symptoms": [
+      "Streaming responses pass single-chunk unit tests but fail JSON parsing or drop final usage/token frames under live fragmented SSE streams.",
+      "Multi-byte UTF-8 characters split across TCP chunk boundaries are silently dropped by per-chunk decode('utf-8', errors='ignore').",
+      "Bridged Gemini SSE translation emits truncated or malformed 'data:' events when upstream OpenAI chunks split mid-line.",
+      "Unbounded SSE tap accumulation risks excessive memory growth if _MAX_SSE_BUFFER_BYTES is bypassed or omitted."
+    ]
+  }
+}

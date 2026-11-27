@@ -1,0 +1,28 @@
+{
+  "kb_id": "KB-pattern-honest-unmeasured-wire-telemetry",
+  "kb_type": "pattern",
+  "version": "1.0",
+  "created_ts": "2026-11-27T06:25:46.283627+00:00",
+  "updated_ts": "2026-11-27T06:25:46.283627+00:00",
+  "created_by": "holon-coherence-audit",
+  "status": "active",
+  "evidence": {
+    "ledger_refs": [],
+    "success_count": 1,
+    "failure_count": 0,
+    "ladder_state": "curated"
+  },
+  "tags": [
+    "telemetry",
+    "wire-log",
+    "metrics",
+    "honesty",
+    "pattern"
+  ],
+  "human_approved": true,
+  "payload": {
+    "name": "Honest Unmeasured Wire Telemetry",
+    "description": "Record only authentic wire-observed timing, token, and cache metrics from live flows and captured transactions.jsonl logs, representing unavailable or unmeasured fields explicitly as None with diagnostic reasons (such as FlowTiming.decode_reason() returning 'non-streaming', 'no chunk window', or floor-threshold explanations in src/holon_coherence/proxy/timing.py). CumulativeMetrics (src/holon_coherence/proxy/metrics.py) and OfflineMetricsAccumulator (src/holon_coherence/metrics/aggregation.py) accumulate only positive measured samples so unmeasured turns never bias averages or A/B evaluations in src/holon_coherence/ab_testing/evaluation.py.",
+    "action": "Never fabricate synthetic estimates, mock stream generators, or zero/placeholder defaults for unmeasured wire telemetry; return None from timing and usage resolvers when a measurement is absent or below validity floors, guard accumulator increments on positive measured values, and derive all benchmarks exclusively from authentic wire logs or live runs."
+  }
+}
