@@ -42,6 +42,7 @@ from holon_coherence.host_local import (
     parse_local_target,
     plan_no_proxy_pruning,
 )
+from holon_coherence.settings import CoherenceSettings
 
 TRUTHY_WEB_ENV_VALUES = ("1", "true", "yes", "on")
 
@@ -139,7 +140,7 @@ def is_web_inspector_enabled(args: Any, in_container: bool) -> bool:
         return True
     if in_container:
         return False
-    return os.getenv(WEB_INSPECTOR_ENV_VAR, "").lower().strip() in TRUTHY_WEB_ENV_VALUES
+    return CoherenceSettings.from_env().web_inspector
 
 
 def probe_host_local_reachable(port: int, timeout: float = 15.0, container_name: str | None = None) -> tuple[bool, str]:
@@ -381,24 +382,16 @@ def handle(args: Any) -> int:
 
 def register(subparsers: Any) -> argparse.ArgumentParser:
     start_parser = subparsers.add_parser("start", help="Start the optimization proxy sidecar (via Docker by default)")
-    default_start_port = DEFAULT_PROXY_PORT
-    env_proxy_port = os.getenv("HOLON_PROXY_PORT")
-    if env_proxy_port:
-        try:
-            parsed_port = int(env_proxy_port)
-            if 1 <= parsed_port <= 65535:
-                default_start_port = parsed_port
-        except ValueError:
-            pass
+    settings = CoherenceSettings.from_env()
     start_parser.add_argument(
         "--port",
         type=int,
-        default=default_start_port,
+        default=settings.proxy_port,
         help=f"Proxy listen port (default: {DEFAULT_PROXY_PORT} or HOLON_PROXY_PORT)",
     )
     start_parser.add_argument(
         "--local-llm-base",
-        default=os.getenv("HOLON_LOCAL_LLM_BASE"),
+        default=settings.local_llm_base,
         help=f"Host-local model server (e.g. localhost:8081) to intercept and route via {GATEWAY_HOSTNAME}",
     )
     start_parser.add_argument(

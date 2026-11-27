@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import os
 import stat
 from pathlib import Path
@@ -9,7 +10,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from holon_coherence.cli import main
-from holon_coherence.commands.start import ensure_proxy_running
+from holon_coherence.commands.start import ensure_proxy_running, is_web_inspector_enabled
+from holon_coherence.settings import CoherenceSettings
 
 
 def _free_ports(port: int, host: str = "127.0.0.1") -> bool:
@@ -316,3 +318,21 @@ class TestMitmwebInspectorDefault:
             assert stat.S_IMODE(os.stat(d).st_mode) == 0o700
         assert stat.S_IMODE(os.stat(ca_dir / "mitmproxy-ca.pem").st_mode) == 0o600
         assert stat.S_IMODE(os.stat(ca_dir / "holon-root-ca.key").st_mode) == 0o600
+
+    @pytest.mark.parametrize("web_inspector", [True, False])
+    def test_is_web_inspector_enabled_delegates_to_coherence_settings(self, web_inspector: bool) -> None:
+        args = argparse.Namespace(web=None, web_password=None)
+        with patch(
+            "holon_coherence.commands.start.CoherenceSettings.from_env",
+            return_value=CoherenceSettings(web_inspector=web_inspector),
+        ) as mock_from_env:
+            assert is_web_inspector_enabled(args, in_container=False) is web_inspector
+        mock_from_env.assert_called_once_with()
+
+    @pytest.mark.parametrize(("raw_value", "expected"), [("  Yes ", True), ("maybe", False)])
+    def test_is_web_inspector_enabled_normalizes_env_via_settings(
+        self, raw_value: str, expected: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HOLON_COHERENCE_WEB", raw_value)
+        args = argparse.Namespace(web=None, web_password=None)
+        assert is_web_inspector_enabled(args, in_container=False) is expected

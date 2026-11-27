@@ -15,6 +15,7 @@ from holon_coherence.commands.agents import (
     run_agent,
 )
 from holon_coherence.commands.docker_ops import CONTAINER_NAME, stop_proxy_container
+from holon_coherence.settings import DEFAULT_PROXY_PORT, CoherenceSettings
 
 
 class TestRunnerFlagsExtractionSuite:
@@ -407,3 +408,66 @@ class TestLocalLlmRunnerFlagsAndEnvs:
         agy_env = build_agent_env("agy", port=8080)
         assert "AGY_GATEWAY_URL" not in agy_env
         assert "AGY_MODEL" not in agy_env
+
+
+class TestAgentsCoherenceSettingsResolution:
+    def test_run_agent_resolves_proxy_port_via_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HOLON_PROXY_PORT", raising=False)
+        monkeypatch.delenv("HOLON_LOCAL_LLM_BASE", raising=False)
+        with (
+            patch(
+                "holon_coherence.commands.agents.CoherenceSettings.from_env",
+                return_value=CoherenceSettings(proxy_port=9191),
+            ) as mock_from_env,
+            patch("holon_coherence.commands.agents.resolve_agent_binary", return_value="/bin/claude"),
+            patch("holon_coherence.commands.agents.ensure_proxy_running", return_value=False) as mock_ensure,
+            patch("holon_coherence.commands.agents.build_agent_env", return_value={}),
+            patch("holon_coherence.commands.agents.execute_interactive_process", return_value=0),
+        ):
+            code = run_agent("claude", [])
+            assert code == 0
+            mock_ensure.assert_called_once_with(port=9191, host_local_spec="")
+            assert mock_from_env.call_count >= 1
+
+    @pytest.mark.parametrize("raw_port", ["0", "70000", "abc"])
+    def test_run_agent_invalid_env_port_fallback_warns(
+        self, raw_port: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setenv("HOLON_PROXY_PORT", raw_port)
+        monkeypatch.delenv("HOLON_LOCAL_LLM_BASE", raising=False)
+        with (
+            patch("holon_coherence.commands.agents.resolve_agent_binary", return_value="/bin/claude"),
+            patch("holon_coherence.commands.agents.ensure_proxy_running", return_value=False) as mock_ensure,
+            patch("holon_coherence.commands.agents.build_agent_env", return_value={}),
+            patch("holon_coherence.commands.agents.execute_interactive_process", return_value=0),
+        ):
+            code = run_agent("claude", [])
+            assert code == 0
+            mock_ensure.assert_called_once_with(port=DEFAULT_PROXY_PORT, host_local_spec="")
+        err = capsys.readouterr().err
+        assert f"Invalid HOLON_PROXY_PORT '{raw_port}', falling back to {DEFAULT_PROXY_PORT}." in err
+
+    def test_build_agent_env_local_llm_base_trims_and_ignores_whitespace(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HOLON_LOCAL_LLM_BASE", "   ")
+        monkeypatch.delenv("HOLON_AGENT_KEY", raising=False)
+        unset_env = build_agent_env("claude", port=8080)
+        assert "ANTHROPIC_BASE_URL" not in unset_env
+
+        monkeypatch.setenv("HOLON_LOCAL_LLM_BASE", "  localhost:8081  ")
+        local_env = build_agent_env("claude", port=8080)
+        assert local_env["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8080"
+
+    def test_run_agent_resolves_local_llm_base_via_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HOLON_PROXY_PORT", raising=False)
+        monkeypatch.delenv("HOLON_LOCAL_LLM_BASE", raising=False)
+        with (
+            patch(
+                "holon_coherence.commands.agents.CoherenceSettings.from_env",
+                return_value=CoherenceSettings(proxy_port=8080, local_llm_base="localhost:8081"),
+            ),
+            patch("holon_coherence.commands.agents.resolve_agent_binary", return_value="/bin/claude"),
+            patch("holon_coherence.commands.agents.plan_local_llm_route", return_value=None) as mock_plan,
+        ):
+            code = run_agent("claude", [])
+            assert code == 1
+            mock_plan.assert_called_once_with("localhost:8081")
