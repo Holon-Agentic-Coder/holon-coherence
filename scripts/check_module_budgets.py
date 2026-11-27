@@ -93,7 +93,32 @@ def count_lines(path: Path) -> int:
     return len(path.read_text(encoding="utf-8").splitlines())
 
 
-def evaluate_budgets(repo_root: Path, config: dict[str, Any], modules: list[str]) -> tuple[list[str], list[str]]:
+def _evaluate_active_module(
+    rel_path: str,
+    actual: int,
+    default_limit: int,
+    overrides: dict[str, int],
+    fail_on_stale: bool,
+) -> tuple[str | None, str | None]:
+    in_overrides = rel_path in overrides
+    limit = overrides[rel_path] if in_overrides else default_limit
+    if actual > limit:
+        kind = "frozen override exceeded" if in_overrides else f"exceeds default budget of {default_limit}"
+        return f"{rel_path}: {actual} > {limit} lines ({kind})", None
+    if in_overrides and actual <= default_limit:
+        msg = f"Stale override notice: {rel_path} is {actual} lines (<= default {default_limit}); remove override"
+        return (msg, None) if fail_on_stale else (None, msg)
+    if in_overrides and actual < limit:
+        return None, f"Ratchet notice: {rel_path} shrunk to {actual} lines (< {limit}); lower override to {actual}"
+    return None, None
+
+
+def evaluate_budgets(
+    repo_root: Path,
+    config: dict[str, Any],
+    modules: list[str],
+    fail_on_stale: bool = False,
+) -> tuple[list[str], list[str]]:
     default_limit: int = config["default_max_lines"]
     overrides: dict[str, int] = config.get("overrides", {})
     active = [m for m in modules if not is_excluded(m, config.get("exclude", []))]
@@ -102,19 +127,14 @@ def evaluate_budgets(repo_root: Path, config: dict[str, Any], modules: list[str]
     notices: list[str] = []
     for rel_path in active:
         actual = count_lines(repo_root / rel_path)
-        in_overrides = rel_path in overrides
-        limit = overrides[rel_path] if in_overrides else default_limit
-        if actual > limit:
-            kind = "frozen override exceeded" if in_overrides else f"exceeds default budget of {default_limit}"
-            errors.append(f"{rel_path}: {actual} > {limit} lines ({kind})")
-        elif in_overrides and actual < limit:
-            action = (
-                f"remove override (<= {default_limit})" if actual <= default_limit else f"lower override to {actual}"
-            )
-            notices.append(f"Ratchet notice: {rel_path} shrunk to {actual} lines (< {limit}); {action}")
+        err, notice = _evaluate_active_module(rel_path, actual, default_limit, overrides, fail_on_stale)
+        if err is not None:
+            errors.append(err)
+        if notice is not None:
+            notices.append(notice)
     for rel_path in sorted(overrides):
         if rel_path not in active_set:
-            notices.append(f"Stale override notice: {rel_path} is not an active source module; remove override")
+            errors.append(f"Missing override target: {rel_path} is not an active source module; remove override")
     return errors, notices
 
 
@@ -123,6 +143,7 @@ def check_repo_budgets(
     config_rel_path: str = DEFAULT_CONFIG_REL_PATH,
     base_ref: str | None = None,
     verify_base: bool = False,
+    fail_on_stale: bool = False,
 ) -> tuple[list[str], list[str]]:
     config, config_errors = load_config(repo_root / config_rel_path)
     if config is None:
@@ -130,7 +151,7 @@ def check_repo_budgets(
     modules, discovery_errors = discover_source_modules(repo_root)
     if discovery_errors:
         return discovery_errors, []
-    errors, notices = evaluate_budgets(repo_root, config, modules)
+    errors, notices = evaluate_budgets(repo_root, config, modules, fail_on_stale=fail_on_stale)
     if verify_base:
         resolved = resolve_base_ref(repo_root, base_ref)
         if not resolved:
@@ -146,12 +167,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", default=DEFAULT_CONFIG_REL_PATH)
     parser.add_argument("--base-ref", default=None)
     parser.add_argument("--verify-base", action="store_true")
+    parser.add_argument("--fail-on-stale-overrides", action="store_true")
     args = parser.parse_args(argv)
     errors, notices = check_repo_budgets(
         repo_root=args.repo_root.resolve(),
         config_rel_path=args.config,
         base_ref=args.base_ref,
         verify_base=args.verify_base or args.base_ref is not None,
+        fail_on_stale=args.fail_on_stale_overrides,
     )
     for notice in notices:
         print(notice)

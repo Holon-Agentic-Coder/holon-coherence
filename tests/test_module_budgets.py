@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from scripts.check_module_budgets import DEFAULT_CONFIG_REL_PATH, main
+from scripts.check_module_budgets import DEFAULT_CONFIG_REL_PATH, evaluate_budgets, main
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -95,7 +95,7 @@ def test_frozen_override_shrink_emits_ratchet_notice(tmp_path: Path, capsys: Any
     (repo / "src/legacy_pkg/big.py").write_text(_lines(190), encoding="utf-8")
     assert main(["--repo-root", str(repo)]) == 0
     out_190 = capsys.readouterr().out
-    assert "Ratchet notice" in out_190
+    assert "Stale override notice" in out_190
     assert "190" in out_190
     assert "remove override" in out_190
 
@@ -229,7 +229,8 @@ def _assert_repo_passes_module_budgets(
     assert main(["--repo-root", str(repo_root), *(extra_args or [])]) == 0
     captured = capsys.readouterr()
     assert captured.err == ""
-    unexpected_out = [line for line in captured.out.splitlines() if line and not line.startswith("Ratchet notice:")]
+    allowed_prefixes = ("Ratchet notice:", "Stale override notice:")
+    unexpected_out = [line for line in captured.out.splitlines() if line and not line.startswith(allowed_prefixes)]
     assert unexpected_out == []
     return captured.out
 
@@ -246,12 +247,98 @@ def test_frozen_override_shrink_passes_with_ratchet_notice_and_growth_fails(tmp_
 
     (repo / "src/legacy_pkg/big.py").write_text(_lines(180), encoding="utf-8")
     out_180 = _assert_repo_passes_module_budgets(repo, capsys, ["--verify-base", "--base-ref", "main"])
-    assert "Ratchet notice:" in out_180
+    assert "Stale override notice:" in out_180
     assert "remove override" in out_180
 
     (repo / "src/legacy_pkg/big.py").write_text(_lines(251), encoding="utf-8")
     assert main(["--repo-root", str(repo), "--verify-base", "--base-ref", "main"]) == 1
     assert "frozen override exceeded" in capsys.readouterr().err
+
+
+def test_missing_or_deleted_override_path_fails_evaluate_budgets_and_main(tmp_path: Path, capsys: Any) -> None:
+    config = {
+        "default_max_lines": 200,
+        "exclude": [],
+        "overrides": {"src/deleted/gone.py": 250},
+    }
+    repo = _init_git_repo(tmp_path, config, {"src/app/clean.py": _lines(50)})
+
+    errors, notices = evaluate_budgets(repo, config, ["src/app/clean.py"])
+    assert len(errors) == 1
+    assert "src/deleted/gone.py" in errors[0]
+    assert "Missing override target" in errors[0]
+    assert notices == []
+
+    assert main(["--repo-root", str(repo)]) == 1
+    captured = capsys.readouterr()
+    assert "src/deleted/gone.py" in captured.err
+    assert "Missing override target" in captured.err
+    assert captured.out == ""
+
+    tracked_config = {
+        "default_max_lines": 200,
+        "exclude": [],
+        "overrides": {"src/legacy/deleted.py": 250},
+    }
+    deleted_root = tmp_path / "deleted_case"
+    deleted_root.mkdir()
+    repo_deleted = _init_git_repo(
+        deleted_root,
+        tracked_config,
+        {"src/legacy/deleted.py": _lines(240), "src/app/clean.py": _lines(50)},
+    )
+    _git(repo_deleted, "rm", "src/legacy/deleted.py")
+
+    assert main(["--repo-root", str(repo_deleted)]) == 1
+    deleted_err = capsys.readouterr().err
+    assert "src/legacy/deleted.py" in deleted_err
+    assert "Missing override target" in deleted_err
+
+
+def test_stale_override_at_or_below_default_notice_and_strict_failure(tmp_path: Path, capsys: Any) -> None:
+    config = {
+        "default_max_lines": 200,
+        "exclude": [],
+        "overrides": {
+            "src/legacy/at_default.py": 250,
+            "src/legacy/below_default.py": 260,
+        },
+    }
+    modules = ["src/legacy/at_default.py", "src/legacy/below_default.py"]
+    repo = _init_git_repo(
+        tmp_path,
+        config,
+        {
+            "src/legacy/at_default.py": _lines(200),
+            "src/legacy/below_default.py": _lines(150),
+        },
+    )
+
+    errors, notices = evaluate_budgets(repo, config, modules)
+    assert errors == []
+    assert len(notices) == 2
+    assert all(n.startswith("Stale override notice:") for n in notices)
+    assert any("src/legacy/at_default.py" in n and "200" in n for n in notices)
+    assert any("src/legacy/below_default.py" in n and "150" in n for n in notices)
+
+    strict_errors, strict_notices = evaluate_budgets(repo, config, modules, fail_on_stale=True)
+    assert strict_notices == []
+    assert len(strict_errors) == 2
+    assert any("src/legacy/at_default.py" in e for e in strict_errors)
+    assert any("src/legacy/below_default.py" in e for e in strict_errors)
+
+    assert main(["--repo-root", str(repo)]) == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    out_lines = [line for line in captured.out.splitlines() if line]
+    assert len(out_lines) == 2
+    assert all(line.startswith("Stale override notice:") for line in out_lines)
+
+    assert main(["--repo-root", str(repo), "--fail-on-stale-overrides"]) == 1
+    strict_captured = capsys.readouterr()
+    assert strict_captured.out == ""
+    assert "src/legacy/at_default.py" in strict_captured.err
+    assert "src/legacy/below_default.py" in strict_captured.err
 
 
 def test_live_repository_passes_module_budgets(capsys: Any) -> None:
