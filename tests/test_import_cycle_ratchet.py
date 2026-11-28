@@ -9,8 +9,13 @@ PACKAGE_ROOT = REPO_ROOT / "src" / "holon_coherence"
 PACKAGE_NAME = "holon_coherence"
 
 BASELINE_CYCLE_EDGES: dict[tuple[str, str], int] = {
-    ("parsers", "providers"): 3,
-    ("providers", "parsers"): 4,
+    ("hybrid_cache", "proxy"): 1,
+    ("payload_cleaner", "providers"): 2,
+    ("payload_cleaner", "reduction_passes"): 1,
+    ("providers", "payload_cleaner"): 4,
+    ("proxy", "hybrid_cache"): 1,
+    ("reduction_passes", "payload_cleaner"): 1,
+    ("reduction_passes", "providers"): 1,
 }
 
 
@@ -18,6 +23,32 @@ def discover_subpackages(package_root: Path) -> frozenset[str]:
     return frozenset(
         child.name for child in package_root.iterdir() if child.is_dir() and (child / "__init__.py").is_file()
     )
+
+
+def discover_root_modules(package_root: Path) -> frozenset[str]:
+    return frozenset(
+        child.stem
+        for child in package_root.iterdir()
+        if child.is_file() and child.suffix == ".py" and child.name != "__init__.py"
+    )
+
+
+def discover_top_level_nodes(package_root: Path) -> frozenset[str]:
+    return discover_subpackages(package_root) | discover_root_modules(package_root)
+
+
+def _resolve_source_node(
+    rel: Path,
+    subpackages: frozenset[str],
+    root_modules: frozenset[str],
+) -> tuple[str, list[str]] | None:
+    if len(rel.parts) == 1:
+        if rel.name != "__init__.py" and rel.stem in root_modules:
+            return rel.stem, []
+        return None
+    if rel.parts[0] in subpackages:
+        return rel.parts[0], list(rel.parts[:-1])
+    return None
 
 
 def _resolve_absolute_import_from(node: ast.ImportFrom, package_name: str) -> list[str]:
@@ -69,23 +100,32 @@ def _extract_imported_subpackages(
     return targets
 
 
-def collect_subpackage_edges(
+def collect_top_level_edges(
     package_root: Path,
     package_name: str = PACKAGE_NAME,
 ) -> dict[tuple[str, str], int]:
     subpackages = discover_subpackages(package_root)
+    root_modules = discover_root_modules(package_root)
+    top_level_nodes = subpackages | root_modules
     counts: Counter[tuple[str, str]] = Counter()
     for py_file in sorted(package_root.rglob("*.py")):
         rel = py_file.relative_to(package_root)
-        if len(rel.parts) < 2 or rel.parts[0] not in subpackages:
+        resolved = _resolve_source_node(rel, subpackages, root_modules)
+        if resolved is None:
             continue
-        src_pkg = rel.parts[0]
-        pkg_parts = list(rel.parts[:-1])
+        src_node, pkg_parts = resolved
         tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
         for target in _extract_imported_subpackages(tree, pkg_parts, package_name):
-            if target in subpackages and target != src_pkg:
-                counts[(src_pkg, target)] += 1
+            if target in top_level_nodes and target != src_node:
+                counts[(src_node, target)] += 1
     return dict(sorted(counts.items()))
+
+
+def collect_subpackage_edges(
+    package_root: Path,
+    package_name: str = PACKAGE_NAME,
+) -> dict[tuple[str, str], int]:
+    return collect_top_level_edges(package_root, package_name)
 
 
 def _is_reachable(adjacency: dict[str, set[str]], start: str, goal: str) -> bool:
@@ -246,3 +286,93 @@ def test_existing_cycle_edge_reduction_and_break_pass_ratchet(tmp_path: Path) ->
     broken_observed = find_cyclic_edges(collect_subpackage_edges(broken_root, package_name="sample_pkg"))
     assert broken_observed == {}
     assert find_cycle_regressions(broken_observed, baseline) == []
+
+
+def test_new_root_to_subpackage_cycle_fails_ratchet(tmp_path: Path) -> None:
+    pkg_root = _write_package(
+        tmp_path,
+        {
+            "cache.py": "from .proxy import handler\n",
+            "proxy/__init__.py": "",
+            "proxy/handler.py": "from .. import cache\nVALUE = cache\n",
+        },
+    )
+    observed = find_cyclic_edges(collect_top_level_edges(pkg_root, package_name="sample_pkg"))
+    assert observed == {("cache", "proxy"): 1, ("proxy", "cache"): 1}
+    regressions = find_cycle_regressions(observed, {})
+    assert len(regressions) == 2
+    assert any("cache -> proxy" in msg for msg in regressions)
+    assert any("proxy -> cache" in msg for msg in regressions)
+
+
+def test_new_root_to_root_cycle_fails_ratchet(tmp_path: Path) -> None:
+    pkg_root = _write_package(
+        tmp_path,
+        {
+            "cleaner.py": "from .passes import reduce_payload\n",
+            "passes.py": "from sample_pkg.cleaner import clean\n",
+        },
+    )
+    observed = find_cyclic_edges(collect_top_level_edges(pkg_root, package_name="sample_pkg"))
+    assert observed == {("cleaner", "passes"): 1, ("passes", "cleaner"): 1}
+    regressions = find_cycle_regressions(observed, {})
+    assert len(regressions) == 2
+    assert any("cleaner -> passes" in msg for msg in regressions)
+    assert any("passes -> cleaner" in msg for msg in regressions)
+
+
+def test_mixed_three_node_root_and_subpackage_cycle_fails_ratchet(tmp_path: Path) -> None:
+    pkg_root = _write_package(
+        tmp_path,
+        {
+            "__init__.py": "from . import cleaner\n",
+            "cleaner.py": "from . import passes\n",
+            "passes.py": "from sample_pkg.providers.base import Provider\n",
+            "providers/__init__.py": "",
+            "providers/base.py": "from ..cleaner import clean\n",
+        },
+    )
+    assert "__init__" not in discover_top_level_nodes(pkg_root)
+    observed = find_cyclic_edges(collect_top_level_edges(pkg_root, package_name="sample_pkg"))
+    assert observed == {
+        ("cleaner", "passes"): 1,
+        ("passes", "providers"): 1,
+        ("providers", "cleaner"): 1,
+    }
+    regressions = find_cycle_regressions(observed, {})
+    assert len(regressions) == 3
+    assert all("__init__" not in msg for msg in regressions)
+
+
+def test_recorded_root_cycle_shrink_passes_and_expand_fails(tmp_path: Path) -> None:
+    baseline = {("cleaner", "providers"): 2, ("providers", "cleaner"): 4}
+    shrunk_root = _write_package(
+        tmp_path / "shrunk",
+        {
+            "cleaner.py": "from sample_pkg.providers.base import one\nfrom .providers.extra import two\n",
+            "providers/__init__.py": "",
+            "providers/base.py": "from ..cleaner import clean\n",
+            "providers/extra.py": "from sample_pkg import cleaner\n",
+        },
+    )
+    shrunk_observed = find_cyclic_edges(collect_top_level_edges(shrunk_root, package_name="sample_pkg"))
+    assert shrunk_observed == {("cleaner", "providers"): 2, ("providers", "cleaner"): 2}
+    assert find_cycle_regressions(shrunk_observed, baseline) == []
+
+    expanded_root = _write_package(
+        tmp_path / "expanded",
+        {
+            "cleaner.py": (
+                "from sample_pkg.providers.base import one\n"
+                "from .providers.extra import two\n"
+                "import sample_pkg.providers.third\n"
+            ),
+            "providers/__init__.py": "",
+            "providers/base.py": "from ..cleaner import clean\n",
+        },
+    )
+    expanded_observed = find_cyclic_edges(collect_top_level_edges(expanded_root, package_name="sample_pkg"))
+    regressions = find_cycle_regressions(expanded_observed, baseline)
+    assert len(regressions) == 1
+    assert "cleaner -> providers" in regressions[0]
+    assert "baseline=2, observed=3" in regressions[0]
