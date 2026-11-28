@@ -13,6 +13,7 @@ permissions:
   contents: read
   actions: read
   pull-requests: read
+  checks: read
 
 jobs:
   unit:
@@ -26,12 +27,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
+      - name: Bookkeeping-only PR gate
+        id: bookkeeping_gate
+        uses: ./.github/actions/bookkeeping-gate
+        with:
+          check-name: unit (${{ matrix.os }})
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: CI Timing Gate (Start)
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         uses: ./.github/actions/ci-timing-gate
         with:
           phase: start
 
       - name: Cache conda packages
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         uses: actions/cache@v4
         with:
           path: ~/conda_pkgs_dir
@@ -39,6 +49,7 @@ jobs:
           restore-keys: ${{ runner.os }}-conda-
 
       - name: Set up Miniconda
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         uses: conda-incubator/setup-miniconda@v3
         with:
           auto-update-conda: true
@@ -50,6 +61,7 @@ jobs:
           use-only-tar-bz2: false
 
       - name: Run unit tests
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         shell: bash -el {0}
         run: uv sync; uv run task test --junitxml="$RUNNER_TEMP/ci-timing/junit.xml"
 
@@ -64,7 +76,7 @@ jobs:
             --junit "$RUNNER_TEMP/ci-timing/junit.xml"
 
       - name: CI timing gate (compare with main)
-        if: success() && github.event_name == 'pull_request'
+        if: success() && github.event_name == 'pull_request' && steps.bookkeeping_gate.outputs.skip != 'true'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -89,7 +101,7 @@ jobs:
           overwrite: true
 
       - name: CI Timing Gate (Check <= 5 min)
-        if: always()
+        if: always() && steps.bookkeeping_gate.outputs.skip != 'true'
         uses: ./.github/actions/ci-timing-gate
         with:
           phase: check

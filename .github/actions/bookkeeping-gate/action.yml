@@ -1,0 +1,27 @@
+name: "Bookkeeping-Only PR Gate"
+description: "Determines whether a pull request event only touches bookkeeping files on top of a verified green ancestor."
+inputs:
+  check-name:
+    description: "Exact GitHub check-run name for the current job."
+    required: true
+  token:
+    description: "GitHub token with checks:read and contents:read permissions."
+    required: true
+outputs:
+  skip:
+    description: "Whether expensive job steps may be skipped ('true' or 'false')."
+    value: ${{ steps.gate.outputs.skip }}
+  reason:
+    description: "Short explanation of the gate decision."
+    value: ${{ steps.gate.outputs.reason }}
+runs:
+  using: "composite"
+  steps:
+    - name: Evaluate bookkeeping gate
+      id: gate
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.token }}
+        CHECK_NAME: ${{ inputs.check-name }}
+      run: |
+        python3 "${GITHUB_WORKSPACE}/scripts/ci_bookkeeping_gate.py" --check-name "${CHECK_NAME}"

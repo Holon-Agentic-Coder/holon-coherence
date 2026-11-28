@@ -13,6 +13,7 @@ permissions:
   contents: read
   actions: read
   pull-requests: read
+  checks: read
 
 jobs:
   hygiene:
@@ -28,12 +29,21 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Bookkeeping-only PR gate
+        id: bookkeeping_gate
+        uses: ./.github/actions/bookkeeping-gate
+        with:
+          check-name: hygiene (${{ matrix.os }})
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: CI Timing Gate (Start)
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         uses: ./.github/actions/ci-timing-gate
         with:
           phase: start
 
       - name: Cache conda packages
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         uses: actions/cache@v4
         with:
           path: ~/conda_pkgs_dir
@@ -41,6 +51,7 @@ jobs:
           restore-keys: ${{ runner.os }}-conda-
 
       - name: Set up Miniconda
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         uses: conda-incubator/setup-miniconda@v3
         with:
           auto-update-conda: true
@@ -52,27 +63,33 @@ jobs:
           use-only-tar-bz2: false
 
       - name: Update dependencies
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         shell: bash -el {0}
         run: uv sync
 
       - name: Check uv.lock is up to date
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         shell: bash -el {0}
         run: |
           uv lock --check
           git diff --exit-code uv.lock
 
       - name: Lint with Ruff
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         shell: bash -el {0}
         run: uv run task lint
 
       - name: Check module line budgets
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         shell: bash -el {0}
         run: uv run python scripts/check_module_budgets.py --verify-base
 
       - name: Check markdown formatting with Prettier
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         run: npx --yes prettier@3.8.4 --check "**/*.md"
 
       - name: Test clean task
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         shell: bash -el {0}
         run: uv run task clean
 
@@ -86,7 +103,7 @@ jobs:
             --ceiling 300
 
       - name: CI timing gate (compare with main)
-        if: success() && github.event_name == 'pull_request'
+        if: success() && github.event_name == 'pull_request' && steps.bookkeeping_gate.outputs.skip != 'true'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -110,7 +127,7 @@ jobs:
           overwrite: true
 
       - name: CI Timing Gate (Check <= 5 min)
-        if: always()
+        if: always() && steps.bookkeeping_gate.outputs.skip != 'true'
         uses: ./.github/actions/ci-timing-gate
         with:
           phase: check

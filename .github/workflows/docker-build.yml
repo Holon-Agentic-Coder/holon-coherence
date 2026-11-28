@@ -13,6 +13,7 @@ permissions:
   contents: read
   actions: write
   pull-requests: read
+  checks: read
 
 jobs:
   docker-build:
@@ -23,27 +24,40 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Bookkeeping-only PR gate
+        id: bookkeeping_gate
+        uses: ./.github/actions/bookkeeping-gate
+        with:
+          check-name: docker-build
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: CI Timing Gate (Start)
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         uses: ./.github/actions/ci-timing-gate
         with:
           phase: start
 
       - name: Set up QEMU
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         uses: docker/setup-buildx-action@v4
         with:
           keep-state: true
 
       - name: Expose GitHub Runtime
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         uses: crazy-max/ghaction-github-runtime@v4
 
       - name: Build Docker image via make build-image
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         run: |
           make build-image
 
       - name: Verify Docker image
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         run: |
           docker images holon-coherence
           docker inspect holon-coherence:latest >/dev/null
@@ -58,7 +72,7 @@ jobs:
             --ceiling 300
 
       - name: CI timing gate (compare with main)
-        if: success() && github.event_name == 'pull_request'
+        if: success() && github.event_name == 'pull_request' && steps.bookkeeping_gate.outputs.skip != 'true'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -82,7 +96,7 @@ jobs:
           overwrite: true
 
       - name: CI Timing Gate (Check <= 5 min)
-        if: always()
+        if: always() && steps.bookkeeping_gate.outputs.skip != 'true'
         uses: ./.github/actions/ci-timing-gate
         with:
           phase: check
