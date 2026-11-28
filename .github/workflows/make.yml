@@ -13,6 +13,7 @@ permissions:
   contents: read
   actions: read
   pull-requests: read
+  checks: read
 
 jobs:
   make:
@@ -27,21 +28,33 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
+      - name: Bookkeeping-only PR gate
+        id: bookkeeping_gate
+        uses: ./.github/actions/bookkeeping-gate
+        with:
+          check-name: make (${{ matrix.os }})
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: CI Timing Gate (Start)
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         uses: ./.github/actions/ci-timing-gate
         with:
           phase: start
 
       - name: Print uname -m
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         run: uname -m
 
       - name: Run make help
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         run: make help
 
       - name: Run make
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         run: make
 
       - name: Ensure clean environment without pre-installed conda
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         run: |
           sudo rm -f /usr/bin/conda /usr/local/bin/conda || true
           sudo rm -rf /usr/share/miniconda /opt/conda "$HOME/miniconda3" /Library/Frameworks/miniconda3 || true
@@ -49,6 +62,7 @@ jobs:
           echo "PATH=$PATH" >> "$GITHUB_ENV"
 
       - name: Test that conda is not present
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         run: |
           if command -v conda >/dev/null 2>&1; then
             echo "❌ Error: conda was found at $(which conda) before installation"
@@ -57,6 +71,7 @@ jobs:
           echo "✅ Verified: conda is not present"
 
       - name: Cache conda packages
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         uses: actions/cache@v4
         with:
           path: ~/conda_pkgs_dir
@@ -64,6 +79,7 @@ jobs:
           restore-keys: ${{ runner.os }}-conda-
 
       - name: Install Conda
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         uses: conda-incubator/setup-miniconda@v3
         with:
           miniforge-version: "latest"
@@ -74,11 +90,13 @@ jobs:
           use-only-tar-bz2: false
 
       - name: Install the conda environment
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         shell: bash -el {0}
         run: |
           conda env create -f environment.yml
 
       - name: Verify conda environment holon
+        if: steps.bookkeeping_gate.outputs.skip != 'true'
         shell: bash -el {0}
         run: |
           conda activate holon
@@ -88,7 +106,7 @@ jobs:
           uv --version
 
       - name: Verify make check-prerequisites
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest' && steps.bookkeeping_gate.outputs.skip != 'true'
         shell: bash -el {0}
         run: |
           conda activate holon
@@ -104,7 +122,7 @@ jobs:
             --ceiling 300
 
       - name: CI timing gate (compare with main)
-        if: success() && github.event_name == 'pull_request'
+        if: success() && github.event_name == 'pull_request' && steps.bookkeeping_gate.outputs.skip != 'true'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -128,7 +146,7 @@ jobs:
           overwrite: true
 
       - name: CI Timing Gate (Check <= 5 min)
-        if: always()
+        if: always() && steps.bookkeeping_gate.outputs.skip != 'true'
         uses: ./.github/actions/ci-timing-gate
         with:
           phase: check
